@@ -1,0 +1,183 @@
+---
+title: "Overview"
+description: "Zester ships with built-in state modules for common configuration management tasks. Each module implements the State interface with Check, Apply, and Revert methods."
+---
+
+Modules are registered in a `Registry` at startup. The runner instantiates states from YAML configuration by looking up the module name (e.g., `file.managed`) in the registry and passing the state ID and parameter map to the module's builder function.
+
+---
+
+## Available Modules
+
+### State Modules
+
+State modules implement the full Check/Apply/Revert lifecycle and participate in the DAG execution engine.
+
+| Module | Description | Source |
+|-|-|-|
+| [`file.managed`](/docs/guides/modules/file-managed) | Ensure a file exists with desired content, permissions, and ownership | `pkg/state/modules/file.go` |
+| [`file.directory`](/docs/guides/modules/file-directory) | Ensure a directory exists with desired permissions and ownership | `pkg/state/modules/file_directory.go` |
+| [`file.absent`](/docs/guides/modules/file-absent) | Ensure a file or directory does not exist | `pkg/state/modules/file_absent.go` |
+| [`file.append`](/docs/guides/modules/file-append) | Ensure lines are present in a file | `pkg/state/modules/file_append.go` |
+| [`file.symlink`](/docs/guides/modules/file-symlink) | Ensure a symbolic link exists pointing to a target | `pkg/state/modules/file_symlink.go` |
+| [`file.recurse`](/docs/guides/modules/file-recurse) | Recursively copy a directory with permissions | `pkg/state/modules/file_recurse.go` |
+| [`file.blockreplace`](/docs/guides/modules/file-blockreplace) | Manage content between marker lines in a file | `pkg/state/modules/file_blockreplace.go` |
+| [`pkg.installed`](/docs/guides/modules/pkg-installed) | Ensure a system package is installed (apt, yum, dnf, brew) | `pkg/state/modules/pkg.go` |
+| [`pkg.removed`](/docs/guides/modules/pkg-removed) | Ensure a system package is not installed | `pkg/state/modules/pkg_removed.go` |
+| [`service.running`](/docs/guides/modules/service-running) | Ensure a service is running (and optionally enabled) | `pkg/state/modules/service.go` |
+| [`service.enabled`](/docs/guides/modules/service-enabled) | Ensure a service is enabled at boot | `pkg/state/modules/service.go` |
+| [`service.dead`](/docs/guides/modules/service-dead) | Ensure a service is stopped (and optionally disabled) | `pkg/state/modules/service.go` |
+| [`cmd.run`](/docs/guides/modules/cmd-run) | Execute a command on the target system | `pkg/state/modules/cmd.go` |
+| [`user.present`](/docs/guides/modules/user-present) | Ensure a user account exists with desired properties | `pkg/state/modules/user.go` |
+| [`user.absent`](/docs/guides/modules/user-absent) | Ensure a user account does not exist | `pkg/state/modules/user.go` |
+| [`group.present`](/docs/guides/modules/group-present) | Ensure a group exists with desired properties | `pkg/state/modules/group.go` |
+| [`group.absent`](/docs/guides/modules/group-absent) | Ensure a group does not exist | `pkg/state/modules/group.go` |
+| [`cron.present`](/docs/guides/modules/cron-present) | Ensure a cron job exists | `pkg/state/modules/cron.go` |
+| [`cron.absent`](/docs/guides/modules/cron-absent) | Ensure a cron job does not exist | `pkg/state/modules/cron.go` |
+| [`sysctl.present`](/docs/guides/modules/sysctl-present) | Ensure a kernel parameter is set (and persisted) | `pkg/state/modules/sysctl.go` |
+| [`mount.mounted`](/docs/guides/modules/mount-mounted) | Ensure a filesystem is mounted (and in fstab) | `pkg/state/modules/mount.go` |
+| [`git.cloned`](/docs/guides/modules/git-cloned) | Ensure a Git repository is cloned and at the desired revision | `pkg/state/modules/git.go` |
+| [`git.latest`](/docs/guides/modules/git-latest) | Ensure a Git clone exists and is updated to the latest revision | `pkg/state/modules/git_latest.go` |
+| [`pip.installed`](/docs/guides/modules/pip-installed) | Ensure a Python package is installed via pip | `pkg/state/modules/pip.go` |
+| [`timezone.system`](/docs/guides/modules/timezone-system) | Ensure the system timezone is set | `pkg/state/modules/timezone.go` |
+| [`locale.present`](/docs/guides/modules/locale-present) | Ensure a system locale is generated | `pkg/state/modules/locale.go` |
+| [`file.line`](/docs/guides/modules/file-line) | Manage a single line in a file (ensure/replace/insert/delete) | `pkg/state/modules/file_line.go` |
+| [`file.replace`](/docs/guides/modules/file-replace) | Regexp search/replace in a file (Salt MULTILINE default) | `pkg/state/modules/file_replace.go` |
+| [`file.comment` / `file.uncomment`](/docs/guides/modules/file-comment) | Comment or uncomment lines matching a regex | `pkg/state/modules/file_comment.go` |
+| [`file.keyvalue`](/docs/guides/modules/file-keyvalue) | Ensure `key=value` lines (sysctl/os-release style) | `pkg/state/modules/file_keyvalue.go` |
+| [`file.copy`](/docs/guides/modules/file-copy) | Copy a file, with `force`/`makedirs`/`preserve` | `pkg/state/modules/file_copy.go` |
+| [`file.touch`](/docs/guides/modules/file-touch) | Create an empty file / update mtime on force-apply | `pkg/state/modules/file_touch.go` |
+| [`pkg.latest`](/docs/guides/modules/pkg-latest) | Ensure a package is installed at the newest available version | `pkg/state/modules/pkg_latest.go` |
+| [`pkg.purged`](/docs/guides/modules/pkg-purged) | Remove a package and its configuration | `pkg/state/modules/pkg_purged.go` |
+| [`pkgrepo.managed`](/docs/guides/modules/pkgrepo-managed) | Manage an apt/yum package repository definition | `pkg/state/modules/pkgrepo.go` |
+| [`archive.extracted`](/docs/guides/modules/archive-extracted) | Extract a tar/zip archive (local path or URL) | `pkg/state/modules/archive.go` |
+| [`host.present` / `host.absent`](/docs/guides/modules/host) | Manage `/etc/hosts` entries | `pkg/state/modules/host.go` |
+| [`ssh_auth.present` / `ssh_auth.absent`](/docs/guides/modules/ssh-auth) | Manage a key in a user's `authorized_keys` | `pkg/state/modules/ssh_auth.go` |
+| [`module.run`](/docs/guides/modules/module-run) | Invoke another state module by name (Salt escape hatch) | `pkg/state/modules/module_run.go` |
+| [`test.ping`](/docs/guides/modules/test-ping) | Liveness check that always succeeds | `pkg/state/modules/test_ping.go` |
+| [`test.nop` / `test.fail_without_changes` / `test.succeed_with_changes` / `test.configurable_test_state`](/docs/guides/modules/test-helpers) | Salt test helpers | `pkg/state/modules/test_extra.go` |
+
+Every state also accepts the generic Salt-parity attributes `onlyif`, `unless`,
+`order`, `retry`, `failhard`, `names`, and the full requisite set (`require`,
+`watch`, `onchanges`, `onfail`, `prereq`, `listen` and their `_in` inverses).
+See [Dependencies & Requisites](/docs/guides/states/dependencies) and the
+[Salt Compatibility](/docs/getting-started/salt-compatibility) guide.
+
+### Query Modules
+
+Query modules bypass the state registry and runner. They are handled as special cases in the peel's exec handler because they need direct access to the facts manager or settings resolver. See [Query Modules](/docs/guides/modules/query) for details.
+
+| Module | Description |
+|--------|-------------|
+| `facts.items` / `facts.get` / `facts.keys` | Query the peel's in-memory facts |
+| `facts.set` | Set a custom fact on the peel |
+| `settings.items` / `settings.get` / `settings.keys` | Query the peel's resolved settings |
+
+---
+
+## Execution Modes
+
+Every state module can be used in two ways:
+
+### Direct Execution (Salt-Style)
+
+Run a module directly against peels from the CLI, without writing a state file:
+
+```bash
+zester '<target>' <module> [id] [key=value ...]
+```
+
+This is equivalent to Salt's `salt '<target>' <module> [args]`. The first positional argument becomes the state ID (and therefore the primary parameter, e.g. the package name or file path); the remaining `key=value` pairs become the module's config. Add `--test` (or `test=True`) for a dry run that reports what would change without applying.
+
+The peel also ships a set of **imperative remote-execution functions** (`pkg.version`, `pkg.list_pkgs`, `service.status`, `service.start`, `service.stop`, `service.restart`, `disk.usage`, `grains.item`, `grains.items`, `test.echo`, `test.version`, `test.true`, `test.false`, `sys.list_functions`) defined in `pkg/execmod/builtins.go`. These have no Check/Apply lifecycle — they just run and return output. A module name that matches a remote-execution function *and* is not a registered state module is dispatched there; state module names (like `cmd.run`) always win.
+
+### State Files
+
+Define the desired state declaratively in a `.zy` YAML file, then apply it:
+
+```bash
+zester '<target>' state.apply <state-name>
+```
+
+Both modes use the same underlying modules and parameters.
+
+---
+
+## Module Registry
+
+All built-in state modules are registered in the `Registry` at peel startup. Each module uses a **closure-based builder factory** that captures the `ModuleContext` and returns a `Builder`:
+
+```go
+// Builder type: receives state ID and YAML config, returns a State
+type Builder func(id string, config map[string]any) (State, error)
+
+// Example: NewPkgInstalledBuilder captures ModuleContext in a closure
+func NewPkgInstalledBuilder(mctx *exec.ModuleContext) state.Builder {
+    return func(id string, config map[string]any) (state.State, error) {
+        // ... uses mctx.Package internally
+    }
+}
+```
+
+The registry maps module names to these builders:
+
+```
+Registry (47 modules)
+  "file.managed"      -> NewFileManagedBuilder(mctx)       -> State
+  "file.directory"    -> NewFileDirectoryBuilder(mctx)     -> State
+  "file.absent"       -> NewFileAbsentBuilder(mctx)        -> State
+  "file.append"       -> NewFileAppendBuilder(mctx)        -> State
+  "file.symlink"      -> NewFileSymlinkBuilder(mctx)       -> State
+  "file.recurse"      -> NewFileRecurseBuilder(mctx)       -> State
+  "file.blockreplace" -> NewFileBlockReplaceBuilder(mctx)  -> State
+  "file.line"         -> NewFileLineBuilder(mctx)          -> State
+  "file.replace"      -> NewFileReplaceBuilder(mctx)       -> State
+  "file.comment"      -> NewFileCommentBuilder(mctx)       -> State
+  "file.uncomment"    -> NewFileUncommentBuilder(mctx)     -> State
+  "file.keyvalue"     -> NewFileKeyValueBuilder(mctx)      -> State
+  "file.copy"         -> NewFileCopyBuilder(mctx)          -> State
+  "file.touch"        -> NewFileTouchBuilder(mctx)         -> State
+  "pkg.installed"     -> NewPkgInstalledBuilder(mctx)      -> State
+  "pkg.removed"       -> NewPkgRemovedBuilder(mctx)        -> State
+  "pkg.latest"        -> NewPkgLatestBuilder(mctx)         -> State
+  "pkg.purged"        -> NewPkgPurgedBuilder(mctx)         -> State
+  "pkgrepo.managed"   -> NewPkgrepoManagedBuilder(mctx)    -> State
+  "service.running"   -> NewSvcRunningBuilder(mctx)        -> State
+  "service.enabled"   -> NewSvcEnabledBuilder(mctx)        -> State
+  "service.dead"      -> NewSvcDeadBuilder(mctx)           -> State
+  "cmd.run"           -> NewCmdRunBuilder(mctx)            -> State
+  "user.present"      -> NewUserPresentBuilder(mctx)       -> State
+  "user.absent"       -> NewUserAbsentBuilder(mctx)        -> State
+  "group.present"     -> NewGroupPresentBuilder(mctx)      -> State
+  "group.absent"      -> NewGroupAbsentBuilder(mctx)       -> State
+  "cron.present"      -> NewCronPresentBuilder(mctx)       -> State
+  "cron.absent"       -> NewCronAbsentBuilder(mctx)        -> State
+  "sysctl.present"    -> NewSysctlPresentBuilder(mctx)     -> State
+  "mount.mounted"     -> NewMountMountedBuilder(mctx)      -> State
+  "git.cloned"        -> NewGitClonedBuilder(mctx)         -> State
+  "git.latest"        -> NewGitLatestBuilder(mctx)         -> State
+  "archive.extracted" -> NewArchiveExtractedBuilder(mctx)  -> State
+  "host.present"      -> NewHostPresentBuilder(mctx)       -> State
+  "host.absent"       -> NewHostAbsentBuilder(mctx)        -> State
+  "ssh_auth.present"  -> NewSSHAuthPresentBuilder(mctx)    -> State
+  "ssh_auth.absent"   -> NewSSHAuthAbsentBuilder(mctx)     -> State
+  "pip.installed"     -> NewPipInstalledBuilder(mctx)      -> State
+  "timezone.system"   -> NewTimezoneSystemBuilder(mctx)    -> State
+  "locale.present"    -> NewLocalePresentBuilder(mctx)     -> State
+  "module.run"        -> NewModuleRunBuilder(registry)     -> State
+  "test.ping"         -> NewTestPing                       -> State
+  "test.nop"          -> NewTestNop                        -> State
+  "test.fail_without_changes"    -> NewTestFailWithoutChanges    -> State
+  "test.succeed_with_changes"    -> NewTestSucceedWithChanges    -> State
+  "test.configurable_test_state" -> NewTestConfigurableTestState -> State
+```
+
+Custom modules can be added by calling `Registry.Register()` with a module name and a `Builder` function.
+
+---
+
+## Common Parameters
+
+All state modules accept the full requisite set (`require`, `watch`, `onchanges`, `onfail`, `prereq`, `listen`, and their `_in` inverses) plus the generic Salt-parity attributes (`onlyif`, `unless`, `order`, `retry`, `failhard`, `names`). These are handled outside the module — by the compiler and the runner — so no module documents them individually.
+
+See [Dependencies & Requisites](/docs/guides/states/dependencies) for the full list and semantics.

@@ -1,0 +1,95 @@
+---
+title: "Overview"
+---
+
+States are the core of Zester's configuration management. A state declares the **desired configuration** of a system resource — a file that should exist, a package that should be installed, a command that should have been run — and Zester ensures the actual system matches that declaration.
+
+States are **idempotent**: applying the same state twice produces the same result. The engine checks the current system first and only makes changes when the actual state diverges from the desired state.
+
+---
+
+## How States Work
+
+Every state follows a three-phase lifecycle:
+
+1. **Check** — inspect the system and determine whether changes are needed, without modifying anything.
+2. **Apply** — make the system match the desired state.
+3. **Revert** — undo the changes made by Apply, restoring the previous state.
+
+States declare **dependencies** on other states using requisites (`require`, `watch`, `onchanges`, `onfail`, `prereq`, `listen`, and their inverse `_in` forms). Zester builds a Directed Acyclic Graph (DAG) from these dependencies and executes states in topological order, running independent states in parallel.
+
+---
+
+## Section Contents
+
+<Cards>
+<Card title="Writing States" href="/docs/guides/states/writing">
+How to write state files: YAML structure, state IDs, parameters, and practical examples.
+</Card>
+<Card title="Module Reference" href="/docs/guides/modules">
+Complete parameter reference for the built-in state modules: the `file.*`, `pkg.*`, `service.*`, `user.*`, `group.*`, `cron.*`, `git.*`, `host.*`, `ssh_auth.*`, and `test.*` families, plus `cmd.run`, `pkgrepo.managed`, `archive.extracted`, `mount.mounted`, `sysctl.present`, `locale.present`, `timezone.system`, `pip.installed`, and `module.run`.
+</Card>
+<Card title="Dependencies" href="/docs/guides/states/dependencies">
+How to declare dependencies between states, DAG resolution, and parallel execution ordering.
+</Card>
+<Card title="Execution Model" href="/docs/guides/states/execution">
+The Check/Apply/Revert lifecycle, parallel execution, test mode, error propagation, and result reporting.
+</Card>
+<Card title="State Composition" href="/docs/guides/states/composition">
+Include and extend directives for composing states across multiple files, plus multi-file organization best practices.
+</Card>
+<Card title="State Top File" href="/docs/guides/states/topfile">
+Automatically assign states to peels based on targeting patterns using the state `top.zy` file.
+</Card>
+<Card title="Highstate" href="/docs/guides/states/highstate">
+Apply all states matched by the state top file in a single convergence run.
+</Card>
+<Card title="State File Distribution" href="/docs/guides/states/distribution">
+Manifest-driven KV state distribution from master to peels — with deletion propagation and atomic cache swaps — and GitFS for syncing states from Git repositories.
+</Card>
+</Cards>
+
+
+---
+
+## Key Concepts
+
+| Concept | Description |
+|---|---|
+| **State** | A single idempotent configuration action (e.g., ensure a file exists) |
+| **Module** | The type of resource a state manages (`file.managed`, `cmd.run`, `pkg.installed`) |
+| **State ID** | A unique identifier for a state instance within a state file |
+| **DAG** | Directed Acyclic Graph that determines execution order from requisite declarations (`require`, `watch`, `onchanges`, `onfail`; `listen`, `prereq`, and `_in` forms are rewritten into these at compile time) |
+| **Level** | A set of states with all dependencies satisfied that can execute in parallel |
+| **RunMode** | The execution mode: Apply (default), Check (dry run), or Revert (rollback) |
+
+---
+
+## Quick Example
+
+```yaml
+# /srv/zester/states/webserver/init.zy
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - refresh: true
+
+deploy_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx.conf
+    - mode: "0644"
+    - user: root
+    - group: root
+    - require:
+      - pkg.installed:install_nginx
+
+restart_nginx:
+  cmd.run:
+    - command: systemctl restart nginx
+    - creates: /var/run/nginx.pid
+    - require:
+      - file.managed:deploy_config
+```
+
+This state file installs nginx, deploys a configuration file, and restarts the service — with explicit dependency ordering ensuring they execute in the correct sequence.

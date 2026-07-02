@@ -1,0 +1,320 @@
+---
+title: "Execution Model"
+description: "The state runner orchestrates the execution of states by resolving their dependency graph and running them level-by-level with maximum parallelism within each level."
+---
+
+**Source**: `pkg/state/runner.go`
+
+---
+
+## Run Modes
+
+The runner supports three execution modes, controlled by the `RunMode` type:
+
+| Mode | Constant | Description |
+|---|---|---|
+| **Apply** | `ModeApply` | Check each state, then apply changes where needed. This is the default mode. |
+| **Check / Test** | `ModeCheck` (alias `ModeTest`) | Only check whether changes are needed, without modifying the system. Backs Salt-style `test=True` dry runs. |
+| **Revert** | `ModeRevert` | Undo previously applied changes, executing states in **reverse** dependency order. |
+
+---
+
+## Dry Run (test=True)
+
+Any execution can be run as a **dry run** that reports which states *would*
+change without modifying the system — the equivalent of Salt's `test=True`.
+Pass the `--test` flag or a `test=True` argument:
+
+```bash
+# Preview a highstate without applying it
+zester 'web-*' state.highstate --test
+
+# Equivalent, Salt-style
+zester 'web-01' state.apply webserver test=True
+
+# Works for ad-hoc modules too
+zester 'web-01' pkg.installed nginx --test
+```
+
+In a dry run, a "changed" result means the state **would** change; nothing is
+applied, and guard/requisite evaluation still runs so the preview reflects real
+conditional behavior (`onlyif`/`unless` guard commands do execute, since they
+are how the condition is evaluated). `retry:` policies are not honored in test
+mode — each state is checked once. The response is flagged with `test: true`.
+
+---
+
+## Execution Flow
+
+### Apply Mode
+
+The default mode follows a two-step process for each state:
+
+```
+For each state in dependency order:
+  1. Check() -> Does the system match the desired state?
+     - If NO  -> proceed to Apply()
+     - If YES -> skip (already correct, no changes)
+  2. Apply() -> Make the system match the desired state
+```
+
+This "check-then-apply" pattern ensures idempotency: applying the same state to an already-correct system is a no-op.
+
+### Check Mode (Dry Run)
+
+Check mode runs only the Check phase. It reports which states would make changes without actually modifying the system:
+
+```
+For each state in dependency order:
+  1. Check() -> Would changes be needed?
+     - Records NeedsChange and Diff
+     - Never calls Apply()
+```
+
+### Revert Mode
+
+Revert mode executes states in **reverse** dependency order, calling the Revert method:
+
+```
+For each state in REVERSE dependency order:
+  1. Revert() -> Undo the changes made by Apply
+```
+
+The level order is reversed so that dependent states are reverted before their dependencies. For example, if Apply installs a package then deploys its config, Revert removes the config first, then uninstalls the package.
+
+<Callout type="info" title="Note">
+Not all modules support revert. `cmd.run` states return a no-op from Revert since arbitrary commands are not inherently reversible. `file.managed` reverts by restoring the backup or removing newly created files. `pkg.installed` reverts by removing the package.
+</Callout>
+
+---
+
+## Parallel Execution
+
+Within each dependency level, states are first sorted by explicit `order:`
+(lower first; `order: first` / `order: last` map to very low / very high
+values) and then by name, after which they execute concurrently:
+
+```go
+for _, level := range levels {
+    var wg sync.WaitGroup
+    for _, state := range level.States {
+        wg.Add(1)
+        go func(st State) {
+            defer wg.Done()
+            result = execState(ctx, st, mode)
+        }(state)
+    }
+    wg.Wait()  // Synchronization point between levels
+}
+```
+
+**Key properties:**
+
+- States in the same level run as concurrent goroutines.
+- A `sync.WaitGroup` ensures all states in a level complete before the next level starts.
+- Results are collected via a mutex-protected slice.
+- The number of concurrent goroutines equals the number of states in the largest level.
+
+### Execution Timeline Example
+
+Given this dependency graph:
+
+```yaml
+install_nginx:      # Level 0
+install_redis:      # Level 0
+deploy_nginx_conf:  # Level 1 (requires install_nginx)
+deploy_redis_conf:  # Level 1 (requires install_redis)
+start_services:     # Level 2 (requires both configs)
+```
+
+The timeline looks like:
+
+```
+Time -->
+
+Level 0:  |--install_nginx--|--install_redis--|
+                                              |  (sync point)
+Level 1:  |--deploy_nginx_conf--|--deploy_redis_conf--|
+                                                      |  (sync point)
+Level 2:  |--start_services--|
+```
+
+---
+
+## Error Propagation
+
+When a state fails (returns an error from Check or Apply), the failure propagates through the dependency graph:
+
+### Failure Rules
+
+1. **The failed state** is recorded with its error message in the `StateResult`.
+2. **Direct dependents** of the failed state are **skipped** (not executed).
+3. **Transitive dependents** are also skipped — if A depends on B, and B depends on C, and C fails, both B and A are skipped.
+4. **Independent states** in the same level continue executing normally.
+5. **States in other branches** of the dependency graph are unaffected.
+6. **OnChanges skipped** states are marked with `SkipReason: "onchanges_not_met"` when none of their `onchanges` dependencies made changes.
+7. **OnFail skipped** states are marked with `SkipReason: "onfail_not_met"` when none of their `onfail` dependencies failed.
+8. **Prereq skipped** states are marked with `SkipReason: "prereq_not_met"` when none of their `prereq` targets would make changes.
+9. **Failhard abort**: when a state with `failhard: true` fails, all remaining DAG levels are skipped with `SkipReason: "failhard_abort"`. States in the same level as the failhard state still finish (they run concurrently).
+10. **Retries**: a state with a `retry:` policy is re-run (after its interval) before its failure is recorded; only the final attempt's result counts. Retries apply in apply and revert modes, not in check/test mode.
+
+### Example: Partial Failure
+
+```yaml
+install_nginx:     # Level 0 - succeeds
+install_postgres:  # Level 0 - FAILS
+deploy_nginx_conf: # Level 1 - runs (depends on nginx only)
+deploy_pg_conf:    # Level 1 - SKIPPED (depends on postgres)
+start_all:         # Level 2 - SKIPPED (depends on pg_conf)
+```
+
+Result:
+
+| State | Status |
+|---|---|
+| `install_nginx` | Changed |
+| `install_postgres` | **Failed** |
+| `deploy_nginx_conf` | Changed |
+| `deploy_pg_conf` | **Skipped** |
+| `start_all` | **Skipped** |
+
+### Context Cancellation
+
+If the parent context is cancelled (e.g., due to a job timeout), all remaining states in all levels are skipped:
+
+```
+For each remaining level after cancellation:
+  All states -> Skipped (context cancelled)
+```
+
+---
+
+## Run Result
+
+The runner returns a `RunResult` that aggregates all state outcomes:
+
+```go
+type RunResult struct {
+    States        map[string]*StateResult  // Per-state results keyed by name
+    TotalDuration time.Duration            // Wall-clock duration of entire run
+    Changed       int                      // Count of states that made changes
+    Failed        int                      // Count of states that errored
+    Skipped       int                      // Count of states skipped (failed deps or unmet requisites)
+    Canceled      bool                     // True when context was canceled before completion
+}
+```
+
+### StateResult Fields
+
+Each individual state produces a `StateResult`:
+
+| Field | Type | Description |
+|---|---|---|
+| `Name` | `string` | State identifier (e.g., `file.managed:/etc/hosts`) |
+| `Changed` | `bool` | Whether the state modified the system |
+| `Diff` | `string` | Description of what changed |
+| `Duration` | `time.Duration` | How long this state took to execute |
+| `Details` | `map[string]string` | Module-specific data (e.g., bytes written, exit code) |
+| `Error` | `string` | Error message if the state failed (empty on success) |
+| `Skipped` | `bool` | Whether the state was skipped due to a failed dependency, an unmet requisite condition, a failhard abort, or context cancellation |
+| `SkipReason` | `string` | Why the state was skipped: `"require_failed"`, `"onchanges_not_met"`, `"onfail_not_met"`, `"prereq_not_met"`, or `"failhard_abort"` (empty when not skipped) |
+
+### Success Determination
+
+```go
+func (r *RunResult) Success() bool {
+    return r.Failed == 0 && !r.Canceled
+}
+```
+
+A run is successful if zero states failed and the context was not canceled. States that were skipped or made no changes do not count as failures.
+
+---
+
+## Execution Sequence Diagram
+
+```
+Runner.Run(ctx, states, mode)
+  │
+  ├── NewDAG(states)           # Build dependency graph
+  │     └── Validate deps      # Check for duplicates, unknown refs
+  │
+  ├── dag.Resolve()            # Kahn's algorithm -> []Level
+  │     └── Detect cycles      # Error if cycle found
+  │
+  ├── (if ModeRevert)
+  │     └── Reverse levels     # Execute in reverse order
+  │
+  └── For each Level:
+        │
+        ├── Sort by order:, then name   # deterministic within-level ordering
+        │
+        ├── Check context / failhard    # Skip level if cancelled or aborted
+        │
+        ├── For each State in Level (concurrent):
+        │     │
+        │     ├── Evaluate requisites   # require / watch / onchanges / onfail
+        │     │     └── Skip (with SkipReason) or force-apply on watch change
+        │     │
+        │     ├── Evaluate prereq gate  # Check() each target; skip if none change
+        │     │
+        │     └── execState(ctx, state, mode)   # re-run per retry: policy on failure
+        │           │
+        │           ├── ModeCheck:
+        │           │     └── state.Check() -> CheckResult
+        │           │
+        │           ├── ModeApply:
+        │           │     ├── state.Check()
+        │           │     │     └── NeedsChange? No -> return (no-op)
+        │           │     └── state.Apply() -> ApplyResult
+        │           │
+        │           └── ModeRevert:
+        │                 └── state.Revert() -> ApplyResult
+        │
+        └── WaitGroup.Wait()   # Sync point: all states in level done
+```
+
+---
+
+## State Sources on the Peel
+
+Before every execution, the peel re-resolves which directory the compiler reads states from:
+
+1. **KV cache** (`--states-cache`) when it contains files — the local mirror of the `state-files` KV bucket, kept in sync by the manifest-driven cache (see [State File Distribution](/docs/guides/states/distribution)).
+2. **Baked-in states dir** (`/data/states`) otherwise.
+
+An empty or missing cache dir is re-checked 5 times, 25ms apart (~100ms worst case), before the peel concludes the cache is genuinely empty — the cache's atomic directory swap has a brief window where the dir does not exist, and a single read landing in that window must not silently switch the run to the baked fallback. After the retries, falling back is a real event and logs a Warn (`state-file cache dir empty or missing after retries, falling back to baked states dir`). Deployments that intentionally run baked-only (never populate the KV cache) will see this Warn plus the ~100ms pre-execution latency on every run.
+
+Because the directory is re-evaluated per execution, a peel that boots before state files reach KV switches to the cache automatically once it fills.
+
+### KV-Only Deployments
+
+A peel with no baked `/data/states` and a not-yet-synced cache boots cleanly rather than crash-looping: it logs `states engine unavailable at boot; will build when state files appear` at Warn, and until files land, `state.apply` / `state.highstate` (including scheduled entries) return the explicit error:
+
+```
+states engine unavailable: no states directory exists yet (state files not yet
+synced from KV and no baked states dir); retry after state files are published
+```
+
+All other module types work normally in the meantime, and the states engine builds automatically on the first execution after state files sync from KV.
+
+---
+
+## Practical Usage
+
+### Apply States to Targets
+
+```bash
+# Apply a state to all web servers
+zester 'web*' state.apply webserver
+
+# Apply with a custom timeout
+zester 'web*' state.apply webserver --timeout 10m
+
+# Apply directly to peels (bypass master)
+zester 'web*' state.apply webserver --direct
+```
+
+### Dry Run (Check Mode)
+
+Check mode lets you preview changes without applying them. The runner calls only `Check()` on each state and reports what would change.

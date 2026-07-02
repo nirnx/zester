@@ -1,0 +1,537 @@
+---
+title: "Enrollment HTTP API Reference"
+---
+
+The enrollment HTTP API is served by `zester-master` on the shared master HTTPS listener (default `:8443`). It provides endpoints for **peels** to request enrollment via challenge-response and download credentials after approval.
+
+**Base URL:** `https://<master-host>:<port>/api/v1/enroll`
+
+**Transport:** TLS 1.3 mandatory. The server **cannot start** without a valid TLS certificate and key — `NewServer()` rejects startup if either is missing (see `pkg/enroll/server.go`). Default certificate paths: `/data/auth/enroll.crt` and `/data/auth/enroll.key`.
+
+**Encoding:** Request and response bodies use JSON (`Content-Type: application/json`).
+
+Enrollment admin operations are also available through the authenticated master REST API:
+
+- `GET /api/v1/enrollments`
+- `POST /api/v1/enrollments/{id}/approve`
+- `POST /api/v1/enrollments/{id}/reject`
+- `POST /api/v1/enrollments/{id}/revoke`
+
+For the full admin + jobs REST surface, see [Master REST API](/docs/reference/master-api).
+
+---
+
+## Authentication
+
+The HTTP API has two authentication levels:
+
+| Endpoint Class | Authentication | Used By |
+|----------------|---------------|---------|
+| **Peel enrollment** (nonce, enroll, status) | TLS only (no client auth) | Peels requesting enrollment |
+| **Peel credential download** (creds) | Nkey signature (`Authorization: Nkey <pub>:<sig>`) | Peels downloading credentials |
+
+### Nkey Signature Authentication
+
+The credential download endpoint requires the peel to prove key ownership by signing the enrollment ID:
+
+```
+Authorization: Nkey <public_key>:<base64url_signature_of_enrollment_id>
+```
+
+The signature is verified against the public key stored in the enrollment record using `nkeys.FromPublicKey().Verify()`. See `pkg/enroll/verify.go` (`VerifyCredsSignature`).
+
+---
+
+## Error Response Format
+
+All error responses follow a consistent format:
+
+```json
+{
+  "error": "No enrollment record found"
+}
+```
+
+### Error Codes
+
+| HTTP Status | Description |
+|-------------|-------------|
+| 400 | Missing required fields, malformed request body, or input validation failure |
+| 401 | Challenge signature verification failed, challenge expired, challenge already used, or invalid/missing authentication credentials |
+| 403 | Authenticated but not authorized for this operation (e.g., enrollment not in `approved` state) |
+| 404 | No enrollment record for the given ID |
+| 409 | Peel ID already has an active enrollment, or CAS contention during credential download |
+| 429 | Too many enrollment requests from this IP |
+| 500 | Server-side error (check master logs) |
+
+### Client Behavior
+
+The peel client (`pkg/enroll/client.go`) treats a `401` with the body `challenge verification failed` as retryable: it indicates an unknown, expired, or already-consumed challenge nonce (for example, after a NATS restart wipes the memory-backed `enroll-challenges` bucket), so the client transparently requests a fresh nonce and resubmits the enrollment, bounded to 3 total attempts before the error is surfaced. Other 4xx responses are treated as permanent request errors and are not retried.
+
+Connection-level failures (dial errors, timeouts) and 5xx responses cause the client to rotate to the next configured master URL (`master_urls`) and retry with backoff; successful responses pin the current URL. See [Enrollment Operations: Multi-Master Failover](/docs/operations/enrollment#multi-master-failover).
+
+### Security Headers
+
+All responses include:
+
+```
+Strict-Transport-Security: max-age=63072000; includeSubDomains
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Cache-Control: no-store
+Content-Security-Policy: default-src 'none'
+Referrer-Policy: no-referrer
+```
+
+---
+
+## Peel Enrollment Flow
+
+The enrollment flow is a multi-step process. The peel interacts with the following endpoints in order.
+
+### Step 1: Request Challenge Nonce
+
+Request a challenge nonce by providing the peel's identity as query parameters. The master generates a 32-byte random nonce from `crypto/rand`, stores it in the `enroll-challenges` KV bucket (5-minute TTL), and returns it to the peel. See `handleNonce` in `pkg/enroll/handler.go`.
+
+```
+GET /api/v1/enroll/nonce?peel_id=<id>&public_key=<key>
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `peel_id` | `string` | Yes | Unique identifier for the peel (2-255 chars, alphanumeric/hyphens/underscores) |
+| `public_key` | `string` | Yes | Ed25519 public key (prefix `U`) |
+
+**Example Request:**
+
+```bash
+curl "https://master.example.com:8443/api/v1/enroll/nonce?peel_id=web-03&public_key=UABC1234DEFG5678HIJK9012LMNO3456PQRS7890TU" \
+  --cacert /etc/zester/tls/ca.crt
+```
+
+**Response: `200 OK`**
+
+```json
+{
+  "challenge_id": "chl-2JFKz8Lm9kPqRsNvABCD1234",
+  "challenge": "base64-encoded-32-byte-nonce",
+  "expires_at": "2026-02-10T15:05:00Z"
+}
+```
+
+The challenge nonce is bound to the (peel_id, public_key) pair. It can only be used once and expires after 5 minutes.
+
+**Error Responses:**
+
+| Status | When |
+|--------|------|
+| `400 Bad Request` | Missing peel_id or public_key, invalid peel ID format, or invalid public key |
+| `429 Too Many Requests` | Rate limit exceeded |
+| `500 Internal Server Error` | Failed to generate or store challenge nonce |
+
+---
+
+### Step 2: Submit Enrollment with Challenge Signature
+
+Submit the enrollment request with the Ed25519 signature of the challenge bytes. The master consumes the challenge (single-use), verifies the signature, checks for duplicate peel IDs, and creates the enrollment record. See `handleEnroll` in `pkg/enroll/handler.go`.
+
+```
+POST /api/v1/enroll
+```
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `peel_id` | `string` | Yes | Must match the peel ID from step 1 |
+| `public_key` | `string` | Yes | Must match the public key from step 1 |
+| `curve_public_key` | `string` | Yes | X25519 curve public key (prefix `X`) for encryption |
+| `challenge_id` | `string` | Yes | Challenge ID from step 1 |
+| `signature` | `bytes` | Yes | Ed25519 signature of the raw challenge bytes |
+| `hostname` | `string` | No | Peel hostname |
+| `metadata` | `object` | No | Key-value pairs describing the peel (OS, arch, instance ID, etc.) |
+
+**Example Request:**
+
+```bash
+curl -X POST https://master.example.com:8443/api/v1/enroll \
+  --cacert /etc/zester/tls/ca.crt \
+  -H "Content-Type: application/json" \
+  -d '{
+    "peel_id": "web-03",
+    "public_key": "UABC1234DEFG5678HIJK9012LMNO3456PQRS7890TU",
+    "curve_public_key": "XDEF5678GHIJ9012KLMN3456OPQR7890STUV1234WX",
+    "challenge_id": "chl-2JFKz8Lm9kPqRsNvABCD1234",
+    "signature": "base64-encoded-ed25519-signature",
+    "hostname": "web-03.prod.internal",
+    "metadata": {
+      "os": "linux",
+      "arch": "amd64",
+      "instance_id": "i-0abc123def456"
+    }
+  }'
+```
+
+**Response: `201 Created`**
+
+```json
+{
+  "id": "enr-2JFKABCD1234567890abcdef",
+  "peel_id": "web-03",
+  "state": "pending"
+}
+```
+
+If the peel ID already has a `pending` enrollment, the existing record is returned with `200 OK` (idempotent). Peels with `rejected` or `revoked` enrollments can re-enroll (creating a new record).
+
+**Error Responses:**
+
+| Status | When |
+|--------|------|
+| `400 Bad Request` | Missing fields, invalid inputs, or challenge binding mismatch (peel_id/public_key do not match the challenge) |
+| `401 Unauthorized` | Challenge verification failed or signature verification failed |
+| `409 Conflict` | Peel ID already has an active enrollment (`pending`, `approved`, `issued`, or `active`) |
+| `429 Too Many Requests` | Rate limit exceeded |
+
+On a `401` with the body `challenge verification failed` (unknown/expired/consumed challenge), the peel client automatically restarts from step 1 with a fresh nonce, bounded to 3 total attempts -- see [Client Behavior](#client-behavior).
+
+---
+
+### Step 3: Poll Enrollment Status
+
+Check the current state of an enrollment request. Peels poll this endpoint while waiting for operator approval.
+
+```
+GET /api/v1/enroll/{id}/status
+```
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | `string` | The enrollment ID (e.g., `enr-2JFKABCD...`) |
+
+**Example Request:**
+
+```bash
+curl https://master.example.com:8443/api/v1/enroll/enr-2JFKABCD1234/status \
+  --cacert /etc/zester/tls/ca.crt
+```
+
+**Response when pending: `200 OK`**
+
+```json
+{
+  "id": "enr-2JFKABCD1234567890abcdef",
+  "peel_id": "web-03",
+  "state": "pending"
+}
+```
+
+**Response when approved: `200 OK`**
+
+```json
+{
+  "id": "enr-2JFKABCD1234567890abcdef",
+  "peel_id": "web-03",
+  "state": "approved"
+}
+```
+
+**Response when rejected: `200 OK`**
+
+```json
+{
+  "id": "enr-2JFKABCD1234567890abcdef",
+  "peel_id": "web-03",
+  "state": "rejected"
+}
+```
+
+**Error Responses:**
+
+| Status | When |
+|--------|------|
+| `404 Not Found` | No enrollment record for this ID |
+
+---
+
+### Step 3b: Stream Enrollment Status (SSE)
+
+As an alternative to polling, peels can open a Server-Sent Events (SSE) stream for real-time enrollment state notifications. The peel client uses this by default and falls back to polling if SSE is unavailable (e.g., behind a proxy that buffers responses).
+
+```
+GET /api/v1/enroll/{id}/stream
+```
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | `string` | The enrollment ID (e.g., `enr-2JFKABCD...`) |
+
+**Request Headers:**
+
+| Header | Value | Description |
+|--------|-------|-------------|
+| `Accept` | `text/event-stream` | Indicates the client expects an SSE stream |
+
+**Response Headers:**
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `Connection` | `keep-alive` |
+
+**SSE Event Format:**
+
+The stream emits three types of messages:
+
+1. **State events** — sent immediately on connect (with the current state) and on each state change:
+
+```
+event: state
+data: {"id":"enr-2JFKABCD1234567890abcdef","peel_id":"web-03","state":"pending"}
+
+```
+
+2. **Heartbeats** — SSE comments sent every 30 seconds to keep the connection alive through NAT gateways and proxies:
+
+```
+: heartbeat
+
+```
+
+3. **Timeout** — sent when the stream reaches its maximum duration (default 30 minutes):
+
+```
+event: timeout
+data: {"message":"stream duration exceeded"}
+
+```
+
+**Stream Lifecycle:**
+
+- On connect, the server sends the current enrollment state as the first `state` event.
+- The server watches the enrollment KV record for changes. When the state changes (e.g., an operator runs `zester enroll approve`), the server pushes a `state` event immediately.
+- The stream closes automatically when a terminal state is reached (`approved`, `rejected`, `revoked`, `issued`, `active`).
+- The stream also closes if the maximum duration is exceeded (30 minutes by default) or the client disconnects.
+
+**Example Request:**
+
+```bash
+curl --no-buffer https://master.example.com:8443/api/v1/enroll/enr-2JFKABCD1234/stream \
+  --cacert /etc/zester/tls/ca.crt \
+  -H "Accept: text/event-stream"
+```
+
+**Example Output:**
+
+```
+event: state
+data: {"id":"enr-2JFKABCD1234567890abcdef","peel_id":"web-03","state":"pending"}
+
+: heartbeat
+
+: heartbeat
+
+event: state
+data: {"id":"enr-2JFKABCD1234567890abcdef","peel_id":"web-03","state":"approved"}
+
+```
+
+**Error Responses:**
+
+| Status | When |
+|--------|------|
+| `400 Bad Request` | Missing enrollment ID |
+| `404 Not Found` | No enrollment record for this ID |
+| `500 Internal Server Error` | Streaming not supported by the server, or failed to start KV watcher |
+
+> **Note:** The polling endpoint (`GET /api/v1/enroll/{id}/status`) remains fully supported. SSE is an optional, additive enhancement. The peel client tries SSE first and falls back to polling automatically.
+
+---
+
+### Step 4: Download Credentials
+
+After the enrollment reaches `approved` state, the peel downloads its NATS credentials. This endpoint requires the peel to prove key ownership again by signing the enrollment ID.
+
+```
+GET /api/v1/enroll/{id}/creds
+```
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | `string` | The enrollment ID |
+
+**Required Header:**
+
+```
+Authorization: Nkey <public_key>:<base64url_signature_of_enrollment_id>
+```
+
+The peel signs the enrollment ID string (`enr-2JFKABCD...`) with its nkey seed, base64url-encodes the signature, and presents it in the `Authorization` header. The master verifies the signature matches the public key in the enrollment record.
+
+**Example Request:**
+
+```bash
+# Sign the enrollment ID (done programmatically by the peel client)
+# signature = base64url(sign("enr-2JFKABCD1234567890abcdef", seed))
+
+curl https://master.example.com:8443/api/v1/enroll/enr-2JFKABCD1234/creds \
+  --cacert /etc/zester/tls/ca.crt \
+  -H "Authorization: Nkey UABC1234DEFG5678HIJK9012:base64url-signature"
+```
+
+**Response: `200 OK`**
+
+```json
+{
+  "peel_id": "web-03",
+  "creds_data": "LS0tLS1CRUdJTiBOQVRTIFVTRVIgSldULS0tLS0K...",
+  "expires_at": "2026-08-10T12:00:00Z"
+}
+```
+
+The `creds_data` field contains the complete contents of a NATS `.creds` file (JWT + decorated nkey seed), base64-encoded. The peel decodes it and writes it to `/data/auth/<peel-id>.creds` with mode `0600`.
+
+After successful download, the master transitions the enrollment to `issued` state.
+
+**Response Headers:**
+
+```
+Cache-Control: no-store
+Content-Type: application/json
+```
+
+**Error Responses:**
+
+| Status | When |
+|--------|------|
+| `401 Unauthorized` | Invalid or missing Nkey signature; public key mismatch |
+| `403 Forbidden` | Enrollment not in `approved` state |
+| `404 Not Found` | Unknown enrollment |
+
+---
+
+## Admin Operations (CLI / NATS, or REST API)
+
+Admin operations are available through two paths:
+
+- **`zester` CLI (NATS)** — approve, reject, revoke, list, and show. State transitions (approve/reject/revoke) are sent as MessagePack `enroll.AdminRequest` messages over NATS request/reply on `zester.admin.enroll.approve` / `.reject` / `.revoke` (5s timeout); a running master's `zester-masters-admin` queue group answers with an `enroll.AdminResponse` after applying the transition to the `enrollments` KV bucket. Read-only operations (list, show) read the KV bucket directly. The operator's NATS credentials (configured in `master.yaml`) provide authentication, and NATS subject permissions provide authorization. When no master is running, `--direct-kv` is the break-glass path: the CLI writes the enrollment KV directly with its own credentials.
+- **Master REST API (token-authenticated HTTPS)** — `GET /api/v1/enrollments`, `POST /api/v1/enrollments/{id}/approve`, `POST /api/v1/enrollments/{id}/reject`, and `POST /api/v1/enrollments/{id}/revoke`, served on the same TLS listener as the enrollment endpoints. These routes require a `Bearer` token (`api.tokens` in the master config) and are only registered when at least one token is configured. Reject and revoke accept an optional JSON body `{"reason": "..."}` recorded on the enrollment record. See [Master REST API](/docs/reference/master-api) for the full reference.
+
+Unlike the peel-facing enrollment endpoints (unauthenticated but strictly rate-limited), the REST admin routes require bearer-token authentication.
+
+```bash
+# List pending enrollments
+zester enroll list
+
+# Show full enrollment details
+zester enroll show enr-2JFKABCD1234
+
+# Approve a pending enrollment
+zester enroll approve enr-2JFKABCD1234
+
+# Reject a pending enrollment
+zester enroll reject enr-2JFKABCD1234 --reason "Unknown instance ID"
+
+# Revoke an active enrollment
+zester enroll revoke enr-2JFKABCD1234 --reason "Instance decommissioned"
+
+# Break-glass: no master running — write the enrollment KV directly
+zester enroll approve enr-2JFKABCD1234 --direct-kv
+```
+
+All admin operations use CAS (Compare-and-Swap) updates for concurrency safety in multi-master deployments. The CLI automatically records the current OS username as the actor (`AdminRequest.Operator`, persisted as `DecidedBy`), and the answering master Info-logs every admin operation with action, enrollment ID, operator, and peel ID for the audit trail. On `nats: no responders` (no master answering admin requests), the CLI error suggests retrying with `--direct-kv`.
+
+---
+
+## Request/Response Reference Summary
+
+### HTTP API (peel-facing)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/api/v1/enroll/nonce` | TLS only | Request challenge nonce (step 1) |
+| `POST` | `/api/v1/enroll` | TLS only | Submit enrollment with challenge signature (step 2) |
+| `GET` | `/api/v1/enroll/{id}/status` | TLS only | Poll enrollment status |
+| `GET` | `/api/v1/enroll/{id}/stream` | TLS only | Stream enrollment status changes (SSE) |
+| `GET` | `/api/v1/enroll/{id}/creds` | Nkey signature | Download credentials (post-approval) |
+
+### CLI Commands (operator-facing, via NATS)
+
+| Command | Description |
+|---------|-------------|
+| `zester enroll list [--state <state>]` | List enrollments (default: pending; reads KV directly) |
+| `zester enroll show <id>` | Show full enrollment record (reads KV directly) |
+| `zester enroll approve <id>` | Approve a pending enrollment (request/reply to a master) |
+| `zester enroll reject <id> [--reason "..."]` | Reject a pending enrollment (request/reply to a master) |
+| `zester enroll revoke <id> [--reason "..."]` | Revoke an enrollment (request/reply to a master) |
+
+Approve, reject, and revoke accept `--direct-kv` to write the enrollment KV directly when no master is running (break-glass).
+
+### REST API (operator-facing, bearer token)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/enrollments?state=<state\|all>` | List enrollments (default: pending) |
+| `POST` | `/api/v1/enrollments/{id}/approve` | Approve a pending enrollment |
+| `POST` | `/api/v1/enrollments/{id}/reject` | Reject a pending enrollment (optional body `{"reason": "..."}`) |
+| `POST` | `/api/v1/enrollments/{id}/revoke` | Revoke an enrollment (optional body `{"reason": "..."}`) |
+
+See [Master REST API](/docs/reference/master-api) for authentication and response formats.
+
+---
+
+## Rate Limiting
+
+All routes on the listener are rate-limited per source IP using token buckets, with two separate budgets (see `pkg/enroll/server.go`):
+
+| Route class | Bucket capacity | Refill rate |
+|-------------|-----------------|-------------|
+| `/api/v1/enroll` and subpaths (nonce, enroll, status, stream, creds) | 10 tokens | 1 token per 10 seconds |
+| All other routes (REST API, including `/api/v1/enrollments*` and docs) | 120 tokens | 20 tokens per second |
+
+Each request costs 1 token. Stale entries older than 5 minutes are evicted when the bucket map exceeds 5000 entries. Note that `/api/v1/enrollments` (the REST admin route) is **not** an enrollment path — only `/api/v1/enroll` and its subpaths get the strict limiter (`isEnrollPath()` in `pkg/enroll/server.go`).
+
+When the rate limit is exceeded:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 10
+
+{"error":"rate limit exceeded"}
+```
+
+The `Retry-After` header indicates how many seconds the client should wait.
+
+CLI admin operations (approve, reject, revoke, list) are not subject to HTTP rate limiting — they are performed over NATS (request/reply to a master, or direct KV reads), not the HTTP API.
+
+---
+
+## Input Validation
+
+All inputs are validated before processing (see `pkg/enroll/verify.go`):
+
+| Field | Validation | Max Length |
+|-------|-----------|------------|
+| `peel_id` | Must match `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,253}[a-zA-Z0-9]$` | 255 chars |
+| `public_key` | Must be valid User nkey (`auth.ValidatePublicKey(pub, auth.RoleUser)`) | 56 chars |
+| `curve_public_key` | Must start with `X` prefix | 56 chars |
+| `signature` | Base64-encoded Ed25519 signature | 128 chars |
+| `challenge_id` | Valid KSUID format with `chl-` prefix | 31 chars |
+| Request body | Maximum size enforced by HTTP server | 4 KB |
+
+---
+
+## Observability
+
+<Callout type="info" title="NATS enrollment events not yet implemented">
+Enrollment lifecycle events (e.g., `zester.enroll.<peel-id>.approved`) are not currently published to NATS subjects. Monitor enrollment activity via structured log output from the handler and the `zester enroll list` CLI command. See [Enrollment Operations: Monitoring](/docs/operations/enrollment#monitoring-enrollment) for details.
+</Callout>

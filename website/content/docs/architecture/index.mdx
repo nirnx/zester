@@ -1,0 +1,22 @@
+---
+title: "Overview"
+description: "This section provides a comprehensive technical deep-dive into Zester's architecture, covering the system topology, NATS JetStream message bus, and multi-layer security model."
+---
+
+<Cards>
+<Card title="Architecture Overview" href="/docs/architecture/overview">
+Master/Peel topology, component interactions, package structure, and end-to-end message flow for command dispatch, fact sync, state application, and job lifecycle.
+</Card>
+<Card title="NATS JetStream" href="/docs/architecture/nats">
+Why NATS was chosen, subject hierarchy, KV bucket design, JetStream streams, deployment topologies from single-node to multi-region superclusters.
+</Card>
+<Card title="Security Model" href="/docs/architecture/security">
+Four-layer encryption stack, nkey trust hierarchy, JWT subject-level authorization, NaCl box encryption for settings, threat model, and key compromise blast radius analysis.
+</Card>
+<Card title="High Availability" href="/docs/architecture/ha">
+Active-active multi-master deployment, NATS queue group dispatch, job ownership, heartbeat-based health monitoring, orphan recovery, and peel-side settings rendering.
+</Card>
+<Card title="Self-Update Runtime" href="/docs/operations/update">
+Update command protocol, watchdog state machine, rollout controller flow, and update storage schema.
+</Card>
+</Cards>

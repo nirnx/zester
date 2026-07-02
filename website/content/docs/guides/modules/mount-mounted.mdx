@@ -1,0 +1,42 @@
+---
+title: "mount.mounted"
+description: "Ensures a filesystem is mounted and optionally present in /etc/fstab."
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Mount point path |
+| `device` | string | — | **Required.** Device or UUID |
+| `fstype` | string | `ext4` | Filesystem type |
+| `opts` | string | `defaults` | Mount options |
+| `dump` | int | `0` | Fstab dump field |
+| `pass` | int | `0` | Fstab pass field |
+| `persist` | bool | `true` | Add/update entry in `/etc/fstab` |
+| `require` | list | — | Requisite states |
+
+## Example
+
+```yaml
+/mnt/data:
+  mount.mounted:
+    - device: /dev/sdb1
+    - fstype: xfs
+    - opts: defaults,noatime
+    - persist: true
+    - require:
+      - pkg.installed:xfsprogs
+
+/mnt/nfs:
+  mount.mounted:
+    - device: "nfs-server:/exports/data"
+    - fstype: nfs
+    - opts: "rw,hard,intr"
+```
+
+## Behaviour
+
+- Check: verifies mount point is active via `/proc/mounts`; if `persist=true`, also verifies fstab entry matches.
+- Apply: writes fstab entry (if `persist=true`), then mounts if not already mounted.
+- Revert: unmounts (if Apply mounted it) and removes fstab entry (if Apply added it).

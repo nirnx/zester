@@ -1,0 +1,68 @@
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-peel ./cmd/zester-peel
+
+# ---------------------------------------------------------------------------
+# Runtime: Ubuntu 24.04 with systemd as PID 1
+# ---------------------------------------------------------------------------
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl bash systemd systemd-sysv dbus nginx \
+    && rm -rf /var/lib/apt/lists/*
+
+# Remove unnecessary systemd units that cause noise/failures in containers.
+RUN rm -f /lib/systemd/system/multi-user.target.wants/* \
+    /etc/systemd/system/*.wants/* \
+    /lib/systemd/system/local-fs.target.wants/* \
+    /lib/systemd/system/sockets.target.wants/*udev* \
+    /lib/systemd/system/sockets.target.wants/*initctl* \
+    /lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup* \
+    /lib/systemd/system/systemd-update-utmp*
+
+COPY --from=builder /bin/zester-peel /usr/local/bin/zester-peel
+
+RUN mkdir -p /etc/zester
+
+ARG PEEL_ROLE=default
+ARG PEEL_CLUSTER=default
+RUN echo "role: ${PEEL_ROLE}\ncluster_name: ${PEEL_CLUSTER}" > /etc/zester/facts
+
+COPY playground/states /data/states
+RUN mkdir -p /data/states-cache
+
+# Systemd service unit for zester-peel.
+RUN printf '[Unit]\n\
+Description=Zester Peel Agent\n\
+After=network.target\n\
+\n\
+[Service]\n\
+Type=simple\n\
+EnvironmentFile=/etc/zester/peel-args\n\
+ExecStart=/usr/local/bin/zester-peel $PEEL_ARGS\n\
+Restart=on-failure\n\
+\n\
+[Install]\n\
+WantedBy=multi-user.target\n' > /etc/systemd/system/zester-peel.service \
+    && systemctl enable zester-peel
+
+# Default empty args file (overwritten by entrypoint).
+RUN echo 'PEEL_ARGS=""' > /etc/zester/peel-args
+
+# Entrypoint wrapper: writes CMD args into env file, then execs systemd.
+RUN printf '#!/bin/bash\necho "PEEL_ARGS=\"$*\"" > /etc/zester/peel-args\nexec /lib/systemd/systemd\n' \
+    > /usr/local/bin/start.sh && chmod +x /usr/local/bin/start.sh
+
+STOPSIGNAL SIGRTMIN+3
+
+ENTRYPOINT ["/usr/local/bin/start.sh"]

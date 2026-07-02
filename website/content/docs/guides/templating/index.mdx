@@ -1,0 +1,147 @@
+---
+title: "Overview"
+---
+
+Zester uses [Gonja](https://github.com/nikolalohinski/gonja/v2), a Go implementation of the Jinja2 template language, to render `.zy` files. Templates bring configuration to life -- transforming static YAML into dynamic, per-peel configuration that adapts to each host's hardware, role, and environment.
+
+## Where Templates Are Used
+
+Templates appear in two places:
+
+1. **Settings files** (`.zy`) -- YAML configuration rendered per-peel with facts and prior settings as context
+2. **State files** (`.zy`) -- State definitions that can reference facts and settings
+
+## Template Context
+
+Every template receives these variables:
+
+| Variable   | Type             | Description |
+|------------|------------------|-------------|
+| `facts`    | `map[string]any` | The target peel's system facts (OS, network, CPU, memory, disk, custom) |
+| `settings` | `map[string]any` | The current merged settings (grows as files are loaded in order) |
+
+Additional context can be passed via the `Extra` map in `RenderContext`.
+
+<Callout type="info" title="Context availability">
+The `facts` and `settings` maps are always present in the template context, even if empty. If a peel has not yet reported facts, `facts` will be an empty map. Access missing keys safely using the `default` filter: `{{ facts.cpu.count | default(1) }}`.
+</Callout>
+
+## Quick Example
+
+```yaml title="/srv/zester/settings/webservers/nginx.zy"
+nginx:
+  worker_processes: {{ facts.cpu.count }}
+  server_name: {{ facts.network.fqdn }}
+
+  {% if facts.memory.total > 8589934592 %}
+  worker_connections: 4096
+  {% else %}
+  worker_connections: 1024
+  {% endif %}
+
+  listen:
+    {% for ip in facts.network.ipv4 %}
+    - {{ ip }}:443
+    {% endfor %}
+
+  upstream_backends:
+    {% for peer in basket("role:api", "network.ipv4") %}
+    - {{ peer.value }}:8080
+    {% endfor %}
+```
+
+For a peel `web-01` with 16 CPUs and 32 GB RAM, this renders to:
+
+```yaml
+nginx:
+  worker_processes: 16
+  server_name: web-01.prod.example.com
+  worker_connections: 4096
+  listen:
+    - 10.0.1.15:443
+  upstream_backends:
+    - 10.0.2.10:8080
+    - 10.0.2.11:8080
+```
+
+## Gonja vs Jinja2
+
+Gonja implements the core Jinja2 specification. If you have used Jinja2 in Python (SaltStack, Ansible, Flask), the syntax is identical. The key differences:
+
+| Feature | Jinja2 (Python) | Gonja (Go) |
+|---------|-----------------|------------|
+| Variable output | `{{ var }}` | `{{ var }}` |
+| Control flow | `{% if %}` | `{% if %}` |
+| Comments | `{# comment #}` | `{# comment #}` |
+| Filters | `\| filter` | `\| filter` |
+| Custom filters | Python functions | Go functions |
+| Template inheritance | `{% extends %}` | `{% extends %}` |
+| Includes | `{% include %}` | `{% include %}` |
+| Macros | `{% macro %}` | `{% macro %}` |
+
+## Engine Architecture
+
+The template engine is defined in `pkg/template/engine.go`. It wraps Gonja with:
+
+- A filesystem loader rooted at `/srv/zester` for includes and extends
+- Custom Zester-specific filters (see [Filters](/docs/guides/templating/filters))
+- Custom Zester-specific functions (see [Functions](/docs/guides/templating/functions))
+- Built-in Gonja/Jinja2 filters and functions
+
+### EngineConfig
+
+The `EngineConfig` struct controls engine behavior:
+
+| Field       | Type          | Default         | Description |
+|-------------|---------------|-----------------|-------------|
+| `BasePath`  | `string`      | `/srv/zester`   | Root directory for resolving template includes and file loading |
+| `BasketFn` | `BasketFunc` | `nil`           | Callback for resolving `basket()` calls. If nil, `basket()` returns an empty list |
+| `ModuleFn` | `ModuleFunc` | `nil`           | Dispatcher for Salt-style `salt['mod.func'](...)` and `salt_call(...)` calls. If nil, any use of the salt accessor raises a render error |
+
+### RenderContext
+
+The `RenderContext` struct holds the data available to templates during rendering:
+
+| Field      | Type             | Description |
+|------------|------------------|-------------|
+| `Facts`    | `map[string]any` | The peel's collected system facts |
+| `Settings` | `map[string]any` | The current settings being rendered |
+| `Extra`    | `map[string]any` | Additional data injected into the template context |
+
+<Callout type="success" title="Extra context">
+The `Extra` map is merged directly into the top-level template namespace. Keys in `Extra` become top-level variables alongside `facts` and `settings`. This is useful for passing job-specific or one-off data into templates.
+</Callout>
+
+### Rendering Methods
+
+The engine provides two rendering methods:
+
+- **`RenderString(name, source, ctx)`** -- Renders a template from a raw string. The `name` parameter is used for error messages and cache keys.
+- **`RenderFile(path, ctx)`** -- Renders a template from a file path relative to `BasePath`. Template includes and extends are resolved relative to `BasePath`.
+
+```
+┌────────────────────────────────────────┐
+│           Template Engine              │
+│                                        │
+│  ┌──────────────┐  ┌────────────────┐  │
+│  │ Gonja Core   │  │ File Loader    │  │
+│  │ (Jinja2)     │  │ (/srv/zester)  │  │
+│  └──────┬───────┘  └───────┬────────┘  │
+│         │                  │           │
+│  ┌──────┴──────────────────┴────────┐  │
+│  │         Environment              │  │
+│  │                                  │  │
+│  │  Built-in filters + Zester       │  │
+│  │  Built-in functions + Zester     │  │
+│  │  Built-in tests                  │  │
+│  │  Control structures              │  │
+│  └──────────────────────────────────┘  │
+└────────────────────────────────────────┘
+```
+
+## In This Section
+
+- [Syntax Guide](/docs/guides/templating/syntax) -- Variables, loops, conditionals, macros, includes, extends
+- [Filters](/docs/guides/templating/filters) -- All built-in and Zester-specific filters
+- [Functions](/docs/guides/templating/functions) -- All Zester-specific global functions
+- [Salt Compatibility](/docs/guides/templating/salt-compatibility) -- Variable aliases, the `salt['mod.func']` accessor, Salt-style functions, and migration helpers

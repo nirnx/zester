@@ -1,0 +1,259 @@
+---
+title: "Scheduling"
+---
+
+The peel-side scheduler runs modules at configured intervals or cron times, enabling periodic automation without external orchestration. Schedules can be defined statically in `peel.yaml` or dynamically through the settings pipeline.
+
+**Source**: `pkg/schedule/`
+
+---
+
+## Configuration
+
+Schedules are defined as named entries under the `schedule` key. Each entry specifies a module to run and a timing strategy (interval or cron).
+
+### Static Configuration (peel.yaml)
+
+Add schedule entries directly to the peel's configuration file:
+
+```yaml title="peel.yaml"
+schedule:
+  cleanup_tmp:
+    module: cmd.run
+    args:
+      command: "find /tmp -mtime +7 -delete"
+    interval: 1h
+    splay: 5m
+    run_on_start: true
+  highstate:
+    module: state.highstate
+    cron: "0 */4 * * *"
+    splay: 15m
+    return_job: true
+```
+
+### Dynamic Configuration (Settings)
+
+Schedules can also be pushed through the settings pipeline, enabling centralized management and per-peel targeting via the top file:
+
+```yaml title="settings/schedule.zy"
+schedule:
+  disk_check:
+    module: cmd.run
+    args:
+      command: "df -h"
+    interval: 30m
+    return_job: true
+```
+
+<Callout type="info" title="Merge Precedence">
+When the same schedule name exists in both `peel.yaml` and settings, the **settings-sourced entry takes precedence**. This allows operators to override static defaults without modifying the peel configuration file.
+</Callout>
+
+---
+
+## Entry Fields
+
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `module` | `string` | *(required)* | Module to execute (e.g., `cmd.run`, `state.highstate`) |
+| `args` | `map` | `nil` | Arguments passed to the module |
+| `interval` | `duration` | — | Repeat interval (e.g., `1h`, `30m`, `5s`). Mutually exclusive with `cron`. |
+| `cron` | `string` | — | 5-field cron expression (e.g., `0 */4 * * *`). Mutually exclusive with `interval`. |
+| `splay` | `duration` | `0` | Random delay in `[0, splay)` added per fire. Prevents thundering herd. |
+| `maxrunning` | `int` | `1` | Maximum concurrent executions of this entry. New fires are skipped if the limit is reached. |
+| `run_on_start` | `bool` | `false` | Fire immediately when the peel starts, before the first interval/cron tick. |
+| `return_job` | `bool` | `false` | Report the execution as a synthetic job, making it visible in `zester job list`. See [Result Reporting](#result-reporting). |
+| `enabled` | `bool` | `true` | Set to `false` to disable the entry without removing it. |
+
+<Callout type="warn" title="Interval vs Cron">
+Each entry must specify exactly one of `interval` or `cron`. Specifying both (or neither) is a configuration error.
+</Callout>
+
+---
+
+## Timing
+
+### Interval
+
+The `interval` field accepts Go duration strings (`1h`, `30m`, `5s`, `1h30m`). The scheduler fires the module repeatedly at the given interval, measured from the **end** of the previous execution.
+
+### Cron
+
+The `cron` field accepts standard 5-field cron expressions:
+
+```
+┌───────────── minute (0-59)
+│ ┌───────────── hour (0-23)
+│ │ ┌───────────── day of month (1-31)
+│ │ │ ┌───────────── month (1-12)
+│ │ │ │ ┌───────────── day of week (0-6, Sunday=0)
+│ │ │ │ │
+* * * * *
+```
+
+### Splay (Thundering Herd Prevention)
+
+When `splay` is set, each fire is delayed by a random duration in `[0, splay)`. This spreads execution across the fleet and prevents all peels from hitting shared resources simultaneously.
+
+```yaml
+highstate:
+  module: state.highstate
+  cron: "0 */4 * * *"
+  splay: 15m    # fires between :00 and :15 past the hour
+```
+
+<Callout type="success" title="Splay for Large Fleets">
+For fleet-wide operations like `state.highstate`, always set a splay proportional to fleet size. A 15-minute splay with 100 peels averages one execution every 9 seconds rather than 100 simultaneous runs.
+</Callout>
+
+---
+
+## Result Reporting
+
+By default, scheduled executions are **silent** -- they run on the peel without creating trackable jobs. This keeps the job system clean for operator-initiated work.
+
+Set `return_job: true` to report each execution as a **synthetic job**. This makes scheduled runs visible in `zester job list` and enables:
+
+- Result tracking and history
+- Failure alerting via monitoring
+- Audit trail for compliance
+
+```yaml
+disk_check:
+  module: cmd.run
+  args:
+    command: "df -h | awk '$5+0 > 90 {print $0}'"
+  interval: 30m
+  return_job: true   # results visible in zester job list
+```
+
+### How Results Flow
+
+Peels have **no write access to the `jobs` or `job-returns` KV buckets** -- scheduled results travel through JetStream instead:
+
+1. **Peel publishes** -- when the entry completes, the peel generates a KSUID job ID and publishes a `ScheduledResult` (module, args, success, return data, duration, timestamp) on the peel-scoped subject `zester.job.<jid>.schedule.<peel-id>`.
+2. **Stream captures** -- the `job-events` JetStream stream captures the message durably (7-day retention).
+3. **Master persists** -- all masters share a single durable consumer named `schedule-results`. It creates the synthetic job record with an idempotent KV `Create` (so redeliveries and multi-master races are safe) and writes the per-peel return to the `job-returns` bucket.
+
+The synthetic job targets exactly the reporting peel and carries the metadata `source: schedule` and `schedule: <entry-name>`; its status is `complete` or `failed` depending on the execution result.
+
+<Callout type="info" title="Results survive master downtime">
+Because results are buffered in the `job-events` stream, a scheduled run that fires while no master is running is not lost -- the shared durable consumer processes it as soon as a master comes back (within the 7-day retention window).
+</Callout>
+
+<Callout type="info" title="Identity comes from the subject, not the payload">
+A peel's NATS permissions only allow publishing with its own ID as the trailing subject token (`zester.job.*.schedule.<peel-id>`). The master takes the reporting peel's identity from the subject, so one compromised peel cannot forge or overwrite another peel's job records or returns.
+</Callout>
+
+---
+
+## Dynamic Reload
+
+Settings-sourced schedules are **hot-reloaded** when the settings pipeline pushes updates. The scheduler:
+
+1. Compares the new schedule map against the running entries
+2. Stops removed or changed entries
+3. Starts new or changed entries
+4. Leaves unchanged entries running (no restart, no timer reset)
+
+Static entries from `peel.yaml` are loaded once at startup and are not reloaded.
+
+---
+
+## Examples
+
+### Periodic Highstate
+
+Apply the full state tree every 4 hours with splay to avoid fleet-wide thundering herd:
+
+```yaml
+schedule:
+  highstate:
+    module: state.highstate
+    cron: "0 */4 * * *"
+    splay: 15m
+    return_job: true
+```
+
+### Cleanup Script
+
+Remove old temp files hourly, starting immediately on boot:
+
+```yaml
+schedule:
+  cleanup_tmp:
+    module: cmd.run
+    args:
+      command: "find /tmp -mtime +7 -delete"
+    interval: 1h
+    splay: 5m
+    run_on_start: true
+```
+
+### Health Check
+
+Run a lightweight health check every 5 minutes with job tracking for alerting:
+
+```yaml
+schedule:
+  health_check:
+    module: cmd.run
+    args:
+      command: "/usr/local/bin/health-check.sh"
+    interval: 5m
+    return_job: true
+    maxrunning: 1
+```
+
+### Disk Monitoring (via Settings)
+
+Push a disk check schedule to all peels through the settings pipeline:
+
+```yaml title="settings/monitoring.zy"
+schedule:
+  disk_check:
+    module: cmd.run
+    args:
+      command: "df -h | awk '$5+0 > 90 {print $0}'"
+    interval: 30m
+    return_job: true
+```
+
+### Disabled Entry
+
+Keep a schedule definition for reference without running it:
+
+```yaml
+schedule:
+  expensive_audit:
+    module: cmd.run
+    args:
+      command: "/opt/audit/full-scan.sh"
+    cron: "0 2 * * 0"
+    enabled: false
+```
+
+---
+
+## Troubleshooting
+
+### Schedule Not Firing
+
+- Check that the entry has `enabled: true` (or omitted, which defaults to `true`)
+- Verify that exactly one of `interval` or `cron` is set
+- Check peel logs for schedule registration messages at startup
+
+### Executions Piling Up
+
+If a scheduled module takes longer than the interval, subsequent fires are skipped when `maxrunning` (default 1) is reached. Increase `maxrunning` only if concurrent execution is safe, or increase the interval.
+
+### Splay Seems Too Large
+
+Splay adds a random delay in `[0, splay)` on **every** fire. If your interval is `30m` and splay is `20m`, executions will occur between 30 and 50 minutes apart. Keep splay small relative to the interval.
+
+### Settings Schedule Not Updating
+
+- Verify the settings pipeline is delivering the `schedule` key (check with `zester '<peel>' settings.get schedule`)
+- Check peel logs for settings reload events
+- Ensure the top file targets the correct peels

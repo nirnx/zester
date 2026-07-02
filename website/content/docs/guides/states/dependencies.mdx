@@ -1,0 +1,631 @@
+---
+title: "State Dependencies"
+---
+
+States in Zester declare dependencies on other states using requisite parameters (`require`, `watch`, `onchanges`, `onfail`, `prereq`, `listen`, and their inverse `_in` forms). These dependencies form a Directed Acyclic Graph (DAG) that the runner resolves into parallel execution levels using Kahn's algorithm.
+
+---
+
+## Declaring Dependencies
+
+Dependencies are most commonly declared via `require`, `watch`, `onchanges`, or `onfail` parameters as a list of fully-qualified state names in the format `module.function:state_id` (see [Requisite Target Formats](#requisite-target-formats) for the Salt dict shorthand, and the sections below for `prereq`, `listen`, and the inverse `_in` forms):
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx
+
+deploy_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx.conf
+    - require:
+      - pkg.installed:install_nginx
+
+start_nginx:
+  cmd.run:
+    - command: systemctl enable --now nginx
+    - creates: /run/nginx.pid
+    - require:
+      - file.managed:deploy_config
+```
+
+The `require` parameter tells Zester: "do not execute this state until all listed dependencies have completed successfully."
+
+---
+
+## Requisite Types
+
+Zester supports the full Salt requisite set. Four core types are evaluated at runtime by the Runner:
+
+| Requisite | Behavior |
+|-----------|----------|
+| `require` | Must succeed before this state runs (ordering + failure propagation) |
+| `watch` | Like require, but forces re-apply (skips Check) when the watched state changed |
+| `onchanges` | Only runs if at least one listed state made changes; otherwise skipped |
+| `onfail` | Only runs if at least one listed state failed; otherwise skipped |
+
+All four core requisite types create DAG ordering edges. The Runner interprets the semantics after dependency ordering is established. On top of these, `prereq` and `listen` (plus the inverse `_in` forms of all requisites) are rewritten by the compiler into the core types — see the sections below.
+
+### Requisite Target Formats
+
+Requisite targets accept both the Zester string form and the Salt dict form:
+
+```yaml
+- require:
+  - pkg.installed:nginx      # Zester form: module.function:state_id
+  - pkg: nginx               # Salt dict form: shorthand module -> state_id
+```
+
+Salt shorthand module names are resolved to their default Zester full module names:
+
+| Shorthand | Resolves to |
+|-----------|-------------|
+| `pkg` | `pkg.installed` |
+| `file` | `file.managed` |
+| `service` | `service.running` |
+| `cmd` | `cmd.run` |
+| `user` | `user.present` |
+| `group` | `group.present` |
+
+Any other dict key is passed through as-is (so `- file.touch: flag` targets `file.touch:flag`).
+
+### Watch
+
+The `watch` requisite behaves like `require` but forces the dependent state to re-apply (skip the Check phase) when any watched state made changes.
+
+**Use case**: Restart a service when its configuration file changes.
+
+```yaml
+deploy_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx.conf
+    - require:
+      - pkg.installed:install_nginx
+
+restart_nginx:
+  cmd.run:
+    - command: systemctl restart nginx
+    - watch:
+      - file.managed:deploy_config
+```
+
+**Behavior**:
+
+- If `deploy_config` makes changes → `restart_nginx` skips Check and directly runs Apply (guaranteed execution)
+- If `deploy_config` does NOT change → `restart_nginx` behaves like a normal `require` dependency (Check → Apply if needed)
+
+### OnChanges
+
+The `onchanges` requisite only executes the dependent state if at least one of the listed dependencies made changes. If none changed, the state is skipped with `SkipReason: "onchanges_not_met"`.
+
+**Use case**: Run a build step only when source files change.
+
+```yaml
+deploy_source:
+  file.managed:
+    - path: /opt/app/main.py
+    - source: /srv/zester/files/app/main.py
+
+rebuild_app:
+  cmd.run:
+    - command: /opt/app/venv/bin/pip install -e /opt/app
+    - onchanges:
+      - file.managed:deploy_source
+```
+
+**Behavior**:
+
+- If `deploy_source` makes changes → `rebuild_app` executes (Check → Apply)
+- If `deploy_source` does NOT change → `rebuild_app` is skipped entirely
+
+### OnFail
+
+The `onfail` requisite only executes the dependent state if at least one of the listed dependencies failed. If all dependencies succeeded, the state is skipped with `SkipReason: "onfail_not_met"`.
+
+**Use case**: Mount a backup filesystem when the primary mount fails.
+
+```yaml
+mount_primary:
+  cmd.run:
+    - command: mount /dev/sda1 /data
+    - creates: /data/ready
+
+mount_backup:
+  cmd.run:
+    - command: mount /dev/sdb1 /data
+    - creates: /data/ready
+    - onfail:
+      - cmd.run:mount_primary
+```
+
+**Behavior**:
+
+- If `mount_primary` fails → `mount_backup` executes
+- If `mount_primary` succeeds → `mount_backup` is skipped
+
+### Mixed Requisites
+
+A state can combine multiple requisite types. All requisites create ordering edges; the Runner interprets semantics during execution.
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx
+
+deploy_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx.conf
+    - require:
+      - pkg.installed:install_nginx
+
+deploy_ssl_cert:
+  file.managed:
+    - path: /etc/ssl/certs/app.pem
+    - source: /srv/zester/files/certs/app.pem
+    - mode: "0600"
+
+restart_nginx:
+  cmd.run:
+    - command: systemctl restart nginx
+    - require:
+      - file.managed:deploy_ssl_cert
+    - watch:
+      - file.managed:deploy_config
+```
+
+**Behavior**:
+
+- `restart_nginx` waits for both `deploy_ssl_cert` (require) and `deploy_config` (watch) to complete
+- If `deploy_config` changed → `restart_nginx` skips Check and directly runs Apply
+- If `deploy_config` did NOT change → `restart_nginx` runs Check → Apply if needed
+
+---
+
+## Inverse Requisites (`_in`)
+
+Every requisite has an inverse `_in` form that declares the relationship from
+the other direction. `A` with `require_in: B` is equivalent to `B` with
+`require: A`. Inverse requisites are resolved at compile time by injecting the
+matching forward requisite onto the target state, so they participate in the
+DAG exactly like the forward form.
+
+| Inverse | Equivalent to |
+|---|---|
+| `require_in` | target gains `require` on this state |
+| `watch_in` | target gains `watch` on this state |
+| `onchanges_in` | target gains `onchanges` on this state |
+| `onfail_in` | target gains `onfail` on this state |
+| `listen_in` | target gains `watch` on this state (see Listen) |
+| `prereq_in` | target gains `prereq` on this state |
+
+```yaml
+apt_update:
+  cmd.run:
+    - command: apt-get update
+    # Every package install below implicitly requires apt_update.
+    - require_in:
+      - pkg.installed:nginx
+      - pkg.installed:redis
+
+nginx:
+  pkg.installed: []
+redis:
+  pkg.installed: []
+```
+
+## Prereq
+
+`prereq` declares that a state should run **before** another state, but only if
+that other state *would* make changes. Ordering is established at compile time
+(the compiler injects a `require` on the target so the prereq state sorts
+first); the gate is evaluated at runtime: Zester test-runs the target's
+`Check`, and if it reports a pending change, the prereq state runs (forced
+apply, skipping its own Check), otherwise it is skipped with
+`SkipReason: "prereq_not_met"`.
+
+**Use case**: take a service out of a load balancer before a deploy that will
+actually change something.
+
+```yaml
+drain_lb:
+  cmd.run:
+    - command: /usr/local/bin/lb-drain.sh
+    - prereq:
+      - cmd.run:deploy_app
+
+deploy_app:
+  cmd.run:
+    - command: /usr/local/bin/deploy.sh
+    - creates: /opt/app/current
+```
+
+## Listen
+
+`listen` / `listen_in` behave like `watch` — the state re-applies when a
+listened-to state changes. (In Salt, listen defers the reaction to the end of
+the run; Zester triggers it inline like `watch`. The apply-on-change effect is
+the same.)
+
+## Execution Guards: `onlyif` / `unless`
+
+Guards run a shell command to decide whether a state should execute at all,
+independent of its `Check` logic. They work on any state.
+
+- **`onlyif`**: the state runs only if every command exits `0`.
+- **`unless`**: the state runs only if every command exits non-zero (skipped if
+  any command exits `0`).
+
+Both accept a single string or a list.
+
+```yaml
+extract_release:
+  cmd.run:
+    - command: tar xzf /tmp/release.tgz -C /opt/app
+    - unless: test -d /opt/app/current   # skip if already extracted
+
+run_migrations:
+  cmd.run:
+    - command: /opt/app/bin/migrate
+    - onlyif:
+      - test -f /opt/app/bin/migrate
+      - /opt/app/bin/needs-migration
+```
+
+A state whose guard is not met reports no change (it is a no-op, not a
+failure) with the diff `skipped: guard condition not met`. Guards are
+evaluated before both Check and Apply, so they also gate watch-forced applies
+and dry runs.
+
+## Ordering, Retries, and Failhard
+
+These generic attributes work on any state:
+
+| Attribute | Behavior |
+|---|---|
+| `order: N` | Sorts states within a DAG level (lower first; unspecified states sort as `0`). `order: first` (= -1000000) / `order: last` (= 1000000) are supported. Requisite ordering always takes precedence — `order` only breaks ties within a level. |
+| `retry: N` or `retry: {attempts: N, interval: S}` | Re-runs the state up to `N` additional times on failure, waiting `interval` **seconds** between attempts (default 10s). Retries apply in apply and revert modes, not in test mode. |
+| `failhard: true` | If this state fails, the remaining DAG levels are aborted; their states are skipped with `SkipReason: "failhard_abort"`. Other states in the *same* level still finish (they run concurrently). |
+
+```yaml
+fetch_artifact:
+  cmd.run:
+    - command: curl -fsSL https://artifacts.example.com/app.tgz -o /tmp/app.tgz
+    - retry:
+        attempts: 5
+        interval: 15
+    - failhard: true       # nothing downstream should run if the fetch fails
+```
+
+## Names Expansion
+
+A `names:` list expands one declaration into multiple states, one per name.
+Each expanded state uses its name as the state ID, so it can be targeted by
+requisites individually.
+
+```yaml
+base_packages:
+  pkg.installed:
+    - names:
+      - curl
+      - git
+      - htop
+# Expands to pkg.installed:curl, pkg.installed:git, pkg.installed:htop
+```
+
+## module.run
+
+`module.run` invokes another registered module by name — a compatibility
+escape hatch for running a module that isn't wired as a dedicated state in a
+formula. Check/Apply/Revert delegate to the target module, so idempotency is
+preserved. Both the classic `name:` form and the newer dotted-key form are
+supported:
+
+```yaml
+# Classic form: name selects the target; other args are forwarded to it.
+refresh_cache:
+  module.run:
+    - name: cmd.run
+    - command: apt-get update
+
+# Newer Salt form: a dotted key names the target; its map is the argument set.
+touch_flag:
+  module.run:
+    - file.touch:
+        path: /var/run/flag
+```
+
+---
+
+## DAG Resolution
+
+Zester constructs a DAG from all states and the four core requisite types (`require`, `watch`, `onchanges`, `onfail`), then resolves it into ordered execution levels. By this point the compiler has already rewritten `listen` into `watch`, resolved all `_in` forms into their forward equivalents, and injected `require` edges for `prereq` ordering — so the DAG only ever sees the four core lists.
+
+**Source**: `pkg/state/dag.go`
+
+### Construction
+
+1. Each state is added as a node in the graph.
+2. Each entry in the four core requisite types (`require`, `watch`, `onchanges`, `onfail`) creates a directed edge from the dependency to the dependent state.
+3. The constructor validates that:
+    - No duplicate state names exist.
+    - All referenced dependencies actually exist in the state set.
+
+```
+NewDAG(states) -> validates -> DAG
+```
+
+If a state references a dependency that does not exist, construction fails with an error:
+
+```
+dag: state "cmd.run:start_nginx" requires unknown state "file.managed:missing_config"
+```
+
+### Kahn's Algorithm
+
+The `Resolve()` method uses Kahn's algorithm for topological sorting:
+
+1. **Calculate in-degrees** — count the number of dependencies for each state.
+2. **Seed the queue** — add all states with zero dependencies (in-degree 0) to the initial queue.
+3. **Process levels** — all states in the current queue form one parallel execution level. For each processed state, decrement the in-degree of its dependents. States that reach in-degree 0 are added to the next queue.
+4. **Repeat** until no states remain in the queue.
+5. **Cycle detection** — if the number of processed states does not match the total number of states, a cycle exists.
+
+```
+Resolve() -> []Level  (or error if cycle detected)
+```
+
+Within each level, the runner sorts states by explicit `order:` (lower first, unspecified = `0`), then alphabetically by name for deterministic execution order.
+
+### Execution Levels
+
+A `Level` is a set of states that can all execute in parallel because their dependencies are satisfied by previous levels.
+
+```
+Level 0:  [install_nginx, install_redis]         # No dependencies
+Level 1:  [deploy_nginx_config, deploy_redis_config]  # Depend on Level 0
+Level 2:  [start_nginx, start_redis]             # Depend on Level 1
+```
+
+---
+
+## Dependency Patterns
+
+### Linear Chain
+
+The simplest pattern — each state depends on the one before it:
+
+```yaml
+step_one:
+  pkg.installed:
+    - name: nginx
+
+step_two:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx.conf
+    - require:
+      - pkg.installed:step_one
+
+step_three:
+  cmd.run:
+    - command: systemctl restart nginx
+    - require:
+      - file.managed:step_two
+```
+
+Execution:
+
+```
+Level 0: [step_one]
+Level 1: [step_two]
+Level 2: [step_three]
+```
+
+### Fan-Out (Parallel After Single Dependency)
+
+Multiple states depend on a single parent:
+
+```yaml
+install_base:
+  pkg.installed:
+    - name: build-essential
+
+deploy_app_a:
+  file.managed:
+    - path: /opt/app-a/config.yml
+    - content: "app: a"
+    - require:
+      - pkg.installed:install_base
+
+deploy_app_b:
+  file.managed:
+    - path: /opt/app-b/config.yml
+    - content: "app: b"
+    - require:
+      - pkg.installed:install_base
+
+deploy_app_c:
+  file.managed:
+    - path: /opt/app-c/config.yml
+    - content: "app: c"
+    - require:
+      - pkg.installed:install_base
+```
+
+Execution:
+
+```
+Level 0: [install_base]
+Level 1: [deploy_app_a, deploy_app_b, deploy_app_c]  # All three run in parallel
+```
+
+### Fan-In (Single State With Multiple Dependencies)
+
+A state that waits for multiple parents:
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx
+
+deploy_main_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx.conf
+    - require:
+      - pkg.installed:install_nginx
+
+deploy_ssl_cert:
+  file.managed:
+    - path: /etc/ssl/certs/app.pem
+    - source: /srv/zester/files/certs/app.pem
+    - mode: "0600"
+    - require:
+      - pkg.installed:install_nginx
+
+start_nginx:
+  cmd.run:
+    - command: systemctl restart nginx
+    - require:
+      - file.managed:deploy_main_config
+      - file.managed:deploy_ssl_cert
+```
+
+Execution:
+
+```
+Level 0: [install_nginx]
+Level 1: [deploy_main_config, deploy_ssl_cert]  # Both run in parallel
+Level 2: [start_nginx]                          # Waits for both to complete
+```
+
+### Diamond Dependencies
+
+A combination of fan-out and fan-in:
+
+```yaml
+install_python:
+  pkg.installed:
+    - name: python3
+
+create_venv:
+  cmd.run:
+    - command: python3 -m venv /opt/app/venv
+    - creates: /opt/app/venv
+    - require:
+      - pkg.installed:install_python
+
+install_app_deps:
+  cmd.run:
+    - command: /opt/app/venv/bin/pip install -r /opt/app/requirements.txt
+    - creates: /opt/app/venv/lib/python3/site-packages/myapp
+    - require:
+      - cmd.run:create_venv
+
+deploy_config:
+  file.managed:
+    - path: /opt/app/config.yml
+    - content: "env: production"
+    - require:
+      - cmd.run:create_venv
+
+start_app:
+  cmd.run:
+    - command: /opt/app/venv/bin/python /opt/app/main.py &
+    - creates: /tmp/app.pid
+    - require:
+      - cmd.run:install_app_deps
+      - file.managed:deploy_config
+```
+
+Execution:
+
+```
+Level 0: [install_python]
+Level 1: [create_venv]
+Level 2: [deploy_config, install_app_deps]  # Parallel
+Level 3: [start_app]                        # Waits for both Level 2 states
+```
+
+### Independent Parallel Groups
+
+States with no dependencies between them run in the same level:
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx
+
+install_redis:
+  pkg.installed:
+    - name: redis
+
+install_postgres:
+  pkg.installed:
+    - name: postgresql
+
+setup_firewall:
+  cmd.run:
+    - command: ufw allow 80/tcp && ufw allow 443/tcp
+    - creates: /tmp/.firewall-configured
+```
+
+Execution:
+
+```
+Level 0: [install_nginx, install_postgres, install_redis, setup_firewall]
+# All four run in parallel (alphabetically sorted within the level)
+```
+
+---
+
+## Cycle Detection
+
+Circular dependencies are detected during DAG resolution and produce an error:
+
+```yaml
+# This will fail with a cycle error
+state_a:
+  cmd.run:
+    - command: echo a
+    - require:
+      - cmd.run:state_b
+
+state_b:
+  cmd.run:
+    - command: echo b
+    - require:
+      - cmd.run:state_a
+```
+
+Error:
+
+```
+dag: cycle detected, resolved 0 of 2 states
+```
+
+The cycle detector counts processed states. If the count is less than the total number of states, some states are involved in a cycle and could not be resolved.
+
+---
+
+## Validation Rules
+
+The DAG constructor enforces these rules:
+
+| Rule | Error |
+|---|---|
+| Duplicate state names | `dag: duplicate state "file.managed:/etc/hosts"` |
+| Unknown dependency | `dag: state "X" requires unknown state "Y"` |
+| Circular dependency | `dag: cycle detected, resolved N of M states` |
+
+---
+
+## Ordering Guarantees
+
+1. **Dependency ordering is absolute** — a state never executes before all of its dependencies have completed successfully.
+2. **States within a level are sorted by `order:`, then alphabetically** — explicit `order:` values sort first (lower wins), and name breaks ties. This produces deterministic ordering for states at the same priority level.
+3. **Parallel execution within a level** — all states in a level execute concurrently via goroutines, so `order:` controls launch order, not strict sequencing. Use requisites when one state must finish before another starts.
+4. **Level boundaries are synchronization points** — the runner waits for all states in a level to complete before starting the next level.

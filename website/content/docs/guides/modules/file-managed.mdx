@@ -1,0 +1,172 @@
+---
+title: "file.managed"
+description: "Ensures a file exists at the specified path with the desired content, permissions, and ownership."
+---
+
+**Source**: `pkg/state/modules/file.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Absolute path to the target file (Salt compatibility alias). Takes precedence over `path`. If omitted, the state ID is used as the path. |
+| `path` | `string` | No | State ID | Absolute path to the target file. Used as fallback if `name` is not set. |
+| `content` | `string` | No | `""` | Desired file content as an inline string. Mutually exclusive with `source`. |
+| `source` | `string` | No | `""` | Local file path to copy content from. Mutually exclusive with `content`. |
+| `template` | `bool` or `string` | No | `false` | When set to `true` or `"jinja"`, renders the `source` or `content` as a Jinja2 template before writing. Default is `false` (opt-in to avoid accidentally rendering files containing `{{ }}` syntax). |
+| `context` | `map` | No | `{}` | Extra variables available in the template as top-level names. These override any matching keys in `defaults`. Only used when `template` is enabled. |
+| `defaults` | `map` | No | `{}` | Fallback variables for the template. `context` takes precedence over `defaults`. Only used when `template` is enabled. |
+| `mode` | `string` | No | `"0644"` | File permission mode in octal notation (e.g., `"0644"`, `"0755"`). |
+| `user` | `string` | No | *(unchanged)* | File owner username. Requires the user to exist on the target system. |
+| `group` | `string` | No | *(unchanged)* | File group name. Requires the group to exist on the target system. |
+| `makedirs` | `bool` | No | `false` | If `true`, create parent directories that do not exist (with mode `0755`). |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+The check phase performs these comparisons in order:
+
+1. **File existence** — if the file does not exist, the state needs changes.
+2. **Content hash** — computes SHA-256 hashes of the current and desired content. If they differ, the state needs changes.
+3. **Permission mode** — compares the file's current permission bits against the desired mode. If they differ, the state needs changes.
+
+If all checks pass, the state reports no changes needed.
+
+---
+
+## Apply Behavior
+
+1. Reads and stores the current file content as a backup (for revert).
+2. Resolves desired content from either `content` or `source`.
+3. If `makedirs` is `true`, creates any missing parent directories with mode `0755`.
+4. Writes the desired content to the file with the specified mode.
+5. If `user` or `group` is set, changes file ownership via `chown`.
+
+---
+
+## Revert Behavior
+
+- If a backup exists (the file existed before Apply), restores the original content.
+- If no backup exists (the file was newly created by Apply), removes the file.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Create a file with inline content
+zester 'web-01' file.managed /etc/motd content="Welcome to Zester" mode=0644
+
+# Create a config file on all web peels
+zester 'web*' file.managed /tmp/config.txt content="key=value" mode=0600
+```
+
+### State File
+
+**Inline content with ownership:**
+
+```yaml
+/etc/motd:
+  file.managed:
+    - content: |
+        Welcome to {{ facts.hostname }}.
+        Managed by Zester.
+    - mode: "0644"
+    - user: root
+    - group: root
+```
+
+**Copy from source file:**
+
+```yaml
+deploy_nginx_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx/nginx.conf
+    - mode: "0644"
+    - user: root
+    - group: root
+    - makedirs: true
+```
+
+**Create directories on demand:**
+
+```yaml
+app_config:
+  file.managed:
+    - path: /opt/myapp/config/settings.yml
+    - content: |
+        port: 8080
+        log_level: info
+    - mode: "0600"
+    - user: myapp
+    - group: myapp
+    - makedirs: true
+```
+
+---
+
+## Template Rendering
+
+By default, `file.managed` writes content as-is without template processing. Setting `template: true` (or `template: jinja`) enables Jinja2 rendering of the `source` file or inline `content` before writing to disk. This is opt-in to avoid accidentally interpreting files that contain literal `{{ }}` syntax (such as Ansible templates, Go templates, or shell variable expansions).
+
+When template rendering is enabled, templates have access to:
+
+- `{{ facts.* }}` — all collected facts for the target peel.
+- `{{ settings.* }}` — all resolved settings for the target peel.
+- Variables from `context` and `defaults` as top-level names (e.g., `{{ worker_count }}`).
+
+Variable precedence: `context` overrides `defaults`. Both override nothing else — `facts` and `settings` are always available under their own namespaces.
+
+### Source file with template, context, and defaults
+
+```yaml
+deploy_nginx_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx/nginx.conf.jinja
+    - template: true
+    - defaults:
+        worker_count: 4
+        log_level: warn
+    - context:
+        worker_count: 8
+    - mode: "0644"
+    - user: root
+    - group: root
+```
+
+In `/srv/zester/files/nginx/nginx.conf.jinja`:
+
+```nginx
+# Managed by Zester on {{ facts.hostname }}
+worker_processes {{ worker_count }};
+
+error_log /var/log/nginx/error.log {{ log_level }};
+```
+
+This renders with `worker_count` as `8` (from `context`, overriding the default of `4`) and `log_level` as `warn` (from `defaults`).
+
+### Inline content with template
+
+```yaml
+/etc/motd:
+  file.managed:
+    - template: jinja
+    - context:
+        role: webserver
+    - content: |
+        Welcome to {{ facts.hostname }}.
+        Role: {{ role }}
+        OS: {{ facts.os.name }} {{ facts.os.version }}
+    - mode: "0644"
+```
+
+Note that `.zy` state files are themselves rendered as Jinja2 templates before YAML parsing. When using `template: jinja` on inline `content`, the content is rendered a second time during the file write. To avoid the state-file render from consuming your template expressions, you can use `{% raw %}...{% endraw %}` blocks or store the content in a separate source file instead.

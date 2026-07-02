@@ -1,0 +1,818 @@
+---
+title: "Enrollment Protocol Design"
+---
+
+This document specifies the manual-approval enrollment flow for Zester peels.
+It covers the state machine, HTTP API contracts, challenge/signing protocol,
+JWT lifecycle, storage model, and the full sequence from fresh peel to
+authenticated NATS operation.
+
+## Overview
+
+Today, peel credentials (`.creds` files) are pre-provisioned on disk via
+`auth.BootstrapPeelCreds()` before the peel binary starts. The enrollment
+protocol replaces that out-of-band step with an in-band flow where:
+
+1. A fresh peel generates its own nkey locally.
+2. The peel calls the master's HTTP enrollment API, proving nkey possession.
+3. An operator approves (or rejects) the enrollment request.
+4. The master signs a scoped user JWT and returns a `.creds` bundle.
+5. The peel writes the bundle to disk and connects to NATS normally.
+
+The master-side HTTP enrollment API runs on a dedicated TLS HTTP server
+(`pkg/enroll/server.go`), separate from any health server.
+
+---
+
+## 1. State Machine
+
+```
+              +─────────+
+    enroll    |         |  approve   +──────────+  peel downloads   +────────+
+  ──────────> | Pending |──────────> | Approved |──────────────────>| Issued |
+              |         |            +──────────+    creds           +────────+
+              +─────────+                                               |
+                  |                                                     |
+                  | reject    +──────────+                 peel connects |
+                  +─────────> | Rejected |                 to NATS      |
+                              +──────────+                              v
+                                                                  +────────+
+                                                                  | Active |
+                                                                  +────────+
+                                                                      |
+                                                         revoke       |
+                                                    +──────────+      |
+                                                    | Revoked  | <────+
+                                                    +──────────+
+```
+
+### States
+
+| State      | Description                                          | Stored in KV |
+|------------|------------------------------------------------------|:------------:|
+| `pending`  | Peel submitted enrollment; awaiting operator action.  | yes          |
+| `approved` | Operator accepted; creds not yet downloaded by peel.  | yes          |
+| `rejected` | Operator denied enrollment.                           | yes          |
+| `issued`   | Creds generated and downloaded by peel.               | yes          |
+| `active`   | Peel connected to NATS and publishing facts.          | yes          |
+| `revoked`  | Previously active peel whose JWT has been revoked.    | yes          |
+
+### Transitions
+
+| From       | To         | Trigger                           | Actor    |
+|------------|------------|-----------------------------------|----------|
+| (none)     | pending    | `POST /api/v1/enroll`             | peel     |
+| pending    | approved   | `zester enroll approve` (CLI via NATS KV) or `POST /api/v1/enrollments/{id}/approve` (REST) | operator |
+| pending    | rejected   | `zester enroll reject` (CLI via NATS KV)  | operator |
+| approved   | issued     | `GET /api/v1/enroll/{id}/creds`   | peel     |
+| approved   | revoked    | `zester enroll revoke` (CLI via NATS KV)  | operator |
+| issued     | active     | Master fact watcher detects peel facts in KV (automatic) | master |
+| issued     | revoked    | `zester enroll revoke` (CLI via NATS KV)  | operator |
+| active     | revoked    | `zester enroll revoke` (CLI via NATS KV)  | operator |
+
+### Invariants
+
+- A peel ID can have at most one enrollment record at a time.
+- Re-enrollment from `rejected` or `revoked` creates a new record (new enrollment ID).
+- Credential download is single-use: the enrollment transitions to `issued` via CAS
+  BEFORE the JWT is returned. A concurrent or repeated `/creds` request will fail the
+  CAS and receive a `409 Conflict`.
+- The `active` transition is automatic (triggered by the master's fact watcher when
+  the peel first publishes facts) and informational; it has no security implications
+  (the peel is already authenticated via NATS at that point).
+
+---
+
+## 2. HTTP API Contracts
+
+All enrollment endpoints are JSON over HTTP. The enrollment HTTP handler
+is registered on a dedicated `http.ServeMux` served by its own TLS HTTP
+server (separate from any health server) at the `/api/v1/enroll` prefix.
+
+### Common Types (Go Structs)
+
+```go
+package enroll
+
+import "time"
+
+// State represents a step in the enrollment lifecycle.
+type State string
+
+const (
+    StatePending  State = "pending"
+    StateApproved State = "approved"
+    StateRejected State = "rejected"
+    StateIssued   State = "issued"
+    StateActive   State = "active"
+    StateRevoked  State = "revoked"
+)
+
+// Record tracks a single peel enrollment request through its lifecycle.
+// Stored in NATS KV bucket "enrollments" keyed by enrollment ID.
+type Record struct {
+    ID             string            `json:"id"              msgpack:"id"`
+    PeelID         string            `json:"peel_id"         msgpack:"peel_id"`
+    PublicKey      string            `json:"public_key"      msgpack:"public_key"`
+    CurvePublicKey string            `json:"curve_public_key" msgpack:"curve_public_key"`
+    State          State             `json:"state"           msgpack:"state"`
+    Hostname       string            `json:"hostname,omitempty" msgpack:"hostname,omitempty"`
+    Metadata       map[string]string `json:"metadata,omitempty" msgpack:"metadata,omitempty"`
+    CreatedAt      time.Time         `json:"created_at"      msgpack:"created_at"`
+    UpdatedAt      time.Time         `json:"updated_at"      msgpack:"updated_at"`
+    DecidedBy      string            `json:"decided_by,omitempty" msgpack:"decided_by,omitempty"`
+    DecidedAt      *time.Time        `json:"decided_at,omitempty" msgpack:"decided_at,omitempty"`
+    RejectReason   string            `json:"reject_reason,omitempty" msgpack:"reject_reason,omitempty"`
+    IssuedAt       *time.Time        `json:"issued_at,omitempty"  msgpack:"issued_at,omitempty"`
+    ExpiresAt      *time.Time        `json:"expires_at,omitempty" msgpack:"expires_at,omitempty"`
+    RemoteAddr     string            `json:"remote_addr,omitempty" msgpack:"remote_addr,omitempty"`
+    Revision       uint64            `json:"-"               msgpack:"-"`
+}
+```
+
+### 2.1 `POST /api/v1/enroll` -- Submit Enrollment
+
+The peel generates a user nkey locally and signs a server-provided nonce to
+prove it holds the private key.
+
+**Request:**
+```go
+type EnrollRequest struct {
+    PeelID         string            `json:"peel_id"`
+    PublicKey      string            `json:"public_key"`
+    CurvePublicKey string            `json:"curve_public_key"`
+    Hostname       string            `json:"hostname"`
+    ChallengeID    string            `json:"challenge_id"`
+    Signature      []byte            `json:"signature"`
+    Metadata       map[string]string `json:"metadata,omitempty"`
+}
+```
+
+```
+POST /api/v1/enroll HTTP/1.1
+Content-Type: application/json
+
+{
+  "peel_id": "web-01",
+  "public_key": "UABC...XYZ",
+  "curve_public_key": "XABC...XYZ",
+  "hostname": "web-01.prod.internal",
+  "challenge_id": "chl-2JFKz8L...",
+  "signature": "base64-encoded-ed25519-signature",
+  "metadata": {
+    "os": "linux",
+    "arch": "amd64"
+  }
+}
+```
+
+**Challenge protocol (see Section 3 for full detail):**
+The peel first calls `GET /api/v1/enroll/nonce` to obtain a time-limited
+challenge nonce, then signs `challenge_bytes || curve_public_key` with its
+user nkey seed.
+
+**Response (201 Created):**
+```go
+type EnrollResponse struct {
+    ID      string `json:"id"`
+    PeelID  string `json:"peel_id"`
+    State   State  `json:"state"`
+    Message string `json:"message"`
+}
+```
+
+```json
+{
+  "id": "enr-2JFKABCD1234567890abcdef",
+  "peel_id": "web-01",
+  "state": "pending",
+  "message": "Enrollment submitted. Awaiting operator approval."
+}
+```
+
+**Error responses:**
+
+| Code | Condition                                      |
+|------|------------------------------------------------|
+| 400  | Missing required fields, malformed public key. |
+| 401  | Invalid signature (nonce proof failed).         |
+| 409  | Peel ID already has an active enrollment.       |
+| 429  | Rate limit exceeded.                           |
+
+### 2.2 `GET /api/v1/enroll/nonce` -- Obtain Challenge Nonce
+
+**Response (200 OK):**
+```go
+type NonceResponse struct {
+    ChallengeID string    `json:"challenge_id"`
+    Challenge   []byte    `json:"challenge"`
+    ExpiresAt   time.Time `json:"expires_at"`
+}
+```
+
+```json
+{
+  "challenge_id": "chl-2JFKz8Lm9kPqRsNv...",
+  "challenge": "base64-encoded-32-byte-nonce",
+  "expires_at": "2026-02-10T12:05:00Z"
+}
+```
+
+Challenge IDs are KSUID-based (time-ordered, globally unique) with a `chl-`
+prefix. Challenges are valid for 5 minutes. The master stores unexpired
+challenges in a short-TTL KV bucket (`enroll-challenges`, TTL 5m).
+
+### 2.3 `GET /api/v1/enroll/{id}/status` -- Poll Enrollment Status
+
+Called by the peel to check whether its enrollment has been approved.
+
+**Response (200 OK):**
+```go
+type StatusResponse struct {
+    ID      string `json:"id"`
+    PeelID  string `json:"peel_id"`
+    State   State  `json:"state"`
+    Message string `json:"message,omitempty"`
+}
+```
+
+```json
+{
+  "id": "enr-2JFKABCD1234567890abcdef",
+  "peel_id": "web-01",
+  "state": "approved",
+  "message": "Approved by admin@example.com"
+}
+```
+
+| Code | Condition          |
+|------|--------------------|
+| 404  | Unknown enrollment |
+
+### 2.4 Admin Operations (CLI via NATS KV, or REST API)
+
+Admin operations are available through two paths:
+
+- The `zester` CLI (list, show, approve, reject, revoke) connects directly
+  to NATS using the operator's credentials and reads/writes the
+  `enrollments` KV bucket.
+- The token-authenticated master REST API (`pkg/masterapi`) exposes
+  `GET /api/v1/enrollments` and `POST /api/v1/enrollments/{id}/approve`
+  on the same TLS listener as the enrollment endpoints. See
+  [Master REST API](/docs/reference/master-api). Reject and revoke remain CLI-only.
+
+The peel-facing enrollment endpoints are unauthenticated but strictly
+rate-limited; the REST admin routes require bearer tokens.
+
+```
+zester enroll list [--state <state>]        # List enrollments (default: pending)
+zester enroll show <enrollment-id>          # Show enrollment details
+zester enroll approve <enrollment-id>       # Approve a pending enrollment
+zester enroll reject <enrollment-id>        # Reject (--reason optional)
+zester enroll revoke <enrollment-id>        # Revoke (--reason optional)
+```
+
+All admin operations use CAS (Compare-and-Swap) updates for concurrency
+safety in multi-master deployments. The CLI automatically records the
+current OS username as the actor for audit purposes (`os/user.Current()`);
+the REST API records the authenticated token's username.
+
+### 2.5 `GET /api/v1/enroll/{id}/creds` -- Download Credentials
+
+Called by the peel after its enrollment reaches `approved` state.
+The peel must prove nkey ownership again (signature in Authorization header).
+
+**Request headers:**
+```
+Authorization: Nkey UABC...XYZ:<base64-signature-of-enrollment-id>
+```
+
+The peel signs the enrollment ID string with its nkey seed. The master
+verifies the signature matches the public key stored in the enrollment
+record.
+
+**Response (200 OK):**
+```go
+type CredsResponse struct {
+    PeelID    string `json:"peel_id"`
+    CredsData string `json:"creds_data"`
+    ExpiresAt string `json:"expires_at"`
+}
+```
+
+`creds_data` is the complete contents of a NATS `.creds` file (JWT +
+decorated nkey seed), base64-encoded. The peel decodes it and writes it
+to `/data/auth/<peel-id>.creds`.
+
+```json
+{
+  "peel_id": "web-01",
+  "creds_data": "base64-encoded-.creds-file-contents",
+  "expires_at": "2026-08-10T12:00:00Z"
+}
+```
+
+| Code | Condition                                 |
+|------|-------------------------------------------|
+| 401  | Invalid signature in Authorization header |
+| 403  | Enrollment not in `approved` state        |
+| 404  | Unknown enrollment                        |
+
+After successful download, the master transitions the enrollment to `issued`.
+
+---
+
+## 3. Challenge/Signing Protocol (Nkey Proof-of-Possession)
+
+The enrollment protocol requires the peel to prove it possesses the private
+key corresponding to the submitted public key. This prevents an attacker
+from enrolling with someone else's public key.
+
+### 3.1 Nonce Flow
+
+```
+Peel                                      Master
+ |                                          |
+ |  GET /api/v1/enroll/nonce                |
+ |  ?peel_id=...&public_key=...             |
+ |----------------------------------------->|
+ |                                          |  generate 32-byte random challenge
+ |                                          |  store in enroll-challenges KV (TTL 5m)
+ |  200 {challenge_id, challenge,           |
+ |       expires_at}                        |
+ |<-----------------------------------------|
+ |                                          |
+ |  sign(challenge || curvePublicKey, seed)  |
+ |                                          |
+ |  POST /api/v1/enroll {peel_id, pub,      |
+ |    challenge_id, signature,              |
+ |    curve_public_key, ...}                |
+ |----------------------------------------->|
+ |                                          |  consume challenge (single-use via CAS)
+ |                                          |  verify challenge binding (peel_id, key)
+ |                                          |  verify signature with public_key
+ |                                          |  create enrollment record
+ |  201 {id, state: "pending"}              |
+ |<-----------------------------------------|
+```
+
+### 3.2 Signed Message Format
+
+The peel signs the concatenation of the raw challenge bytes and the curve
+public key string bytes:
+
+```
+challenge_bytes || curve_public_key_bytes
+```
+
+The challenge is always 32 bytes, so the boundary is unambiguous. Including
+the curve key in the signed message cryptographically binds it to the
+enrollment proof, preventing an attacker from swapping the X25519 curve key
+without invalidating the signature. See `enrollSignatureMessage()` in
+`pkg/enroll/verify.go`.
+
+### 3.3 Verification (Master Side)
+
+```go
+func VerifyEnrollSignature(publicKey string, challenge, signature []byte, curvePublicKey string) error {
+    kp, err := nkeys.FromPublicKey(publicKey)
+    if err != nil {
+        return fmt.Errorf("enroll: invalid public key: %w", err)
+    }
+    msg := enrollSignatureMessage(challenge, curvePublicKey) // challenge || curvePublicKey
+    if err := kp.Verify(msg, signature); err != nil {
+        return fmt.Errorf("enroll: signature verification failed: %w", err)
+    }
+    return nil
+}
+```
+
+### 3.4 Credential Download Authentication
+
+When the peel downloads credentials via `GET /api/v1/enroll/{id}/creds`,
+it must prove nkey ownership again by signing the enrollment ID:
+
+```
+Authorization: Nkey <public_key>:<base64url(sign(enrollment_id, seed))>
+```
+
+This prevents a network-level attacker who observed the enrollment request
+from downloading the credentials.
+
+---
+
+## 4. JWT Lifecycle
+
+### 4.1 JWT Generation
+
+When a peel's enrollment is approved and it calls `/creds`, the master
+generates credentials using the existing auth package:
+
+```go
+// The peel provided its public key at enrollment time. The master uses
+// auth.PeelUserJWTOptions to create a properly scoped JWT.
+opts := auth.PeelUserJWTOptions(peelID, accountKP.PublicKey)
+opts.Expiry = 180 * 24 * time.Hour // 6 months
+
+// Create the JWT using only the peel's public key (not its seed — the
+// master never has the peel's private seed). The account signing key
+// signs the JWT on behalf of the account.
+userJWT, err := auth.CreateUserJWTForPublicKey(peelPublicKey, accountKP, opts)
+
+// The JWT is returned to the peel, which combines it with its locally-held
+// seed to form the .creds file. The master never handles peelUserSeed.
+```
+
+**Key distinction:** In the enrollment flow, the **peel** generates the nkey
+locally and submits only the **public key**. The master creates a JWT with
+the peel's public key as subject, signing it with the **account signing key**.
+The peel's private seed never leaves the peel.
+
+This requires a small addition to the auth package:
+
+```go
+// CreateUserJWTForPublicKey generates a user JWT for a known public key
+// without requiring the user's seed (only the account signing key).
+func CreateUserJWTForPublicKey(userPub string, signingKP *KeyBundle, opts UserJWTOptions) (string, error) {
+    if signingKP.Role != RoleAccount {
+        return "", fmt.Errorf("expected account signing key, got %s", signingKP.Role)
+    }
+
+    uc := jwt.NewUserClaims(userPub)
+    uc.Name = opts.Name
+    // ... apply all opts fields same as CreateUserJWT ...
+
+    token, err := uc.Encode(signingKP.KeyPair)
+    if err != nil {
+        return "", fmt.Errorf("encode user JWT: %w", err)
+    }
+    return token, nil
+}
+```
+
+### 4.2 Expiry
+
+| Parameter           | Value       | Rationale                                |
+|---------------------|-------------|------------------------------------------|
+| Default JWT expiry  | 6 months    | Balance between security and operational burden |
+| Minimum JWT expiry  | 1 hour      | For testing/short-lived environments      |
+| Maximum JWT expiry  | 2 years     | Hard upper bound                         |
+
+The `expires_at` time is stored in the enrollment record and returned to
+the peel so it can implement proactive renewal.
+
+### 4.3 Renewal
+
+Before a JWT expires, the peel re-enrolls by calling `POST /api/v1/enroll`
+again. If the peel is in `active` state with the same public key, the
+master can auto-approve the renewal (no operator intervention needed):
+
+- Peel sends enrollment request with same `peel_id` and `public_key`.
+- Master detects existing `active` enrollment with matching key.
+- Master transitions directly to `approved` state (auto-renewal).
+- Peel downloads new creds as normal.
+- Old JWT continues to work until its original expiry or until the peel
+  reconnects with the new creds.
+
+Auto-renewal only applies when `accept_policy` is not `manual` or when
+the specific peel ID is already in `active` state with matching keys.
+
+### 4.4 Revocation
+
+Revocation uses NATS account-level JWT revocation:
+
+1. Operator calls `zester enroll revoke <enrollment-id>` (CLI via NATS KV).
+2. Master adds the user's public key to the account JWT's revocation list.
+3. Master re-signs and publishes the updated account JWT.
+4. NATS server evicts the peel on its next connection check.
+5. Enrollment record transitions to `revoked`.
+
+The revocation list is persisted in the enrollment KV bucket so it survives
+master restarts.
+
+---
+
+## 5. Storage Model
+
+### 5.1 KV Buckets
+
+Two new KV buckets are added to `bus.DefaultBuckets()`:
+
+```go
+const (
+    BucketEnrollments      = "enrollments"
+    BucketEnrollChallenges = "enroll-challenges"
+)
+
+// Added to DefaultBuckets():
+{
+    Bucket:      BucketEnrollments,
+    Description: "Peel enrollment records and state",
+    History:     10,
+    Replicas:    1,
+},
+{
+    Bucket:      BucketEnrollChallenges,
+    Description: "Short-lived enrollment challenge nonces",
+    TTL:         5 * time.Minute,
+    History:     1,
+    Replicas:    1,
+    Storage:     jetstream.MemoryStorage,
+},
+```
+
+### 5.2 Key Schema
+
+**Enrollments bucket:**
+
+| Key pattern              | Value (MessagePack)   | Description                      |
+|--------------------------|-----------------------|----------------------------------|
+| `<enrollment-id>`        | `Record`              | Primary record by enrollment ID  |
+| `peel.<peel-id>`         | `<enrollment-id>`     | Index: peel ID -> enrollment ID  |
+
+The peel-to-enrollment index allows O(1) lookup when checking for duplicate
+enrollments during `POST /api/v1/enroll`.
+
+**enroll-challenges bucket:**
+
+| Key pattern      | Value (MessagePack)  | Description                                |
+|------------------|----------------------|--------------------------------------------|
+| `chl-<ksuid>`    | `ChallengeRecord`    | Challenge nonce bound to peel ID and public key (TTL 5m) |
+
+Challenges auto-expire via bucket TTL. They are also deleted immediately
+after use (single-use, enforced via CAS).
+
+### 5.3 CAS (Compare-And-Swap) for Concurrency
+
+All state transitions use KV `Update` with the current revision to prevent
+races between multiple masters in HA mode (same pattern as the job system):
+
+```go
+// Approve example:
+entry, _ := enrollKV.Get(ctx, enrollmentID)
+var record Record
+bus.Decode(entry.Value(), &record)
+
+if record.State != StatePending {
+    return fmt.Errorf("enroll: cannot approve: state is %s", record.State)
+}
+
+record.State = StateApproved
+record.DecidedBy = approvedBy
+now := time.Now()
+record.DecidedAt = &now
+record.UpdatedAt = now
+
+data, _ := bus.Encode(record)
+_, err := enrollKV.Update(ctx, enrollmentID, data, entry.Revision())
+// If err is a revision mismatch, another master won the race -- retry.
+```
+
+### 5.4 Enrollment ID Generation
+
+Enrollment IDs use KSUID (same as job IDs) for time-ordered uniqueness:
+
+```go
+enrollmentID := "enr-" + ksuid.New().String()
+```
+
+The `enr-` prefix distinguishes enrollment IDs from job IDs in logs.
+
+---
+
+## 6. Sequence Diagram
+
+### Full Enrollment Flow: Fresh Peel to Authenticated Operation
+
+```
+Peel (fresh)          Master HTTP API         Master (NATS)       Operator
+     |                      |                       |                 |
+     |  1. Generate nkey    |                       |                 |
+     |  locally (user seed) |                       |                 |
+     |                      |                       |                 |
+     |  2. GET /enroll/nonce|                       |                 |
+     |--------------------->|                       |                 |
+     |  {nonce, expires_at} |                       |                 |
+     |<---------------------|                       |                 |
+     |                      |                       |                 |
+     |  3. sign(challenge   |                       |                 |
+     |  || curvePublicKey)  |                       |                 |
+     |                      |                       |                 |
+     |  4. POST /enroll     |                       |                 |
+     |  {peel_id, pub_key,  |                       |                 |
+     |   challenge_id,      |                       |                 |
+     |   sig, ...}          |                       |                 |
+     |--------------------->|                       |                 |
+     |                      |  5. verify nonce      |                 |
+     |                      |     verify signature  |                 |
+     |                      |     store record      |                 |
+     |                      |  (state=pending)      |                 |
+     |  201 {id, "pending"} |                       |                 |
+     |<---------------------|                       |                 |
+     |                      |                       |                 |
+     |                      |                       |                 |
+     |                      |                       |                 |
+     |                      |                       |  6. zester      |
+     |                      |                       |  enroll list    |
+     |                      |                       |  (NATS KV) <----|
+     |                      |                       |  [{web-01,...}] |
+     |                      |                       |  ------------->|
+     |                      |                       |                 |
+     |                      |                       |  7. zester      |
+     |                      |                       |  enroll approve |
+     |                      |                       |  (NATS KV) <----| operator decision
+     |                      |  update record        |                 |
+     |                      |  (state=approved)     |                 |
+     |                      |                       |  approved ----->|
+     |                      |                       |                 |
+     |  8. GET /{id}/status |                       |                 |
+     |--------------------->|                       |                 |
+     |  {state: "approved"} |                       |                 |
+     |<---------------------|                       |                 |
+     |                      |                       |                 |
+     |  9. sign(enrollment_id)                      |                 |
+     |                      |                       |                 |
+     |  10. GET /{id}/creds |                       |                 |
+     |  Auth: Nkey <pub>:<sig>                      |                 |
+     |--------------------->|                       |                 |
+     |                      |  11. verify sig       |                 |
+     |                      |  12. CreateUserJWT    |                 |
+     |                      |      (scoped perms)   |                 |
+     |                      |  13. GenerateCredsFile|                 |
+     |                      |  update record        |                 |
+     |                      |  (state=issued)       |                 |
+     |  200 {creds_data}    |                       |                 |
+     |<---------------------|                       |                 |
+     |                      |                       |                 |
+     |  14. write .creds    |                       |                 |
+     |      to disk         |                       |                 |
+     |                      |                       |                 |
+     |  15. connect to NATS ----------------------->|                 |
+     |      (using .creds)  |                       |  auth OK        |
+     |  <--------------------------------------------|                |
+     |                      |                       |                 |
+     |  16. publish facts ----------------------->  |                 |
+     |                      |                       |  master detects |
+     |                      |                       |  peel in facts  |
+     |                      |  17. update record    |                 |
+     |                      |  (state=active)       |                 |
+     |                      |                       |                 |
+     v                      v                       v                 v
+  [Normal operation: facts, settings, jobs, state.apply]
+```
+
+### Peel Boot Sequence (Startup Logic)
+
+```
+zester-peel --id web-01 --nats-url tls://... --nats-ca /data/auth/nats-ca.crt --master-url https://...
+
+1. Check /data/auth/web-01.creds exists?
+   |
+   +-- YES --> Connect to NATS normally (existing path)
+   |
+   +-- NO  --> Start enrollment:
+       a. Check /data/auth/web-01.seed exists?
+          +-- YES --> Load existing nkey seed
+          +-- NO  --> Generate new user nkey, save seed to /data/auth/web-01.seed
+       b. Derive curve public key from seed
+       c. GET /api/v1/enroll/nonce from master
+       d. Sign challenge || curvePublicKey with nkey
+       e. POST /api/v1/enroll with peel_id, public_key, curve_key, challenge_id, signature
+       f. Wait for approval using SSE stream (GET /api/v1/enroll/{id}/stream) for real-time
+          notification. If SSE is unavailable (proxy, old server), fall back to polling
+          GET /api/v1/enroll/{id}/status with exponential backoff (10s base, 5m max).
+       g. When state == "approved":
+          - Sign enrollment ID with nkey
+          - GET /api/v1/enroll/{id}/creds with Nkey auth header
+          - Decode base64 creds_data
+          - Write to /data/auth/web-01.creds (0600)
+       h. Connect to NATS using new .creds file
+       i. Continue normal peel startup (facts, subscriptions, etc.)
+```
+
+---
+
+## 7. Package Structure
+
+The enrollment system is implemented in a new `pkg/enroll` package:
+
+```
+pkg/enroll/
+    enrollment.go   -- Record, State, state machine logic, EnrollmentSummary
+    store.go        -- KV-backed storage (CRUD, CAS transitions, peel index)
+    challenge.go    -- Challenge nonce generation, storage, and single-use consumption
+    handler.go      -- HTTP handlers for peel-facing endpoints, rate limiting middleware
+    server.go       -- TLS HTTP server lifecycle (start, shutdown, timeouts)
+    credential.go   -- JWT generation via account key, base64 transport encoding
+    client.go       -- Peel-side enrollment client (HTTP + polling + exponential backoff)
+    verify.go       -- Nkey signature verification, peel ID/key validation, signing helpers
+    persist.go      -- Credential/seed file management, key load-or-generate logic
+```
+
+### Dependencies
+
+```
+pkg/enroll
+    -> pkg/auth     (JWT generation, nkey validation, creds file generation)
+    -> pkg/bus      (KV bucket creation, MessagePack codec, bucket constants)
+    -> github.com/segmentio/ksuid  (enrollment ID and nonce generation)
+    -> github.com/nats-io/nkeys    (signature verification)
+```
+
+The `pkg/enroll` package does NOT depend on `pkg/job`, `pkg/facts`, or
+`pkg/settings`. It is a leaf dependency used by `cmd/zester-master` (HTTP
+side) and `cmd/zester-peel` (client side).
+
+---
+
+## 8. NATS Subject Additions
+
+New subject constants for enrollment events (optional, for observability):
+
+```go
+const (
+    // SubjectEnroll is for enrollment lifecycle events.
+    // Pattern: zester.enroll.<peel-id>.<event>
+    SubjectEnroll = SubjectPrefix + ".enroll"
+)
+
+func EnrollEventSubject(peelID, event string) string {
+    return fmt.Sprintf("%s.%s.%s", SubjectEnroll, peelID, event)
+}
+```
+
+Events: `submitted`, `approved`, `rejected`, `issued`, `revoked`. These
+are fire-and-forget informational messages, not part of the critical path.
+
+---
+
+## 9. Security Considerations
+
+| Concern                   | Mitigation                                          |
+|---------------------------|-----------------------------------------------------|
+| Replay attacks            | Single-use nonces with 5m TTL                       |
+| Cross-peel impersonation  | Challenge bound to (peel_id, public_key) at issuance; signature includes curve key |
+| Credential theft at rest  | `.creds` files written with 0600 permissions         |
+| Man-in-the-middle         | TLS 1.3 is mandatory; the server refuses to start without cert/key |
+| Brute-force enrollment    | Rate limiting on `/enroll` and `/nonce` endpoints    |
+| Master race conditions    | CAS-protected KV updates for all state transitions   |
+| JWT over-privilege        | Uses `auth.PeelUserJWTOptions()` for scoped perms   |
+| Unauthorized credential download | Second signature check on `/creds` endpoint  |
+| Stale approvals           | Pending enrollments persist until explicitly rejected or revoked (no TTL) |
+
+### Rate Limiting
+
+Per-IP token bucket rate limiting is implemented as HTTP middleware
+(`RateLimitMiddleware` / `RateLimitMiddlewareWithConfig` in
+`pkg/enroll/handler.go`) and applied per route class in
+`pkg/enroll/server.go`:
+
+- **`/api/v1/enroll` and subpaths** (nonce, enroll, status, stream, creds):
+  bucket capacity 10 tokens, refill 1 token per 10 seconds
+- **All other routes on the listener** (the token-authenticated REST API,
+  including `/api/v1/enrollments*`): bucket capacity 120 tokens, refill
+  20 tokens per second
+- **Stale entry eviction**: When a bucket map exceeds 5000 entries, entries
+  older than 5 minutes are evicted
+
+Returns HTTP 429 with `Retry-After` header when the rate limit is exceeded.
+
+---
+
+## 10. Configuration
+
+New master configuration options:
+
+The enrollment system is configured via command-line flags on `zester-master`:
+
+```
+--enroll-addr       Enrollment HTTP API listen address (default ":8443")
+--enroll-tls-cert   TLS certificate for enrollment API (default /data/auth/enroll.crt)
+--enroll-tls-key    TLS private key for enrollment API (default /data/auth/enroll.key)
+```
+
+The `CredentialIssuerConfig` controls JWT issuance:
+
+```go
+type CredentialIssuerConfig struct {
+    AccountKP *auth.KeyBundle   // Account key bundle for signing user JWTs
+    JWTExpiry time.Duration     // Default: 180 days (6 months)
+}
+```
+
+The enrollment and master REST APIs share the same TLS listener (`enroll.addr`,
+default `:8443`).
+
+---
+
+## 11. Migration Path
+
+For existing deployments with pre-provisioned `.creds` files:
+
+1. Existing peels continue to work unchanged -- they have `.creds` on disk
+   and skip the enrollment flow entirely.
+2. New peels that lack `.creds` automatically enter the enrollment flow.
+3. Operators can migrate existing peels to enrollment by deleting their
+   `.creds` file and restarting the peel (it will re-enroll).
+4. The `auth.KeyStore` (in-memory) is replaced by the KV-backed enrollment
+   store for persistence across master restarts.

@@ -1,0 +1,140 @@
+package masterd
+
+import (
+	"context"
+	"slices"
+	"testing"
+
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/ptorbus/zester/pkg/bus/bustest"
+	"github.com/ptorbus/zester/pkg/update"
+)
+
+func TestResolveRolloutTargets(t *testing.T) {
+	ctx := context.Background()
+	js := bustest.NewFakeJS()
+
+	statusKV, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bus.BucketUpdateStatus})
+	if err != nil {
+		t.Fatalf("create status bucket: %v", err)
+	}
+	factsKV, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bus.BucketFacts})
+	if err != nil {
+		t.Fatalf("create facts bucket: %v", err)
+	}
+
+	putStatus(t, ctx, statusKV, update.NodeStatus{ID: "web-01", Component: "peel"})
+	putStatus(t, ctx, statusKV, update.NodeStatus{ID: "web-02", Component: "peel"})
+	putStatus(t, ctx, statusKV, update.NodeStatus{ID: "db-01", Component: "peel"})
+	putStatus(t, ctx, statusKV, update.NodeStatus{ID: "master-01", Component: "master"})
+
+	putFacts(t, ctx, factsKV, "web-01", map[string]any{"os": "ubuntu", "env": "prod"})
+	putFacts(t, ctx, factsKV, "web-02", map[string]any{"os": "ubuntu", "env": "staging"})
+	putFacts(t, ctx, factsKV, "db-01", map[string]any{"os": "debian", "env": "prod"})
+	putFacts(t, ctx, factsKV, "master-01", map[string]any{"os": "ubuntu", "env": "prod"})
+
+	tests := []struct {
+		name       string
+		component  string
+		expr       string
+		wantExpr   string
+		wantNodeID []string
+	}{
+		{
+			name:       "empty expression defaults to wildcard",
+			component:  "peel",
+			expr:       "",
+			wantExpr:   "*",
+			wantNodeID: []string{"web-01", "web-02", "db-01"},
+		},
+		{
+			name:       "glob targeting",
+			component:  "peel",
+			expr:       "web*",
+			wantExpr:   "web*",
+			wantNodeID: []string{"web-01", "web-02"},
+		},
+		{
+			name:       "fact targeting",
+			component:  "peel",
+			expr:       "G@env:prod",
+			wantExpr:   "G@env:prod",
+			wantNodeID: []string{"web-01", "db-01"},
+		},
+		{
+			name:       "compound targeting",
+			component:  "peel",
+			expr:       "web* and G@env:staging",
+			wantExpr:   "web* and G@env:staging",
+			wantNodeID: []string{"web-02"},
+		},
+		{
+			name:       "component scope isolation",
+			component:  "master",
+			expr:       "G@env:prod",
+			wantExpr:   "G@env:prod",
+			wantNodeID: []string{"master-01"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, resolvedExpr, err := resolveRolloutTargets(ctx, js, statusKV, tt.component, tt.expr)
+			if err != nil {
+				t.Fatalf("resolveRolloutTargets: %v", err)
+			}
+			if resolvedExpr != tt.wantExpr {
+				t.Fatalf("resolved expr mismatch: got %q, want %q", resolvedExpr, tt.wantExpr)
+			}
+			assertSameSetMain(t, got, tt.wantNodeID)
+		})
+	}
+}
+
+func TestResolveRolloutTargets_NoMatches(t *testing.T) {
+	ctx := context.Background()
+	js := bustest.NewFakeJS()
+
+	statusKV, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bus.BucketUpdateStatus})
+	if err != nil {
+		t.Fatalf("create status bucket: %v", err)
+	}
+	factsKV, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bus.BucketFacts})
+	if err != nil {
+		t.Fatalf("create facts bucket: %v", err)
+	}
+
+	putStatus(t, ctx, statusKV, update.NodeStatus{ID: "web-01", Component: "peel"})
+	putFacts(t, ctx, factsKV, "web-01", map[string]any{"env": "prod"})
+
+	got, expr, err := resolveRolloutTargets(ctx, js, statusKV, "peel", "G@env:staging")
+	if err != nil {
+		t.Fatalf("resolveRolloutTargets: %v", err)
+	}
+	if expr != "G@env:staging" {
+		t.Fatalf("resolved expr mismatch: got %q", expr)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no matched nodes, got: %v", got)
+	}
+}
+
+func putStatus(t *testing.T, ctx context.Context, kv bus.KV, s update.NodeStatus) {
+	t.Helper()
+	if _, err := bus.KVPut(ctx, kv, update.StatusKey(s.Component, s.ID), &s); err != nil {
+		t.Fatalf("put status %s.%s: %v", s.Component, s.ID, err)
+	}
+}
+
+func assertSameSetMain(t *testing.T, got, want []string) {
+	t.Helper()
+	gotCopy := append([]string(nil), got...)
+	wantCopy := append([]string(nil), want...)
+	slices.Sort(gotCopy)
+	slices.Sort(wantCopy)
+	if !slices.Equal(gotCopy, wantCopy) {
+		t.Fatalf("set mismatch:\n  got:  %v\n  want: %v", gotCopy, wantCopy)
+	}
+}

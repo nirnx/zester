@@ -1,0 +1,165 @@
+---
+title: "Custom Facts"
+---
+
+Beyond the built-in collectors, you can define persistent custom facts by creating a YAML file on the peel. This is the Zester equivalent of Salt's `/etc/salt/grains`. Custom facts let you tag peels with application-level metadata -- such as roles, environments, datacenter, or cluster membership.
+
+## The Facts File
+
+Custom facts are defined in a single YAML file:
+
+```
+/etc/zester/facts
+```
+
+The file is read by the `Custom` collector every 30 seconds, so changes are picked up automatically without restarting the peel.
+
+## Root-Level Merge
+
+Custom facts are **merged at the top level** of the facts map, just like Salt's `/etc/salt/grains`. They are NOT nested under a namespace. This means:
+
+```yaml
+# /etc/zester/facts
+role: webserver
+datacenter: us-east-1
+```
+
+Produces top-level facts accessible as `facts.role` and `facts.datacenter` -- alongside `facts.os`, `facts.cpu`, etc:
+
+```json
+{
+  "os": { "name": "linux", ... },
+  "cpu": { "count": 8, ... },
+  "role": "webserver",
+  "datacenter": "us-east-1"
+}
+```
+
+### Nested Values
+
+You can use nested maps and lists:
+
+```yaml
+# /etc/zester/facts
+roles:
+  - webserver
+  - proxy
+cluster:
+  name: web-cluster-01
+  shard: 2
+```
+
+Access with dot notation: `facts.get cluster.name`, `facts.get roles`.
+
+<Callout type="warn" title="Avoid conflicting with built-in namespaces">
+Do not use keys that match built-in collector names (`os`, `cpu`, `memory`, `disk`, `network`) or built-in root-level keys (`default_ipv4`). Custom facts with these names will overwrite the built-in collector data.
+</Callout>
+
+## Creating Custom Facts
+
+### Edit the File Directly
+
+On a running peel (e.g., via `docker exec` or SSH):
+
+```bash
+cat > /etc/zester/facts <<EOF
+role: webserver
+environment: production
+datacenter: us-east-1
+EOF
+```
+
+The peel picks up the file within 30 seconds. No restart needed.
+
+### Use `facts.set` from the CLI
+
+Set individual facts remotely using `facts.set` (like Salt's `grains.set`):
+
+```bash
+# Set a simple value
+zester 'web-01' facts.set datacenter us-east-1
+
+# Set a numeric value (auto-detected)
+zester 'web-01' facts.set max_connections 100
+
+# Set a boolean
+zester 'web-01' facts.set is_primary true
+```
+
+`facts.set` writes to `/etc/zester/facts` on the peel and updates the in-memory facts immediately. The value is parsed as YAML, so numbers and booleans are preserved.
+
+<Callout type="success" title="Pre-provision with your deployment tool">
+For production, create `/etc/zester/facts` as part of your provisioning process (Packer, cloud-init, Ansible, etc.) before the peel starts. The file is read on startup and then refreshed every 30 seconds.
+</Callout>
+
+## Querying Custom Facts
+
+### Direct Execution (Salt-Style)
+
+```bash
+# All facts (custom facts appear at top level)
+zester 'web-01' facts.items
+
+# Get a custom fact directly (no namespace prefix needed)
+zester 'web-01' facts.get role
+
+# Get a nested custom fact
+zester 'web-01' facts.get cluster.name
+
+# With a default if missing
+zester 'web-01' facts.get tier default=standard
+
+# List all top-level fact keys (custom keys appear alongside os, cpu, etc.)
+zester 'web-01' facts.keys
+```
+
+### Management CLI
+
+The `zester kv fact get` command reads from NATS KV (no round-trip to the peel):
+
+```bash
+zester kv fact get web-01 role
+```
+
+### Templates
+
+Custom facts are available directly under `facts` in `.zy` templates:
+
+```yaml
+{% if facts.role == "webserver" %}
+nginx:
+  worker_processes: {{ facts.cpu.count }}
+{% endif %}
+
+datacenter: {{ facts.datacenter | default("unknown") }}
+```
+
+### Targeting
+
+Use custom facts in `top.zy` for settings targeting:
+
+```yaml
+base:
+  'role:webserver':
+    - webservers.nginx
+  'environment:production':
+    - monitoring.datadog
+```
+
+## File Absent Behavior
+
+If `/etc/zester/facts` does not exist, no custom facts are added. No error is logged. This means:
+
+- `facts.get role` returns empty
+- Templates using `facts.role` should use a default filter: `{{ facts.role | default("none") }}`
+- Targeting patterns against custom keys simply won't match
+
+## Best Practices
+
+1. **Use static values for identity** -- Role, environment, datacenter, and team assignments rarely change. Define them as static values in `/etc/zester/facts`.
+
+2. **Keep fact names flat** -- While nesting is supported, flat keys like `role` are easier to target than deeply nested paths like `cluster.metadata.region`.
+
+3. **Version your facts files** -- Store your `/etc/zester/facts` template in version control alongside your infrastructure code.
+
+4. **Don't shadow built-in namespaces** -- Avoid keys named `os`, `cpu`, `memory`, `disk`, `network`, or `default_ipv4` as they would overwrite the built-in collector data.

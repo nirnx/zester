@@ -1,0 +1,736 @@
+---
+title: "Zester SRE Runbook"
+description: "Operational guide for deploying, monitoring, and maintaining Zester infrastructure."
+---
+
+---
+
+## Table of Contents
+
+1. [Architecture Quick Reference](#architecture-quick-reference)
+2. [Deployment](#deployment)
+3. [Observability](#observability)
+4. [Reliability & Scaling](#reliability-scaling)
+5. [Security Operations](#security-operations)
+6. [Performance Baselines](#performance-baselines)
+7. [Incident Response](#incident-response)
+8. [Failure Mode Analysis](#failure-mode-analysis)
+9. [Runbooks](#runbooks)
+
+---
+
+## Architecture Quick Reference
+
+Zester consists of three binaries:
+
+| Binary           | Role                        | Runs On                    |
+|------------------|-----------------------------|----------------------------|
+| `zester-master`  | Control plane (NATS client) | Dedicated server(s)       |
+| `nats-server`    | NATS messaging + JetStream   | Dedicated server(s)       |
+| `zester-peel`    | Managed node agent          | Every managed host         |
+| `zester`         | CLI tool                    | Operator workstations      |
+
+Communication flows through NATS JetStream with TLS 1.3 + nkey (Ed25519) mutual authentication. All payloads are MessagePack-encoded. Settings secrets are additionally NaCl-box encrypted per-peel.
+
+### Critical Data Stores (all inside NATS JetStream)
+
+| KV Bucket              | Purpose                          | TTL        |
+|------------------------|----------------------------------|------------|
+| `facts`                | Peel system facts                | None       |
+| `settings-files`       | Sanitized .zy templates          | None       |
+| `secrets`              | Per-peel encrypted values        | None       |
+| `basket`               | Peel-to-peel shared data         | None       |
+| `jobs`                 | Job specs and status             | 7d         |
+| `job-returns`          | Per-peel job results             | 7d         |
+| `master-heartbeat`     | Master instance heartbeats       | 15s        |
+| `enrollments`          | Peel enrollment records          | None       |
+| `enroll-challenges`    | Enrollment challenge nonces      | 5m         |
+| `state-files`          | State file distribution          | None       |
+| `update-manifests`     | Self-update binary manifests     | None       |
+| `update-status`        | Watchdog update status           | 60s        |
+| `update-rollouts`      | Fleet rollout state              | None       |
+
+| Stream          | Purpose                         |
+|-----------------|----------------------------------|
+| `job-events`    | Full job lifecycle audit log     |
+
+---
+
+## Deployment
+
+### 1. Binary Distribution
+
+Zester compiles to single static Go binaries with zero runtime dependencies. Recommended distribution methods:
+
+**Option A: OS packages (recommended for bare metal/VMs)**
+```
+/usr/bin/zester-master          # or zester-peel
+/etc/zester/master.yaml         # main config
+/etc/zester/peel.yaml
+/etc/zester/facts/            # custom fact definitions
+/etc/zester/beacons.d/          # beacon configs
+/srv/zester/states/             # state tree (master only)
+/srv/zester/settings/           # settings tree (master only)
+/var/lib/zester/nats/           # JetStream storage (master only)
+/var/log/zester/                # log directory
+```
+
+**Option B: Container images**
+```dockerfile
+FROM golang:1.25-alpine AS builder
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-master ./cmd/zester-master
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-peel ./cmd/zester-peel
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates curl bash
+COPY --from=builder /bin/zester-master /usr/local/bin/zester-master
+COPY --from=builder /bin/zester-peel /usr/local/bin/zester-peel
+ENTRYPOINT []
+```
+
+Containers should mount volumes for `/data/auth` (credentials), `/data/states` (state files), and `/data/settings` (settings files).
+
+**Option C: Configuration management bootstrap**
+
+Use an existing CM tool (Ansible, cloud-init) to distribute the binary and config, then Zester manages everything else.
+
+### 2. systemd Units
+
+**Master unit (`/etc/systemd/system/zester-master.service`):**
+```ini
+[Unit]
+Description=Zester Master
+Documentation=https://github.com/ptorbus/zester
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/zester-master --nats-url nats://nats:4222
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+LimitNPROC=4096
+TimeoutStartSec=30
+TimeoutStopSec=30
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log/zester
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Key points:
+- The master handles SIGINT/SIGTERM for graceful shutdown (drains NATS connection)
+- `TimeoutStopSec=30` allows the drain timeout to complete
+
+**Peel unit (`/etc/systemd/system/zester-peel.service`):**
+```ini
+[Unit]
+Description=Zester Peel Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/zester-peel --id %H --nats-url nats://nats:4222
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/zester /var/log/zester /etc/zester
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 3. Configuration
+
+**Master config (`/etc/zester/master.yaml`):**
+```yaml
+nats_url: nats://nats.example.com:4222
+states_dir: /srv/zester/states
+settings_dir: /srv/zester/settings
+jetstream_replicas: 3
+
+enroll:
+  addr: ":8443"
+  tls_cert: /data/auth/enroll.crt
+  tls_key: /data/auth/enroll.key
+```
+
+**Peel config (`/etc/zester/peel.yaml`):**
+```yaml
+id: web-01
+nats_url: nats://nats.example.com:4222
+master_url: https://master:8443
+enroll_ca: /data/auth/enroll-ca.crt
+states_cache: /data/states-cache
+```
+
+### 4. Upgrade Procedures
+
+**Master rolling upgrade (multi-master cluster):**
+
+1. Verify cluster health: `nats server check cluster --expect 3`
+2. Stop the master gracefully: `systemctl stop zester-master`
+3. Replace binary
+4. Start the master: `systemctl start zester-master`
+5. Verify it publishes heartbeats and joins the queue group
+6. Repeat for next master node
+7. Never upgrade more than one master at a time
+
+**Peel upgrade (can be parallelized):**
+
+1. Peels are stateless -- upgrade is replace-and-restart
+2. Use Zester itself for self-update: `zester '*' cmd.run 'zester-peel upgrade'`
+3. Or use targeting: `zester 'G@os:ubuntu' cmd.run 'apt upgrade zester-peel'`
+4. Peels reconnect automatically with exponential backoff
+
+**Single-master upgrade (with brief downtime):**
+
+1. Stop the master gracefully: `systemctl stop zester-master`
+2. Replace binary
+3. Start the master: `systemctl start zester-master`
+4. Peels remain connected to NATS and reconnect automatically
+5. Expected downtime: under 30 seconds
+
+---
+
+## Observability
+
+### 1. Prometheus Metrics
+
+Prometheus metrics and health endpoints are planned but not yet implemented. The metric names below describe the target design. Currently, use NATS server monitoring (`http://<nats-host>:8222/`) for observability.
+
+**Master metrics:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `zester_connected_peels` | Gauge | Currently connected peels |
+| `zester_jobs_total` | Counter | Total jobs dispatched (by status) |
+| `zester_job_duration_seconds` | Histogram | Job execution duration |
+| `zester_job_active` | Gauge | Currently running jobs |
+| `zester_facts_sync_total` | Counter | Fact sync operations |
+| `zester_facts_sync_errors_total` | Counter | Fact sync failures |
+| `zester_settings_render_duration_seconds` | Histogram | Settings template render time |
+| `zester_state_apply_total` | Counter | State applications (by state, result) |
+| `zester_state_apply_duration_seconds` | Histogram | State apply duration |
+| `zester_targeting_resolution_duration_seconds` | Histogram | Target resolution latency |
+| `zester_nats_msgs_published_total` | Counter | NATS messages published |
+| `zester_nats_msgs_received_total` | Counter | NATS messages received |
+| `zester_nats_bytes_published_total` | Counter | NATS bytes published |
+| `zester_nats_bytes_received_total` | Counter | NATS bytes received |
+| `zester_nats_reconnects_total` | Counter | NATS reconnection events |
+
+**Peel metrics:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `zester_peel_connected` | Gauge | 1 if connected to master, 0 otherwise |
+| `zester_peel_facts_collect_duration_seconds` | Histogram | Fact collection latency |
+| `zester_peel_state_apply_total` | Counter | States applied locally |
+| `zester_peel_state_apply_duration_seconds` | Histogram | State apply duration |
+| `zester_peel_beacon_events_total` | Counter | Beacon events emitted |
+| `zester_peel_uptime_seconds` | Gauge | Peel process uptime |
+
+### 2. Health Check Endpoints
+
+Health check endpoints are planned but not yet implemented. The design below describes the target behavior.
+
+**Master health checks:**
+- NATS server accepting connections
+- JetStream operational and meta leader elected
+- KV buckets accessible (facts, settings, jobs)
+- State and settings directories readable
+- Minimum peel count threshold (configurable)
+
+**Peel health checks:**
+- NATS connection active
+- Fact collection succeeding
+- Last heartbeat within threshold
+- Local disk space sufficient
+
+**Response format:**
+```json
+{
+  "status": "ok",
+  "checks": {
+    "nats": {"status": "ok", "latency_ms": 1},
+    "jetstream": {"status": "ok", "meta_leader": "master-01"},
+    "kv_facts": {"status": "ok"},
+    "kv_settings": {"status": "ok"},
+    "state_dir": {"status": "ok"}
+  },
+  "version": "0.1.0",
+  "uptime": "24h15m30s"
+}
+```
+
+HTTP status codes: 200 = healthy, 503 = degraded/unhealthy.
+
+### 3. Structured Logging
+
+Use `log/slog` (Go stdlib, available since Go 1.21) for structured logging.
+
+**Log format (JSON):**
+```json
+{
+  "time": "2026-02-10T14:30:00.123Z",
+  "level": "INFO",
+  "msg": "state applied",
+  "peel_id": "web-01",
+  "jid": "2oHfKnCPMQnLEYQeBQsNtUiJp3r",
+  "state": "pkg.installed",
+  "changed": true,
+  "duration_ms": 1234
+}
+```
+
+**Log levels:**
+- `ERROR`: Actionable failures requiring investigation
+- `WARN`: Degraded conditions (retries, timeouts, threshold breaches)
+- `INFO`: Normal operations (job dispatch, peel connect/disconnect, state.apply)
+- `DEBUG`: Verbose diagnostic data (NATS messages, template rendering, targeting)
+
+**Recommended log aggregation:** Ship JSON logs to ELK/Loki/Splunk via journald or file-based collectors.
+
+### 4. Essential Dashboards
+
+**Dashboard 1: Fleet Overview**
+- Connected peels count (gauge, with trend)
+- Peel connection/disconnection rate
+- Peels by OS, region, role (from facts)
+- Unhealthy peels (not reporting facts within threshold)
+
+**Dashboard 2: Job Performance**
+- Jobs/minute (rate)
+- Job success/failure ratio
+- p50/p90/p99 job duration
+- Active jobs count
+- Timed-out peels per job
+
+**Dashboard 3: NATS Infrastructure**
+- Messages/sec (published + received)
+- Bytes/sec throughput
+- JetStream storage utilization
+- Stream/consumer counts
+- Connection counts
+- Slow consumers
+- Reconnection events
+
+**Dashboard 4: State Apply**
+- States applied/minute
+- Changed vs unchanged ratio
+- State failures by module
+- p99 state.apply duration
+- Drift detection (states that keep changing)
+
+---
+
+## Reliability & Scaling
+
+### 1. NATS Cluster Sizing
+
+| Scale | NATS Topology | Master Resources | JetStream Storage |
+|-------|---------------|-----------------|-------------------|
+| < 1,000 peels | Single NATS server | 2 CPU, 4 GB RAM | 50 GB SSD |
+| 1,000 - 10,000 peels | 3-node NATS cluster | 4 CPU, 8 GB RAM each | 200 GB SSD each |
+| 10,000 - 50,000 peels | 5-node NATS cluster | 8 CPU, 16 GB RAM each | 500 GB SSD each |
+| 50,000 - 100,000 peels | 5-node cluster + leaf nodes | 16 CPU, 32 GB RAM each | 1 TB NVMe each |
+| 100,000+ peels | NATS supercluster (multi-region) | 16+ CPU, 64 GB RAM each | 2 TB NVMe each |
+
+**Critical NATS settings for scale:**
+
+```yaml
+# For 10k+ peels
+nats:
+  max_connections: 20000
+  max_payload: "8MB"
+  write_deadline: "10s"
+  jetstream:
+    max_file_store: "500GB"
+    max_mem_store: "4GB"
+    limits:
+      max_ack_pending: 50000
+      duplicate_window: "600s"
+```
+
+**Peel resource requirements:**
+- CPU: Negligible at idle, spikes during state.apply
+- RAM: 20-50 MB baseline
+- Disk: Minimal (no local state persistence)
+- Network: ~1 KB/min idle (heartbeat + fact sync), bursts during state.apply
+
+### 2. Backup & Restore
+
+**What to back up:**
+
+| Data | Location | Method | Frequency |
+|------|----------|--------|-----------|
+| JetStream data | `/var/lib/zester/nats/jetstream/` | Filesystem snapshot | Hourly |
+| State files | `/srv/zester/states/` | Git repository (source of truth) | On change |
+| Settings files | `/srv/zester/settings/` | Git repository (source of truth) | On change |
+| Master config | `/etc/zester/master.yaml` | Git/CM tool | On change |
+| TLS certificates | `/etc/zester/tls/` | Vault / secrets manager | On rotation |
+| Operator/Account nkeys | Secure offline storage | Hardware security module / Vault | On creation |
+
+**JetStream backup procedure:**
+```bash
+# NATS CLI stream backup (KV buckets are streams with KV_ prefix)
+nats stream backup KV_facts /backup/nats/facts-$(date +%Y%m%d)
+nats stream backup KV_settings-files /backup/nats/settings-files-$(date +%Y%m%d)
+nats stream backup KV_secrets /backup/nats/secrets-$(date +%Y%m%d)
+nats stream backup KV_jobs /backup/nats/jobs-$(date +%Y%m%d)
+nats stream backup KV_job-returns /backup/nats/job-returns-$(date +%Y%m%d)
+nats stream backup KV_enrollments /backup/nats/enrollments-$(date +%Y%m%d)
+nats stream backup job-events /backup/nats/job-events-$(date +%Y%m%d)
+
+# Or filesystem-level (stop writes first or use LVM snapshot)
+rsync -a /var/lib/zester/nats/jetstream/ /backup/nats/jetstream/
+```
+
+**Restore procedure:**
+```bash
+# Stop master
+systemctl stop zester-master
+
+# Restore JetStream data
+nats stream restore KV_facts /backup/nats/facts-20260210
+
+# Or filesystem restore
+rsync -a /backup/nats/jetstream/ /var/lib/zester/nats/jetstream/
+
+# Start master
+systemctl start zester-master
+```
+
+### 3. Graceful Degradation
+
+**Peel behavior when master is unreachable:**
+- Continues running with last known state
+- Buffers beacon events locally (bounded queue)
+- Retries connection with exponential backoff + jitter
+- Fact collection continues locally
+- State applies from local cache if available
+- No new jobs accepted until reconnection
+
+**Master behavior in split-brain (NATS cluster partition):**
+- RAFT consensus prevents split-brain writes
+- Minority partition becomes read-only
+- Peels connected to minority partition can still read cached facts/settings
+- Jobs require majority partition for dispatch
+- Automatic healing when partition resolves
+
+---
+
+## Security Operations
+
+### 1. nkey Rotation Without Downtime
+
+nkeys use a three-tier JWT trust model. Rotation strategy depends on the tier:
+
+**Peel user nkey rotation:**
+1. Generate new nkey seed on the peel: `nsc generate nkey --user`
+2. Create new user JWT signed by the account key
+3. Deploy new `.creds` file to the peel
+4. Restart peel: `systemctl restart zester-peel`
+5. Peel reconnects with new credentials
+6. Revoke old user JWT: `nsc revocations add-user --account prod --user-pubkey <old-key>`
+
+**Account key rotation (more complex):**
+1. Generate new account nkey
+2. Create new account JWT signed by operator key
+3. Re-sign all user JWTs under this account with new account key
+4. Deploy new account JWT to NATS resolver
+5. Deploy new `.creds` files to all peels in the account
+6. Rolling reload of peels
+7. Revoke old account key
+
+**Operator key rotation (rare, high ceremony):**
+- Requires re-signing all account JWTs
+- Should involve HSM / offline ceremony
+- Plan for extended maintenance window
+
+### 2. TLS Certificate Rotation
+
+The NATS server supports TLS certificate reload via SIGHUP without dropping connections. Since the Zester master is a NATS client (not a server), TLS certificate changes on the NATS server are handled by the NATS server process.
+
+```bash
+# 1. Deploy new certificates to the NATS server
+cp new-server.crt /etc/nats/tls/server.crt
+cp new-server.key /etc/nats/tls/server.key
+
+# 2. Reload the NATS server (no restart needed)
+nats-server --signal reload
+
+# 3. Verify
+openssl s_client -connect master:4222 -servername master.example.com </dev/null 2>/dev/null | openssl x509 -noout -dates
+```
+
+Automate with cert-manager, ACME, or Vault PKI. Recommended rotation: every 90 days for server certs, annually for CA certs.
+
+### 3. Audit Logging
+
+All security-relevant events should be logged to a dedicated audit stream:
+
+| Event | Subject | Data |
+|-------|---------|------|
+| Peel connect | `zester.audit.peel.connect` | peel_id, source_ip, nkey_pub, account |
+| Peel disconnect | `zester.audit.peel.disconnect` | peel_id, reason, duration |
+| Job dispatch | `zester.audit.job.dispatch` | jid, user, target, function |
+| State apply | `zester.audit.state.apply` | peel_id, jid, states, result |
+| Auth failure | `zester.audit.auth.failure` | source_ip, reason, nkey_pub |
+| Config change | `zester.audit.config.change` | user, what_changed |
+
+Store audit events in a dedicated JetStream stream with long retention (90d+). Forward to SIEM for compliance.
+
+### 4. Peel Revocation
+
+To immediately revoke a compromised peel:
+
+```bash
+# 1. Revoke the user JWT
+nsc revocations add-user --account prod --user-pubkey <compromised-peel-nkey>
+
+# 2. Push updated account JWT to NATS resolver
+nsc push --account prod
+
+# 3. Force disconnect (if still connected)
+# NATS will disconnect the peel on next auth check
+
+# 4. Investigate
+# Check audit log for the compromised peel's activity
+nats stream get job-events --subject "zester.audit.*.*.compromised-peel-id"
+```
+
+The revocation is effective within seconds -- NATS checks JWT revocation lists on every auth cycle.
+
+---
+
+## Performance Baselines
+
+### 1. Resource Requirements
+
+**NATS server at different scales:**
+
+| Peels | CPU (steady) | CPU (burst) | RAM | Disk IOPS | Network |
+|-------|-------------|-------------|-----|-----------|---------|
+| 100 | 0.1 core | 1 core | 512 MB | 50 | 1 Mbps |
+| 1,000 | 0.5 core | 4 cores | 2 GB | 500 | 10 Mbps |
+| 10,000 | 2 cores | 8 cores | 8 GB | 5,000 | 100 Mbps |
+| 50,000 | 4 cores | 16 cores | 32 GB | 20,000 | 500 Mbps |
+| 100,000 | 8 cores | 32 cores | 64 GB | 50,000 | 1 Gbps |
+
+CPU burst occurs during mass state.apply or fact sync. Steady-state is heartbeats + fact updates.
+
+### 2. Network Bandwidth Estimates
+
+| Operation | Per-Peel | 1k Peels | 10k Peels | 100k Peels |
+|-----------|----------|----------|-----------|------------|
+| Heartbeat (idle) | ~100 B/s | ~100 KB/s | ~1 MB/s | ~10 MB/s |
+| Fact sync (5m interval) | ~2 KB/event | ~33 KB/s | ~330 KB/s | ~3.3 MB/s |
+| State apply (typical) | ~10 KB/job | burst | burst | burst |
+| Settings push | ~5 KB/peel | ~5 MB total | ~50 MB total | ~500 MB total |
+
+### 3. What to Benchmark Before v1
+
+| Benchmark | Target | Method |
+|-----------|--------|--------|
+| Command fan-out latency | < 500ms to 10k peels | Send `cmd.run echo` to all, measure last ack |
+| Fact sync throughput | All facts synced < 30s for 10k peels | Restart master, measure time to full fact index |
+| Job return aggregation | p99 < 100ms for 1k returns | Dispatch job to 1k peels, measure aggregation |
+| Concurrent state applies | 100 parallel applies per master | Run state.apply with increasing concurrency |
+| NATS reconnect storm | All peels reconnected < 60s | Kill master, restart, measure reconnect time |
+| Settings render | < 10ms per peel for 1k settings | Render settings for all peels, measure p99 |
+| Target resolution | < 10ms for compound target on 100k facts | Benchmark radix tree lookup + fact filtering |
+| JetStream KV read | < 1ms per key | Benchmark KV get at different store sizes |
+
+---
+
+## Incident Response
+
+### Severity Classification
+
+| Severity | Criteria | Response Time | Example |
+|----------|----------|---------------|---------|
+| SEV-1 | All peels disconnected, no commands possible | < 15 min | NATS cluster total failure |
+| SEV-2 | > 10% peels affected, jobs failing | < 1 hour | JetStream storage full, master OOM |
+| SEV-3 | Degraded performance, some jobs slow | < 4 hours | Slow consumer, network congestion |
+| SEV-4 | Minor issues, no user impact | Next business day | Dashboard gap, log parsing error |
+
+### On-Call Checklist
+
+When paged:
+
+1. Check NATS server status: `curl http://nats-host:8222/varz`
+2. Check connected peels: `curl http://nats-host:8222/connz?state=open` (look at `num_connections`)
+3. Check JetStream: `curl http://nats-host:8222/jsz` (check storage usage, stream health)
+4. Check recent jobs: `zester job active` and `zester job list | grep failed`
+5. Check logs: `journalctl -u zester-master --since '10 minutes ago'`
+6. Check cluster routes: `curl http://nats-host:8222/routez`
+
+---
+
+## Failure Mode Analysis
+
+### 1. Master Down (Single Master)
+
+**Impact:** No new jobs, no settings updates, no new peel registrations. Existing peels continue operating with cached state.
+
+**Detection:** Peel logs show disconnect errors. NATS `connz` endpoint shows reduced connections.
+
+**Recovery:**
+1. Restart master: `systemctl restart zester-master`
+2. JetStream replays pending messages
+3. Peels reconnect with exponential backoff
+4. Verify fact index rebuilds from KV
+5. Check for stuck jobs: `zester job active`
+
+**Prevention:** Deploy 3-node NATS cluster for HA.
+
+### 2. NATS Cluster Partition
+
+**Impact:** Minority partition loses write capability. Peels on minority side cannot execute new jobs.
+
+**Detection:** `routez` endpoint shows missing routes. RAFT leader election activity in logs.
+
+**Recovery:**
+1. Investigate network connectivity between NATS nodes
+2. Fix network issue -- NATS auto-heals
+3. Verify all streams have correct replica count: `nats stream check`
+4. Check for data inconsistencies in KV buckets
+
+**Prevention:** Deploy NATS nodes across failure domains (different racks, AZs).
+
+### 3. Peel Disconnect (Individual)
+
+**Impact:** Single host unmanageable. No new state applies to that peel.
+
+**Detection:** Peel connection event in audit log. Fact staleness (last update timestamp).
+
+**Recovery:**
+1. Check peel host: `ssh peel-host systemctl status zester-peel`
+2. Check peel logs: `journalctl -u zester-peel`
+3. Verify network to master: `nc -zv master 4222`
+4. Verify credentials: check `.creds` file exists and is valid
+5. Restart peel: `systemctl restart zester-peel`
+
+### 4. JetStream Storage Full
+
+**Impact:** No new messages persisted. Jobs fail to dispatch. Facts stop syncing.
+
+**Detection:** `jsz` endpoint shows storage at limit. Prometheus alert on `jetstream_storage_used / jetstream_storage_limit > 0.9`.
+
+**Recovery:**
+1. Increase `max_file_store` in NATS server config and reload (`nats-server --signal reload`)
+2. Or purge expired data: `nats stream purge KV_job-returns --keep 1000`
+3. Or add disk space and reload
+4. Check retention policies are correct
+
+**Prevention:** Monitor storage utilization. Alert at 80%. Set appropriate TTLs on KV buckets.
+
+### 5. Thundering Herd on Master Restart
+
+**Impact:** All peels attempt simultaneous reconnection, potentially overwhelming the master.
+
+**Detection:** CPU/connection spike on master after restart. Slow consumer warnings in logs.
+
+**Recovery:** NATS handles this natively with connection rate limiting and client-side backoff. If issues persist:
+1. Configure `max_connections` to cap concurrent reconnects
+2. Ensure peels use `reconnect_wait` with jitter
+3. Use graceful shutdown (`systemctl stop`) for planned restarts
+
+---
+
+## Runbooks
+
+### Runbook: Add a New Peel
+
+```bash
+# On the new host
+curl -O https://releases.example.com/zester-peel
+chmod +x zester-peel
+mv zester-peel /usr/bin/
+
+# Install and start
+cp zester-peel.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now zester-peel
+
+# Verify on master
+zester peel list | grep <new-peel-id>
+```
+
+### Runbook: Remove a Peel Safely
+
+```bash
+# 1. Wait for active jobs to complete on that peel
+zester job active | grep <peel-id>
+
+# 2. Stop the peel
+ssh <peel-host> systemctl stop zester-peel
+
+# 3. Optionally remove from fleet
+nsc revocations add-user --account prod --user-pubkey <peel-nkey>
+```
+
+### Runbook: Emergency Master Failover
+
+```bash
+# In a 3-node cluster, one node down is tolerated
+
+# 1. Check RAFT status
+nats server report jetstream --user admin
+
+# 2. If leader is down, new leader auto-elected (< 2s)
+
+# 3. Verify new leader
+curl http://surviving-master:8222/jsz | jq '.meta.leader'
+
+# 4. Replace failed node
+# - Provision new server
+# - Join cluster with same cluster config
+# - NATS auto-syncs JetStream data
+```
+
+### Runbook: Investigate Slow State Applies
+
+```bash
+# 1. Check specific job
+zester job show <jid>
+
+# 2. Look for slow peels
+zester job show <jid>
+
+# 4. Check peel resources
+ssh <slow-peel> top -bn1 | head 20
+ssh <slow-peel> df -h
+ssh <slow-peel> journalctl -u zester-peel --since '5 minutes ago'
+```
+
+---
+
+## Pre-v1 Must-Have Checklist
+
+- [ ] Health check endpoints on both master and peel (`/healthz`)
+- [ ] Prometheus metrics endpoint (`/metrics`)
+- [ ] Structured JSON logging with `log/slog`
+- [ ] Graceful shutdown with NATS drain support
+- [ ] Peel reconnection with exponential backoff + jitter
+- [ ] JetStream storage monitoring and alerting
+- [ ] TLS certificate rotation on NATS server via SIGHUP
+- [ ] Peel revocation via JWT revocation lists
+- [ ] Audit logging for security events
+- [ ] Job timeout and cancellation
+- [ ] Peel drain support for maintenance
+- [ ] Configuration validation on startup
+- [ ] Version reporting in health endpoint and metrics

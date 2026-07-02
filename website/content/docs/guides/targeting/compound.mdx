@@ -1,0 +1,203 @@
+---
+title: "Compound Expressions"
+description: "Compound expressions combine multiple matchers using boolean operators. This is the most powerful targeting mode, allowing you to build precise target sets by intersecting, unioning, and negating different matcher types."
+---
+
+## Syntax
+
+```
+<expr> and <expr>
+<expr> or <expr>
+not <expr>
+( <expr> )
+```
+
+Compound expressions are **auto-detected** when the input contains ` and `,
+` or ` (with surrounding spaces), or starts with `not ` (case-insensitive).
+
+## Grammar
+
+The compound parser implements a recursive-descent parser with the following
+grammar:
+
+```
+expr     = orExpr
+orExpr   = andExpr ("or" andExpr)*
+andExpr  = notExpr ("and" notExpr)*
+notExpr  = "not" notExpr | primary
+primary  = "(" expr ")" | matcher
+matcher  = prefixed | glob
+prefixed = ("G@" | "I@" | "E@" | "L@") value
+glob     = value
+```
+
+## Operators
+
+| Operator | Description | Precedence (highest first) |
+|----------|-------------|---------------------------|
+| `not` | Logical negation | 1 (highest) |
+| `and` | Logical conjunction -- both sides must match | 2 |
+| `or` | Logical disjunction -- either side must match | 3 (lowest) |
+
+Operators are **case-insensitive**: `AND`, `And`, and `and` are all valid.
+
+### Precedence
+
+`not` binds tightest, then `and`, then `or`. This means:
+
+```
+A or B and not C
+```
+
+is parsed as:
+
+```
+A or (B and (not C))
+```
+
+Use parentheses to override:
+
+```
+(A or B) and not C
+```
+
+## Parentheses
+
+Parentheses group sub-expressions to override default precedence:
+
+```bash
+# Without parens: web* or (db* and G@os:ubuntu)
+zester 'web* or db* and G@os:ubuntu' state.apply ...
+
+# With parens: (web* or db*) and G@os:ubuntu
+zester '(web* or db*) and G@os:ubuntu' state.apply ...
+```
+
+<Callout type="success" title="Use parentheses for clarity">
+Even when not strictly required, parentheses make complex expressions
+easier to read and maintain. When in doubt, add them.
+</Callout>
+
+## Mixer Matchers
+
+Inside a compound expression, each sub-expression is parsed according to its
+prefix:
+
+| Prefix | Matcher | Example inside compound |
+|--------|---------|------------------------|
+| *(none)* | Glob | `web*` |
+| `E@` | Regex | `E@^db-\d+$` |
+| `G@` | Fact | `G@os:ubuntu` |
+| `I@` | Fact alias (`G@`) | `I@role:webserver` |
+| `L@` | List | `L@web-01,web-02` |
+
+## Examples
+
+### Glob AND fact
+
+Target web servers running Ubuntu:
+
+```bash
+zester 'web* and G@os:ubuntu' state.apply deploy.app
+```
+
+### Glob OR glob
+
+Target both web and API servers:
+
+```bash
+zester 'web* or api*' state.apply healthcheck.run
+```
+
+### Fact AND NOT regex
+
+Target Ubuntu peels excluding dev environments:
+
+```bash
+zester 'G@os:ubuntu and not E@.*-dev-.*' state.apply deploy.prod
+```
+
+### Multiple conditions with parentheses
+
+Target web or API servers that run Ubuntu and have at least 4 CPUs:
+
+```bash
+zester '(web* or api*) and G@os:ubuntu and G@cpu_count:>=4' state.apply deploy.heavy
+```
+
+### Nested negation
+
+```bash
+zester 'not not web*' state.apply base.ping
+```
+
+This is equivalent to `web*` (double negation cancels out).
+
+### List combined with fact
+
+```bash
+zester 'L@web-01,web-02 and G@os:ubuntu' state.apply deploy.canary
+```
+
+Only applies to `web-01` and `web-02` if they are running Ubuntu.
+
+## Tokenization
+
+The compound parser tokenizes the expression by splitting on whitespace and
+parentheses. Prefixed matchers like `G@os:ubuntu` are preserved as single
+tokens because they contain no spaces.
+
+<Callout type="warn" title="No spaces in matcher values">
+Because the tokenizer splits on whitespace, individual matcher values
+cannot contain spaces. For example, `G@hostname:my server` would be
+incorrectly tokenized. Peel facts should use values without spaces.
+</Callout>
+
+## Error Handling
+
+### Unclosed parenthesis
+
+```bash
+zester '(web* and G@os:ubuntu' state.apply deploy.app
+```
+
+```
+Error: resolve target "(web* and G@os:ubuntu":
+  target: parse compound "(web* and G@os:ubuntu":
+  expected closing parenthesis
+```
+
+### Unexpected end of expression
+
+```bash
+zester 'web* and' state.apply deploy.app
+```
+
+```
+Error: resolve target "web* and":
+  target: parse compound "web* and":
+  unexpected end of expression
+```
+
+### Invalid sub-matcher
+
+```bash
+zester 'web* and E@[invalid' state.apply deploy.app
+```
+
+```
+Error: resolve target "web* and E@[invalid":
+  target: parse compound "web* and E@[invalid":
+  target: invalid regex pattern "[invalid":
+  error parsing regexp: missing closing ]: `[invalid`
+```
+
+## How It Works
+
+1. The expression is tokenized into a stream of tokens (words, parentheses).
+2. A recursive-descent parser builds an abstract syntax tree (AST) of
+   `andNode`, `orNode`, `notNode`, and `matcherNode` types.
+3. Each `matcherNode` wraps a concrete `Matcher` (glob, regex, fact, or list).
+4. During evaluation, the AST is traversed for each peel ID. Each node
+   evaluates its children and combines results with the appropriate boolean
+   operator.

@@ -1,0 +1,689 @@
+---
+title: "Enrollment Operations Guide"
+---
+
+This guide covers day-to-day operations for managing peel enrollment in Zester: setting up the enrollment system, approving and rejecting requests, monitoring enrollment state, revoking enrolled peels, and troubleshooting common issues.
+
+For architectural details, see `docs/enrollment-architecture.md`. For the HTTP API reference, see `docs/enrollment-api.md`.
+
+---
+
+## Prerequisites
+
+Before using the enrollment system, ensure:
+
+1. **Master is running** with the enrollment HTTP server enabled in configuration.
+2. **TLS certificates** are in place for the enrollment HTTP API (TLS 1.3 is enforced).
+3. **Account key bundle** is available on all master instances (required to sign user JWTs for approved peels).
+4. **Admin access is configured** for either:
+   - REST API tokens (`api.tokens`) for HTTPS admin operations, or
+   - CLI with NATS credentials — admin state transitions (approve, reject, revoke) are sent via request/reply to a running master; the operator's credentials must allow publishing on `zester.admin.enroll.*`. The `--direct-kv` break-glass path additionally needs write access to the `enrollments` bucket.
+5. **NATS JetStream** is running -- the enrollment system uses two KV buckets (`enrollments` and `enroll-challenges`) that are auto-created on master startup via `bus.InitializeStorage()`.
+
+---
+
+## Setup and Configuration
+
+### Master Configuration
+
+The enrollment system is configured via the `enroll` section in the master config (or equivalent `--enroll-*` CLI flags):
+
+```yaml title="/etc/zester/master.yaml"
+nats_url: tls://nats-1.example.com:4222
+nats_ca: /data/auth/nats-ca.crt
+
+enroll:
+  addr: ":8443"
+  tls_cert: /data/auth/enroll.crt
+  tls_key: /data/auth/enroll.key
+```
+
+Only `tls://` NATS URLs are accepted (`bus.ValidateTLSNATSURLs`). If the NATS server certificate is not signed by a publicly trusted CA, point `nats_ca` (or `--nats-ca`) at the CA certificate; when unset, the CA is resolved from the `NATS_CA_FILE` environment variable, then `/data/auth/nats-ca.crt` if present, then the system trust store (`bus.NATSClientTLS`).
+
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `enroll.addr` | `string` | `":8443"` | Address and port for the enrollment HTTP listener |
+| `enroll.tls_cert` | `string` | `/data/auth/enroll.crt` | Path to TLS server certificate |
+| `enroll.tls_key` | `string` | `/data/auth/enroll.key` | Path to TLS server private key |
+
+The account seed for signing user JWTs is loaded from `<auth_dir>/account.seed` (default auth dir: `/data/auth`).
+
+<Callout type="warn" title="TLS is mandatory">
+The enrollment server **cannot start** without a valid TLS certificate and key. `NewServer()` rejects startup if either is missing (see `pkg/enroll/server.go`). TLS 1.3 minimum is enforced. Default certificate paths are `/data/auth/enroll.crt` and `/data/auth/enroll.key`.
+</Callout>
+
+### TLS Certificate Setup
+
+If you do not have a PKI infrastructure, generate certificates using your standard tooling (for example OpenSSL, Vault PKI, or cert-manager) and place them at the configured paths:
+
+This produces:
+
+```
+/etc/zester/tls/
+  ca.crt         # CA certificate (distribute to peels)
+  server.crt     # Server certificate
+  server.key     # Server private key (mode 0600)
+```
+
+<Callout type="success" title="Production certificates">
+Use your organization's PKI (e.g., HashiCorp Vault, cert-manager) for production. The built-in CA is intended for bootstrap and testing.
+</Callout>
+
+### Peel Configuration
+
+Configure the peel to use enrollment when no `.creds` file exists:
+
+```yaml title="/etc/zester/peel.yaml"
+id: web-01
+master_urls:
+  - https://master-1.example.com:8443
+  - https://master-2.example.com:8443
+enroll_ca: /etc/zester/tls/ca.crt
+nats_url: tls://nats:4222
+nats_ca: /data/auth/nats-ca.crt
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | `string` | *required* | Peel identifier (2-255 chars, alphanumeric/hyphens/underscores) |
+| `master_urls` | `[]string` | *(empty)* | Ordered list of master enrollment API URLs (HTTPS), tried in order with automatic failover. Takes precedence over `master_url` when non-empty. On the CLI: `--master-urls`, comma-separated; `--master-urls ""` clears a YAML-configured list |
+| `master_url` | `string` | *(optional)* | Single master enrollment API URL (HTTPS); shorthand for a one-entry `master_urls` list. At least one of `master_url` / `master_urls` is required for enrollment |
+| `enroll_ca` | `string` | *(optional)* | CA certificate to verify the master's enrollment TLS certificate |
+| `nats_url` | `string` | `tls://nats:4222` | NATS server URL (used after enrollment; only `tls://` accepted) |
+| `nats_ca` | `string` | *(optional)* | CA certificate for the NATS server TLS certificate (falls back to `NATS_CA_FILE`, then `/data/auth/nats-ca.crt`, then the system trust store) |
+
+#### Multi-Master Failover
+
+For multi-master deployments, `master_urls` is the recommended pattern: list every master's enrollment API URL and the peel handles failover itself. The enrollment client sends each request to its *current* URL and rotates to the next one in the list on connection-level failures (dial errors, timeouts, or 5xx responses); a successful response **pins** the current URL, so the client never rotates needlessly. 4xx responses never trigger rotation -- they indicate a request problem, not a master problem.
+
+Rotation applies to every enrollment operation: nonce request, enrollment submission, status polling/SSE, and credential download. Because enrollment records and challenge nonces are shared across masters via NATS KV, a flow that starts against one master completes cleanly against another -- for example, a peel that submitted its enrollment to `master-1` can download credentials from `master-2` if `master-1` goes down while waiting for approval.
+
+The auth directory is fixed at `/data/auth` on the peel (`authDir` constant in `cmd/zester-peel/main.go`); it holds the `.creds` and `.seed` files. The peel automatically detects whether it needs enrollment (see `pkg/enroll/persist.go`):
+
+1. If `<auth_dir>/<peel-id>.creds` exists (`HasCredentials()`), skip enrollment and connect to NATS directly.
+2. If no `.creds` file exists but `master_urls` (or `master_url`) is set, start the enrollment flow:
+   a. Load or generate an nkey seed from `<auth_dir>/<peel-id>.seed` (`LoadOrGenerateKey()`).
+   b. Run the enrollment client (`Client.Enroll()`).
+   c. Write credentials to `<auth_dir>/<peel-id>.creds` (mode `0600`).
+3. If neither `.creds` nor a master URL is available, exit with an error.
+
+### Firewall Rules
+
+The enrollment API should be accessible from peel networks but protected from the public internet:
+
+| Source | Destination | Port | Protocol | Purpose |
+|--------|-------------|------|----------|---------|
+| Peel nodes | Master(s) | 8443 | HTTPS | Enrollment requests and status polling |
+| Operator/API clients | Master(s) | 8443 | HTTPS | Enrollment admin API (`/api/v1/enrollments*`) and docs (`/api/v1/docs`) |
+| Operator workstations (CLI path) | Master(s) | 4222 | TLS/TCP | NATS — CLI enrollment operations |
+| All enrolled peels | Master(s) | 4222 | TLS/TCP | NATS (enrolled peels only — NATS auth enforces this) |
+
+---
+
+## Enrolling a New Peel
+
+### Automatic Enrollment (Peel-Initiated)
+
+The simplest way to enroll a peel is to start it without a `.creds` file:
+
+```bash
+# On the new peel machine:
+zester-peel --id web-03 --nats-url tls://nats:4222 --nats-ca /data/auth/nats-ca.crt \
+  --master-urls https://master-1.example.com:8443,https://master-2.example.com:8443
+```
+
+With a single master, `--master-url https://master.example.com:8443` works the same way. The `--nats-ca` flag is only needed when the NATS server certificate is not covered by the default CA resolution (`NATS_CA_FILE` env var, `/data/auth/nats-ca.crt`, or the system trust store).
+
+The peel will execute the full enrollment flow automatically (implemented in `Client.Enroll()` in `pkg/enroll/client.go`):
+
+1. Load or generate a new Ed25519 nkey seed (saved to `<auth_dir>/web-03.seed`).
+2. Derive the X25519 curve public key for settings encryption.
+3. Request a challenge nonce from the master (`GET /api/v1/enroll/nonce`).
+4. Sign `challenge_bytes || curve_public_key` with the Ed25519 private key.
+5. Submit the enrollment request with the signature (`POST /api/v1/enroll`).
+6. Poll for approval with exponential backoff (10s base, 5m max).
+7. Upon approval, sign the enrollment ID and download credentials (`GET /api/v1/enroll/{id}/creds`).
+8. Decode the base64 JWT, write `.creds` file, connect to NATS.
+
+Expected peel log output:
+
+```
+INFO  requesting enrollment challenge         peel_id=web-03
+INFO  submitting enrollment request           peel_id=web-03
+INFO  enrollment submitted, awaiting approval enrollment_id=enr-2JFKABCD1234 peel_id=web-03 state=pending
+DEBUG enrollment still pending                enrollment_id=enr-2JFKABCD1234
+INFO  enrollment approved, downloading credentials enrollment_id=enr-2JFKABCD1234
+INFO  enrollment complete                     enrollment_id=enr-2JFKABCD1234 peel_id=web-03 expires_at=2026-08-10T12:00:00Z
+INFO  credentials saved                       peel=web-03 path=/data/auth/web-03.creds
+INFO  connecting to NATS                      peel=web-03 url=tls://nats:4222
+INFO  zester-peel ready                       peel=web-03
+```
+
+### Seed Persistence
+
+The peel saves its nkey seed to `<auth_dir>/<peel-id>.seed` on first key generation. If the peel restarts before enrollment completes (e.g., approval is still pending), it reloads the existing seed rather than generating a new key, ensuring the key presented to the master remains consistent.
+
+After enrollment is complete and the `.creds` file is written, the `.seed` file can optionally be removed -- the `.creds` file contains everything needed for NATS authentication. However, keeping the `.seed` is required for re-enrollment scenarios.
+
+---
+
+## Managing Enrollment Requests
+
+Enrollment requests can be managed through:
+
+- Master REST API on `https://<master>:8443/api/v1` (token-authenticated) for **list, approve, reject, and revoke**, or
+- `zester` CLI connected to NATS — state transitions go via request/reply to a running master; list/show read the KV bucket directly.
+
+### Understanding Enrollment IDs
+
+Each enrollment record has a unique ID with the format `enr-<KSUID>` (e.g., `enr-2JFKABCD1234567890abcdef`). This ID is distinct from the peel ID:
+
+- **Peel ID** (`web-03`): human-readable name chosen by the peel operator
+- **Enrollment ID** (`enr-2JFKABCD1234...`): system-generated, time-ordered unique identifier
+
+The enrollment ID is used for all management operations (approve, reject, revoke).
+
+### CLI Connection
+
+The `enroll` command group connects to NATS using the operator's credentials from the CLI configuration (`/etc/zester/master.yaml` or `~/.zester/config.yaml`). Each subcommand opens a short-lived NATS connection, performs its operation, and disconnects.
+
+The transport differs by operation class:
+
+- **State transitions** (`approve`, `reject`, `revoke`) send a MessagePack `enroll.AdminRequest` (`{id, operator, reason}`) over request/reply on `zester.admin.enroll.approve` / `.reject` / `.revoke` (5-second timeout). The masters answer on the `zester-masters-admin` NATS queue group — exactly one master applies each request to the `enrollments` KV bucket and replies with an `enroll.AdminResponse` (the updated record, or an error). The answering master Info-logs every admin operation with action, enrollment ID, operator, and peel ID for the audit trail.
+- **Read-only operations** (`list`, `show`) read the `enrollments` KV bucket directly.
+
+If no master is running, state transitions fail with `no master is answering enrollment admin requests` — pass `--direct-kv` (a persistent flag on the `enroll` command group) to write the enrollment KV directly with the CLI's own credentials, as a break-glass path. See `cmd/zester/cmd/enroll.go` (`runEnrollAdmin` / `runEnrollAdminKV`) and the master-side handler in `internal/masterd/admin.go`.
+
+No additional flags are needed beyond the standard CLI configuration (`--config` for config file path).
+
+### List Enrollments (REST)
+
+```bash
+curl -sS -k \
+  -H "Authorization: Bearer $(cat /data/auth/api-tokens/ci-system.token)" \
+  "https://master.example.com:8443/api/v1/enrollments?state=pending"
+```
+
+`state` supports `pending`, `approved`, `rejected`, `issued`, `active`, `revoked`, or `all`.
+
+### Approve Enrollment (REST)
+
+```bash
+curl -sS -k -X POST \
+  -H "Authorization: Bearer $(cat /data/auth/api-tokens/ci-system.token)" \
+  "https://master.example.com:8443/api/v1/enrollments/enr-2JFK0003ABCD1234567890/approve"
+```
+
+### Reject or Revoke Enrollment (REST)
+
+Reject and revoke use the same bearer-token authentication as approve and accept an optional JSON body carrying a reason, recorded on the enrollment record:
+
+```bash
+curl -sS -k -X POST \
+  -H "Authorization: Bearer $(cat /data/auth/api-tokens/ci-system.token)" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Unknown instance ID"}' \
+  "https://master.example.com:8443/api/v1/enrollments/enr-2JFK0004ABCD1234567890/reject"
+
+curl -sS -k -X POST \
+  -H "Authorization: Bearer $(cat /data/auth/api-tokens/ci-system.token)" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Instance decommissioned"}' \
+  "https://master.example.com:8443/api/v1/enrollments/enr-2JFK0001ABCD1234567890/revoke"
+```
+
+Responses: `200` with the updated enrollment, `400` on invalid JSON, `401` on a missing/invalid token, `404` for an unknown enrollment, `409` on an invalid state transition. The authenticated API token's username is recorded as the decider.
+
+### List Enrollments (CLI)
+
+By default, `zester enroll list` shows pending enrollments. Use the `--state` flag to filter by other states.
+
+```bash
+# List pending enrollments (default)
+zester enroll list
+
+# List all enrollments regardless of state
+zester enroll list --state all
+
+# List only active enrollments
+zester enroll list --state active
+```
+
+```
+ID                              PEEL ID   HOSTNAME               STATE     CREATED
+enr-2JFK0003ABCD1234567890      web-03    web-03.prod.internal   pending   2026-02-10 15:00:12
+enr-2JFK0006EFGH9876543210      app-01    app-01.prod.internal   pending   2026-02-10 15:02:33
+```
+
+The list reads enrollment records directly from the `enrollments` KV bucket via `Store.List()` and displays `EnrollmentSummary` records (defined in `pkg/enroll/enrollment.go`) with ID, peel ID, hostname, state, and creation time. See `cmd/zester/cmd/enroll_list.go`.
+
+### Show Enrollment Details (CLI)
+
+The `show` command retrieves an enrollment's current state using the status endpoint. It takes the enrollment ID as an argument.
+
+```bash
+zester enroll show enr-2JFK0003ABCD1234567890
+```
+
+```
+Enrollment ID:  enr-2JFK0003ABCD1234567890
+Peel ID:        web-03
+State:          pending
+```
+
+See `cmd/zester/cmd/enroll_show.go`. The show command reads the full enrollment record directly from the `enrollments` KV bucket via `Store.Get()`, displaying all fields including public key, hostname, metadata, and timestamps.
+
+### Approve an Enrollment (CLI)
+
+After verifying the peel's identity (e.g., checking the instance ID in the list output against your cloud provider):
+
+```bash
+zester enroll approve enr-2JFK0003ABCD1234567890
+```
+
+```
+Enrollment enr-2JFK0003ABCD1234567890 approved (peel: web-03)
+```
+
+The CLI automatically uses the current OS username (via `os/user.Current()`) as the operator identity for the audit trail — it is carried in `AdminRequest.Operator` and recorded on the enrollment record as `DecidedBy`. See `cmd/zester/cmd/enroll_approve.go`.
+
+The request is answered by a running master (queue group `zester-masters-admin`), which transitions the enrollment record from `pending` to `approved` via CAS update on the NATS KV bucket (see `Store.Approve()` in `pkg/enroll/store.go`) and Info-logs the operation. The peel (if polling) will detect the approval and proceed to download credentials. With `--direct-kv`, the CLI applies the same CAS transition itself.
+
+Note: Credentials are not generated at approval time. They are generated on-demand when the peel calls `GET /api/v1/enroll/{id}/creds` with a valid Nkey signature. This ensures the credential download is authenticated.
+
+### Reject an Enrollment
+
+```bash
+zester enroll reject enr-2JFK0004ABCD --reason "Unknown instance ID"
+```
+
+```
+Enrollment enr-2JFK0004ABCD rejected (peel: db-01)
+```
+
+The `--reason` flag is optional but recommended for audit purposes; it is recorded on the enrollment record as `RejectReason`. Like approve, the transition is applied by a running master via request/reply, with the current OS username recorded as the decider. See `cmd/zester/cmd/enroll_reject.go`.
+
+The peel will receive a `rejected` state when it next polls. No credentials are issued. A rejected peel can re-enroll (creating a new enrollment record with a new ID).
+
+### Revoke an Enrollment
+
+Revoking an enrollment invalidates a peel's NATS credentials, effectively removing it from the fleet. Only enrollments in `approved`, `issued`, or `active` state can be revoked.
+
+```bash
+zester enroll revoke enr-2JFK0001ABCD --reason "Instance decommissioned"
+```
+
+```
+Enrollment enr-2JFK0001ABCD revoked (peel: web-01)
+```
+
+The `--reason` flag is optional but recommended; it is recorded on the enrollment record. Like approve and reject, the transition is applied by a running master via request/reply, with the current OS username recorded as the decider. See `cmd/zester/cmd/enroll_revoke.go`.
+
+#### What Happens on Revocation
+
+1. The enrollment record state transitions to `revoked` via CAS update (`Store.Revoke()` in `pkg/enroll/store.go`), applied by the master answering the admin request.
+2. The peel's user JWT is added to the NATS account revocation list.
+3. The peel's existing NATS connection will be closed when NATS detects the revoked JWT.
+4. The peel cannot reconnect with the old credentials.
+
+#### Re-Enrolling After Revocation
+
+A revoked peel must generate new credentials and submit a new enrollment request:
+
+```bash
+# On the revoked peel, delete old credentials and restart
+rm /data/auth/web-03.creds
+rm /data/auth/web-03.seed    # force new key generation
+systemctl restart zester-peel
+```
+
+The peel will detect the missing `.creds` file and start a new enrollment flow with a fresh nkey.
+
+---
+
+## Enrollment State Machine
+
+Each enrollment passes through a strict state machine with six states. Understanding these states is essential for operations.
+
+```
+                  +----------+
+     POST         |          |   approve    +----------+   peel downloads   +--------+
+   /enroll   ---> | Pending  | ---------->  | Approved | -----------------> | Issued |
+                  |          |              +----------+    GET /creds       +--------+
+                  +----------+                                                   |
+                       |                                                         |
+                       | reject   +----------+                   peel connects   |
+                       +--------> | Rejected |                   to NATS         |
+                                  +----------+                                   v
+                                                                            +--------+
+                                                                            | Active |
+                                                                            +--------+
+                                                                                 |
+                                                                    revoke       |
+                                                               +----------+      |
+                                                               | Revoked  | <----+
+                                                               +----------+
+                                                                     ^
+                  Note: Revoke can also transition from               |
+                  Approved or Issued directly -------------------------+
+```
+
+| State | Description | Next States |
+|-------|-------------|-------------|
+| `pending` | Awaiting operator action | `approved`, `rejected` |
+| `approved` | Operator approved; credentials not yet downloaded | `issued`, `revoked` |
+| `rejected` | Operator denied enrollment (terminal for this record) | *(none)* |
+| `issued` | Credentials generated and downloaded by peel. Automatically transitions to `active` when the master's fact watcher detects the peel publishing facts. | `active`, `revoked` |
+| `active` | Peel connected to NATS and publishing facts | `revoked` |
+| `revoked` | Credentials invalidated (terminal for this record) | *(none)* |
+
+The state machine is enforced by `Record.CanTransitionTo()` in `pkg/enroll/enrollment.go`. Invalid transitions return an error.
+
+---
+
+## Monitoring Enrollment
+
+### Enrollment Monitoring
+
+> **Note:** Prometheus metrics for the enrollment system are not yet implemented. Monitor enrollment activity via structured log output and the `zester enroll list` CLI command.
+
+### Structured Logging
+
+Enrollment events are logged with structured fields by the HTTP handler (`pkg/enroll/handler.go`), the store (`pkg/enroll/store.go`), and the master's admin service (`internal/masterd/admin.go`). Key log events:
+
+```json
+{"level":"INFO","msg":"enrollment.verify.success","enrollment_id":"enr-2JFK...","peel_id":"web-03","source_ip":"10.0.1.50"}
+{"level":"INFO","msg":"enrollment admin operation","action":"approve","id":"enr-2JFK...","operator":"admin","peel_id":"web-03"}
+{"level":"INFO","msg":"enrollment approved","id":"enr-2JFK...","peel_id":"web-03","decided_by":"admin"}
+{"level":"INFO","msg":"enrollment.credential.downloaded","enrollment_id":"enr-2JFK...","peel_id":"web-03","source_ip":"10.0.1.50"}
+{"level":"INFO","msg":"enrollment revoked","id":"enr-2JFK...","peel_id":"web-03","decided_by":"admin","reason":"Instance decommissioned"}
+{"level":"WARN","msg":"enrollment.ratelimit.exceeded","source_ip":"192.168.1.100"}
+{"level":"WARN","msg":"enroll: creds auth failed","enrollment_id":"enr-2JFK...","source_ip":"10.0.1.50"}
+```
+
+Every admin state transition arriving over NATS request/reply is Info-logged by the answering master as `enrollment admin operation` with the action, enrollment ID, operator, and peel ID — this is the audit line for CLI-initiated approve/reject/revoke.
+
+Note: The `remoteIP()` helper in `handler.go` extracts the client IP directly from the TCP connection's `RemoteAddr`, deliberately ignoring `X-Forwarded-For` to prevent IP spoofing that could bypass per-IP rate limiting.
+
+### NATS KV Inspection
+
+You can inspect the enrollment buckets directly using NATS tooling:
+
+```bash
+# List all enrollment records (includes peel index entries)
+nats kv ls enrollments
+
+# Get a specific enrollment record (raw MessagePack)
+nats kv get enrollments enr-2JFKABCD1234
+
+# Look up an enrollment by peel ID via the peel index
+nats kv get enrollments peel.web-03
+
+# List active challenge nonces (5-minute TTL, auto-expire)
+nats kv ls enroll-challenges
+
+# Watch for enrollment state changes in real-time
+nats kv watch enrollments
+```
+
+The `enrollments` bucket uses a dual-key scheme:
+- **Primary key**: `<enrollment-id>` (e.g., `enr-2JFK...`) stores the full `Record` in MessagePack.
+- **Index key**: `peel.<peel-id>` (e.g., `peel.web-03`) maps a peel ID to its enrollment ID for O(1) lookup.
+
+---
+
+## Rate Limiting
+
+The HTTPS listener uses per-IP token bucket rate limiting with stale entry eviction (implemented as middleware in `pkg/enroll/handler.go`, applied per route class in `pkg/enroll/server.go`). When the bucket map exceeds 5000 entries, entries older than 5 minutes are evicted to prevent unbounded memory growth.
+
+There are two separate budgets:
+
+| Route class | Bucket capacity | Refill rate |
+|-------------|-----------------|-------------|
+| `/api/v1/enroll` and subpaths (nonce, enroll, status, stream, creds) | 10 tokens | 1 token per 10 seconds |
+| All other routes on the listener (REST API, including `/api/v1/enrollments*` and docs) | 120 tokens | 20 tokens per second |
+
+Each request costs 1 token. The strict budget protects the unauthenticated enrollment endpoints; the REST API routes get a far higher budget so dispatch-and-poll clients are not locked out. Note that `/api/v1/enrollments` (the REST admin route) is **not** an enrollment path — only `/api/v1/enroll` and its subpaths use the strict limiter (see `isEnrollPath()` in `pkg/enroll/server.go`).
+
+When a rate limit is exceeded, the server returns `429 Too Many Requests` with a `Retry-After` header. The peel client handles this by applying exponential backoff.
+
+CLI admin operations (approve, reject, revoke, list) are not subject to HTTP rate limiting because they are performed over NATS (request/reply to a master, or direct KV reads), not the HTTP API.
+
+---
+
+## Troubleshooting
+
+### Peel Cannot Reach Enrollment API
+
+**Symptom:** Peel logs show `enrollment request failed: connection refused` or `TLS handshake error`.
+
+**Checks:**
+
+1. Verify the enrollment API is listening:
+   ```bash
+   curl -k https://master.example.com:8443/api/v1/enroll/nonce?peel_id=test&public_key=test
+   ```
+   This should return a 400 (invalid public_key) rather than a connection error, confirming the server is up.
+
+2. Check firewall rules allow port 8443 from peel networks.
+
+3. Verify TLS certificates are valid and not expired:
+   ```bash
+   openssl s_client -connect master.example.com:8443 -CAfile /etc/zester/tls/ca.crt
+   ```
+
+4. Ensure the peel's `enroll_ca` points to the correct CA certificate. If using system CAs, leave `enroll_ca` empty (the client falls back to the system CA pool; see `pkg/enroll/client.go`).
+
+5. In multi-master deployments, verify the peel lists **all** masters in `master_urls`. The client rotates to the next URL automatically on connection failures and 5xx responses (logged as `enroll: rotating to next master URL`), so a single unreachable master should not block enrollment -- if it does, only one URL is configured.
+
+### Challenge Nonce Expired or Already Used
+
+**Symptom:** Peel logs show `challenge verification failed` during enrollment.
+
+**Checks:**
+
+1. Challenge nonces expire after 5 minutes (`ChallengeTTL` in `pkg/enroll/challenge.go`). If the peel takes too long to sign and submit, the challenge expires.
+
+2. Challenges are single-use (enforced via CAS in `ChallengeStore.Consume()`). If the peel retries the same challenge ID, it will be rejected.
+
+3. Check for clock skew between peel and master. While challenge expiry is checked on the master side, significant clock differences can cause confusing log messages.
+
+The peel client self-heals: when the master rejects a submission with `401 challenge verification failed` (unknown, expired, or already-consumed challenge), the client transparently requests a fresh nonce and resubmits, bounded to 3 total attempts (logged as `challenge unknown or expired, re-requesting nonce`). This also covers challenges wiped by a NATS restart -- the `enroll-challenges` bucket is memory-backed -- so no operator action is needed for transient challenge failures. Only a persistently rejecting server surfaces an error.
+
+### Enrollment Stuck in Pending
+
+**Symptom:** Peel submitted enrollment but it remains in `pending` state.
+
+**Checks:**
+
+1. The enrollment system uses manual approval by default. An operator must approve:
+   ```bash
+   zester enroll list
+   zester enroll approve <enrollment-id>
+   ```
+
+2. Check if the enrollment record exists:
+   ```bash
+   nats kv get enrollments peel.<peel-id>    # get enrollment ID
+   nats kv get enrollments <enrollment-id>   # get record
+   ```
+
+3. Check master logs for enrollment processing errors.
+
+### Peel Approved But Cannot Download Credentials
+
+**Symptom:** Enrollment shows `approved` but peel logs show `authentication failed` when downloading credentials.
+
+**Checks:**
+
+1. The credential download requires an `Authorization: Nkey <pub>:<sig>` header where the peel signs the enrollment ID with its nkey. If the peel's seed changed between enrollment submission and credential download, the signature will be invalid.
+
+2. Check if the `.seed` file was accidentally deleted or regenerated:
+   ```bash
+   ls -la /data/auth/<peel-id>.seed
+   ```
+
+3. Credentials are single-use. Once downloaded, the enrollment transitions to `issued` and subsequent download attempts return `403 Forbidden` (the enrollment is no longer in `approved` state; see `handleCreds` in `pkg/enroll/handler.go`). If the peel crashed after downloading but before writing the `.creds` file, the credentials are lost and the peel must be re-enrolled:
+   ```bash
+   zester enroll revoke <enrollment-id>
+   # Then delete seed on peel and restart
+   ```
+
+### Peel Issued But Cannot Connect to NATS
+
+**Symptom:** Enrollment shows `issued` but peel fails to connect to NATS with authentication errors.
+
+**Checks:**
+
+1. Verify the `.creds` file was written successfully:
+   ```bash
+   ls -la /data/auth/<peel-id>.creds
+   ```
+
+2. Validate the JWT in the `.creds` file:
+   ```bash
+   nats server check connection --creds /data/auth/<peel-id>.creds
+   ```
+
+3. Check that the NATS server's account JWT resolver has the correct account JWT.
+
+4. Ensure the master's account seed matches the NATS server's trusted account. The `CredentialIssuer` uses the account key bundle to sign user JWTs (see `pkg/enroll/credential.go`).
+
+5. Check if the JWT has expired. Default expiry is 6 months (`DefaultJWTExpiry` in `pkg/enroll/credential.go`).
+
+### Rate Limiting Blocks Legitimate Requests
+
+**Symptom:** Peel logs show `rate limit exceeded` or HTTP 429 responses.
+
+**Checks:**
+
+1. The enrollment-endpoint rate limiter allows a burst of 10 requests per IP with a refill of 1 token per 10 seconds. If many peels share a NAT gateway, they will exhaust the shared bucket quickly. (REST API routes on the same listener have a separate, much higher budget: 120 burst, 20 requests per second.)
+
+2. Check the `enrollment.ratelimit.exceeded` log entries on the master for the affected source IP.
+
+3. The rate limiter is currently per-master-instance (in-memory). Requests load-balanced across multiple masters each have their own rate limit bucket.
+
+### Duplicate Peel ID
+
+**Symptom:** Enrollment request rejected with `peel already has an active enrollment`.
+
+**Checks:**
+
+1. Each peel ID can have at most one active enrollment (in `pending`, `approved`, `issued`, or `active` state). The handler checks this via `Store.FindByPeelID()` (see `handleEnroll` in `pkg/enroll/handler.go`).
+
+2. If the peel was previously enrolled in one of these states and needs re-enrollment, the old enrollment must first be revoked (or rejected, if still pending):
+   ```bash
+   zester enroll show <enrollment-id>    # check current state
+   zester enroll revoke <enrollment-id>  # or reject if pending
+   ```
+
+3. Re-enrollment after `rejected` or `revoked` state automatically creates a new record.
+
+### Admin Command Fails with "No Master Is Answering"
+
+**Symptom:** `zester enroll approve|reject|revoke` fails with `no master is answering enrollment admin requests; retry with --direct-kv`.
+
+**Checks:**
+
+1. Admin state transitions require a running master — they are request/reply operations answered by the masters' `zester-masters-admin` queue group. Verify at least one master is up and connected to NATS (look for `enrollment admin service started` in the master log).
+2. If no master can be started (e.g., bootstrap or recovery scenarios), use the break-glass path:
+   ```bash
+   zester enroll approve <enrollment-id> --direct-kv
+   ```
+   This writes the enrollment KV directly with the CLI's own credentials, which must have write access to the `enrollments` bucket.
+
+### Master Restart Loses Enrollment State
+
+**Symptom:** Enrollment records disappear after master restart.
+
+This should **not** happen because enrollment state is stored in NATS JetStream KV, not in master memory. If it does:
+
+1. Verify NATS JetStream data directory is intact.
+2. Check that the NATS server was not restarted with JetStream storage wiped.
+3. Inspect the KV buckets:
+   ```bash
+   nats kv ls enrollments
+   nats kv ls enroll-challenges
+   ```
+4. Challenge nonces are ephemeral (5-minute TTL, memory storage in the `enroll-challenges` bucket) -- their loss after a NATS restart is expected. Peels mid-enrollment receive `401 challenge verification failed` on their next submission and transparently re-request a fresh nonce; no operator action is needed.
+
+---
+
+## Operational Runbook
+
+### Scaling: Enrolling Many Peels Quickly
+
+When enrolling a large batch of peels (e.g., auto-scaling event):
+
+1. Start all peels -- they will submit enrollment requests automatically with challenge-response.
+2. Review pending enrollments:
+   ```bash
+   zester enroll list
+   ```
+3. Verify the peel identities (hostnames, instance IDs, source IPs) match expected infrastructure.
+4. Approve each enrollment individually. The current CLI accepts one enrollment ID per invocation:
+   ```bash
+   zester enroll approve enr-2JFK0003ABCD
+   zester enroll approve enr-2JFK0006EFGH
+   ```
+
+   For scripted bulk approval, use a shell loop:
+   ```bash
+   # Approve all pending enrollments (use with caution)
+   zester enroll list --state pending | tail -n +2 | awk '{print $1}' | while read id; do
+     zester enroll approve "$id"
+   done
+   ```
+
+<Callout type="warn" title="Verify before bulk approval">
+The scripted loop above approves every pending enrollment. Use this only when you are confident all pending requests are legitimate (e.g., in a controlled provisioning pipeline where peels are launched by trusted automation).
+</Callout>
+
+### Disaster Recovery: Re-Enrolling the Fleet
+
+If the NATS JetStream data is lost and needs to be rebuilt:
+
+1. Start the NATS server and masters (they will recreate empty KV buckets via `bus.InitializeStorage()`).
+2. Peels with existing `.creds` files will reconnect automatically (no re-enrollment needed as long as the NATS account JWT is valid).
+3. Peels whose `.creds` files are invalid (e.g., account key changed) will need to delete their `.creds` and re-enroll.
+
+### Key Rotation: Rotating the Account Key
+
+If the account key is rotated:
+
+1. Update the master configuration with the new account seed.
+2. All existing peel JWTs become invalid (they were signed by the old account key).
+3. Revoke all active enrollments:
+   ```bash
+   zester enroll list --state active | tail -n +2 | awk '{print $1}' | while read id; do
+     zester enroll revoke "$id" --reason "Account key rotation"
+   done
+   ```
+4. On each peel, delete old credentials and seeds:
+   ```bash
+   rm /data/auth/<peel-id>.creds /data/auth/<peel-id>.seed
+   systemctl restart zester-peel
+   ```
+5. Peels will detect connection failure and start new enrollment flows.
+
+This is a significant operation. Plan for downtime or use NATS account signing key delegation to avoid invalidating existing JWTs.
+
+### Investigating Credential Delivery Contention
+
+If master logs show `enrollment.credential.delivery.contention`:
+
+This means two concurrent requests tried to download credentials for the same enrollment. The CAS-first pattern in `handleCreds` (see `pkg/enroll/handler.go`) ensures only one succeeds -- the enrollment transitions to `issued` BEFORE the JWT is returned. The second request fails with `409 Conflict`.
+
+This is a safety mechanism, not a bug. It prevents credential duplication. The peel client should retry the entire enrollment flow if it receives a 409 on credential download.
+
+### HTTP Server Timeouts
+
+The enrollment HTTP server has conservative timeouts (see `pkg/enroll/server.go`):
+
+| Timeout | Value | Purpose |
+|---------|-------|---------|
+| ReadTimeout | 10 seconds | Maximum time to read the full request |
+| WriteTimeout | 10 seconds | Maximum time to write the full response |
+| IdleTimeout | 60 seconds | Keep-alive connection idle timeout |
+
+If peels experience timeouts during enrollment, check network latency between peel and master, and ensure no proxy or load balancer is adding latency.

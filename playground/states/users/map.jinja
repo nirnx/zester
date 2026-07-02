@@ -1,0 +1,51 @@
+{# Users formula mapping — Zester port of Salt users-formula map.jinja #}
+{# Linux-only: removed MacOS/BSD/Solaris blocks #}
+
+{% import_yaml 'users/defaults.yaml' as defaults %}
+
+{# Start with base defaults from the 'users' key in defaults.yaml #}
+{% set users = defaults.get('users', {}) %}
+
+{# Select OS-family-specific overrides and deep-merge on top #}
+{% set os_overrides = grains_filter_by({
+  'debian': {
+    'sudoers_dir': '/etc/sudoers.d',
+    'sudoers_file': '/etc/sudoers',
+    'googleauth_dir': '/etc/google_authenticator.d',
+    'root_group': 'root',
+    'shell': '/bin/bash',
+    'visudo_shell': '/bin/bash',
+    'bash_package': 'bash',
+    'sudo_package': 'sudo',
+    'googleauth_package': 'libpam-google-authenticator'
+  },
+  'rhel': {
+    'sudoers_dir': '/etc/sudoers.d',
+    'sudoers_file': '/etc/sudoers',
+    'googleauth_dir': '/etc/google_authenticator.d',
+    'root_group': 'root',
+    'shell': '/bin/bash',
+    'visudo_shell': '/bin/bash',
+    'bash_package': 'bash',
+    'sudo_package': 'sudo',
+    'googleauth_package': 'google-authenticator'
+  },
+  'default': {
+    'sudoers_dir': '/etc/sudoers.d',
+    'sudoers_file': '/etc/sudoers',
+    'googleauth_dir': '/etc/google_authenticator.d',
+    'root_group': 'root',
+    'shell': '/bin/bash',
+    'visudo_shell': '/bin/bash',
+    'bash_package': 'bash',
+    'sudo_package': 'sudo',
+    'googleauth_package': 'libpam-google-authenticator'
+  }
+}) %}
+{% do users.update(os_overrides) %}
+
+{# Apply pillar overrides (users-formula:lookup) on top if configured #}
+{% set lookup = pillar_get('users-formula:lookup') %}
+{% if lookup %}
+{% do users.update(lookup) %}
+{% endif %}

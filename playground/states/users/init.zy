@@ -1,0 +1,267 @@
+{# Users formula — Zester port of Salt users-formula init.sls #}
+{# Linux-only scope. SSH, git, googleauth, polkit states are out of scope. #}
+{% from "users/map.jinja" import users with context %}
+{% set used_sudo = mlist() %}
+
+{# ── Group management ─────────────────────────────────────────── #}
+{% for group, setting in pillar_get('groups', {}).items() %}
+{%   if setting.get('state', 'present') == 'absent' %}
+users_group_absent_{{ group }}:
+  group.absent:
+    - name: {{ group }}
+{% else %}
+users_group_present_{{ group }}:
+  group.present:
+    - name: {{ group }}
+    - gid: {{ setting.get('gid', 'null') }}
+    - system: {{ setting.get('system', 'False') }}
+    - members: {{ setting.get('members', []) | json }}
+    - addusers: {{ setting.get('addusers', []) | json }}
+    - delusers: {{ setting.get('delusers', []) | json }}
+{% endif %}
+{% endfor %}
+
+{# ── Detect which includes are needed ─────────────────────────── #}
+{%- for name, user in pillar.get('users', {}).items()
+        if user.get('absent') is not defined or not user.get('absent') %}
+{%- if user == None -%}
+{%- set user = {} -%}
+{%- endif -%}
+{%- if user.get('sudoonly') %}
+{%- set _dummy = user.update({'sudouser': True}) %}
+{%- endif %}
+{%- if user.get('sudouser') %}
+{%- do used_sudo.Append(1) %}
+{%- endif %}
+{%- endfor %}
+
+{%- if used_sudo | length %}
+include:
+  - users.sudo
+{%- endif %}
+
+{# ── Present users ─────────────────────────────────────────────── #}
+{%- set managed_groups = pillar_get('groups', {}) -%}
+{% for name, user in pillar.get('users', {}).items()
+        if user.get('absent') is not defined or not user.get('absent') %}
+{%- if user == None -%}
+{%- set user = {} -%}
+{%- endif -%}
+{%- set current = user_info(name) -%}
+{%- set home = user.get('home', current.get('home', '/home/' ~ name)) -%}
+{%- set createhome = user.get('createhome', users.get('createhome')) -%}
+
+{%- if 'prime_group' in user and 'name' in user.get('prime_group', {}) %}
+{%- set user_group = user.get('prime_group', {}).get('name', name) -%}
+{%- else -%}
+{%- set user_group = name -%}
+{%- endif %}
+
+{%- if not user.get('sudoonly') %}
+{# Ensure supplementary groups exist (skip groups already in pillar 'groups') #}
+{% for group in user.get('groups', []) %}
+{% if group not in managed_groups %}
+users_{{ name }}_{{ group }}_group:
+  group.present:
+    - name: {{ group }}
+    {% if group == 'sudo' %}
+    - system: True
+    {% endif %}
+{% endif %}
+{% endfor %}
+
+{# Create home parent directory if needed #}
+{% if createhome -%}
+users_{{ name }}_user_prereq:
+  file.directory:
+    - name: {{ file_dirname(home) }}
+    - makedirs: True
+{%- endif %}
+
+{# Create primary group #}
+users_{{ name }}_primary_group:
+  group.present:
+    - name: {{ user_group }}
+    {%- if 'prime_group' in user and 'gid' in user.get('prime_group', {}) %}
+    - gid: {{ user.get('prime_group', {}).get('gid') }}
+    {%- elif 'uid' in user %}
+    - gid: {{ user.get('uid') }}
+    {%- endif %}
+    {% if user.get('system') %}
+    - system: True
+    {% endif %}
+
+{# Create the user #}
+users_{{ name }}_user:
+  user.present:
+    - name: {{ name }}
+    - home: {{ home }}
+    - shell: {{ user.get('shell', current.get('shell', users.get('shell', '/bin/bash'))) }}
+    {% if 'uid' in user -%}
+    - uid: {{ user.get('uid') }}
+    {% endif -%}
+    {% if 'password' in user -%}
+    - password: '{{ user.get('password') }}'
+    {% endif -%}
+    {% if user.get('system') -%}
+    - system: True
+    {% endif -%}
+    {% if 'prime_group' in user and 'gid' in user.get('prime_group', {}) -%}
+    - gid: {{ user.get('prime_group', {}).get('gid') }}
+    {% elif 'prime_group' in user and 'name' in user.get('prime_group', {}) %}
+    - gid: {{ user.get('prime_group', {}).get('name') }}
+    {% else -%}
+    - gid: {{ name }}
+    {% endif -%}
+    {% if 'fullname' in user %}
+    - fullname: {{ user.get('fullname') }}
+    {% endif -%}
+    - createhome: {{ createhome }}
+    - remove_groups: {{ user.get('remove_groups', 'False') }}
+    - groups:
+      - {{ user_group }}
+      {% for group in user.get('groups', []) -%}
+      - {{ group }}
+      {% endfor %}
+    {% if 'optional_groups' in user %}
+    - optional_groups:
+      {% for optional_group in user.get('optional_groups', []) -%}
+      - {{ optional_group }}
+      {% endfor %}
+    {% endif %}
+    - require:
+      - "group.present:users_{{ name }}_primary_group"
+      {% for group in user.get('groups', []) -%}
+      {% if group in managed_groups -%}
+      - "group.present:users_group_present_{{ group }}"
+      {% else -%}
+      - "group.present:users_{{ name }}_{{ group }}_group"
+      {% endif -%}
+      {% endfor %}
+
+{# Set home directory permissions #}
+{% if createhome -%}
+users_{{ name }}_homedir:
+  file.directory:
+    - name: {{ home }}
+    - user: {{ user.get('homedir_owner', name) }}
+    - group: {{ user.get('homedir_group', user_group) }}
+    - mode: {{ user.get('user_dir_mode', '0750') }}
+    - makedirs: True
+    - require:
+      - "user.present:users_{{ name }}_user"
+{%- endif %}
+
+{# SSH directory — only create if ssh_keys are specified #}
+{% if 'ssh_keys' in user %}
+users_keydir_{{ name }}:
+  file.directory:
+    - name: {{ home }}/.ssh
+    - user: {{ name }}
+    - group: {{ user_group }}
+    - makedirs: True
+    - mode: '0700'
+    - require:
+      - "user.present:users_{{ name }}_user"
+{% endif %}
+
+{# SSH keys — write key files #}
+{% if 'ssh_keys' in user %}
+{% for _key, _value in user.get('ssh_keys', {}).items() %}
+{% if _key == 'privkey' %}
+{% set key_name = 'id_' ~ user.get('ssh_key_type', 'rsa') %}
+{% elif _key == 'pubkey' %}
+{% set key_name = 'id_' ~ user.get('ssh_key_type', 'rsa') ~ '.pub' %}
+{% else %}
+{% set key_name = _key %}
+{% endif %}
+users_{{ name }}_{{ key_name }}_key:
+  file.managed:
+    - name: {{ home }}/.ssh/{{ key_name }}
+    {% if key_name.endswith('.pub') %}
+    - mode: '0644'
+    {% else %}
+    - mode: '0600'
+    {% endif %}
+    - content: {{ _value }}
+    - require:
+      - "file.directory:users_keydir_{{ name }}"
+{% endfor %}
+{% endif %}
+
+{# Sudoer file management #}
+{% set sudoers_d_filename = name %}
+{% if user.get('sudouser') %}
+users_sudoer_{{ name }}:
+  file.managed:
+    - name: {{ users.sudoers_dir }}/{{ sudoers_d_filename }}
+    - mode: '0440'
+    {% if 'sudo_rules' in user or 'sudo_defaults' in user %}
+    - content: |
+      {%- if 'sudo_defaults' in user %}
+      {%- for entry in user.get('sudo_defaults', []) %}
+        Defaults:{{ name }} {{ entry }}
+      {%- endfor %}
+      {%- endif %}
+      {%- if 'sudo_rules' in user %}
+        ########################################################################
+        # File managed by Zester (users formula).
+        # Your changes will be overwritten.
+        ########################################################################
+        #
+      {%- for rule in user.get('sudo_rules', []) %}
+        {{ name }} {{ rule }}
+      {%- endfor %}
+      {%- endif %}
+    {% endif %}
+    - require:
+      - "file.append:users_sudoer_defaults"
+{% if 'sudo_rules' in user %}
+users_sudoer_validate_{{ name }}:
+  cmd.run:
+    - command: visudo -cf {{ users.sudoers_dir }}/{{ sudoers_d_filename }} || ( rm -rvf {{ users.sudoers_dir }}/{{ sudoers_d_filename }}; exit 1 )
+    - onchanges:
+      - "file.managed:users_sudoer_{{ name }}"
+{% endif %}
+{% else %}
+users_sudoer_absent_{{ sudoers_d_filename }}:
+  file.absent:
+    - name: {{ users.sudoers_dir }}/{{ sudoers_d_filename }}
+{% endif %}
+
+{%- endif %}{# not sudoonly #}
+{% endfor %}
+
+{# ── Absent users ──────────────────────────────────────────────── #}
+{% for name, user in pillar.get('users', {}).items()
+        if user.get('absent') is defined and user.get('absent') %}
+users_absent_user_{{ name }}:
+  user.absent:
+    - name: {{ name }}
+    {% if 'purge' in user %}
+    - purge: {{ user.get('purge') }}
+    {% endif %}
+    {% if 'force' in user %}
+    - force: {{ user.get('force') }}
+    {% endif %}
+users_absent_sudoer_{{ name }}:
+  file.absent:
+    - name: {{ users.sudoers_dir }}/{{ name }}
+{% endfor %}
+
+{# ── Absent users (simple list) ───────────────────────────────── #}
+{% for user in pillar_get('absent_users', []) %}
+users_absent_user_2_{{ user }}:
+  user.absent:
+    - name: {{ user }}
+users_absent_sudoer_2_{{ user }}:
+  file.absent:
+    - name: {{ users.sudoers_dir }}/{{ user }}
+{% endfor %}
+
+{# ── Absent groups (simple list) ──────────────────────────────── #}
+{% for group in pillar_get('absent_groups', []) %}
+users_absent_group_{{ group }}:
+  group.absent:
+    - name: {{ group }}
+{% endfor %}

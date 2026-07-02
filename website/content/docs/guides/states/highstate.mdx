@@ -1,0 +1,113 @@
+---
+title: "Highstate"
+---
+
+Highstate applies all states matched by the [state top file](/docs/guides/states/topfile) to targeted peels. It is the primary mechanism for converging a peel's entire configuration in a single operation — analogous to Salt's `state.highstate`.
+
+---
+
+## Concept
+
+A highstate run answers the question: "What should this peel look like according to the top file?" Rather than applying a single named state, highstate evaluates the full top file, collects every state that matches the peel, and executes them all as a unified DAG.
+
+The workflow is:
+
+1. **Top file resolution** — Render `top.zy` with the peel's facts and settings, then evaluate every targeting pattern to determine which state references match.
+2. **Include expansion** — For each matched state reference, load its `.zy` file and recursively resolve any `include` directives.
+3. **Extend merging** — Apply any `extend` blocks to modify included states (requisite lists are appended, other keys are replaced).
+4. **DAG execution** — Merge all collected states into a single DAG, resolve execution levels, and run them with the standard [execution model](/docs/guides/states/execution).
+
+```
+top.zy → matched state refs → include expansion → extend merging → DAG → execution
+```
+
+---
+
+## Usage
+
+### CLI
+
+```bash
+# Apply highstate to all peels
+zester '*' state.highstate
+
+# Apply highstate to web servers
+zester 'web*' state.highstate
+
+# Apply highstate with fact-based targeting
+zester 'G@role:webserver' state.highstate
+
+# Apply highstate directly to a peel (bypass master)
+zester 'web-01' state.highstate --direct
+```
+
+---
+
+## Highstate vs state.apply
+
+| | `state.apply` | `state.highstate` |
+|---|---|---|
+| **Input** | A single named state (e.g., `webserver`) | The state top file (`top.zy`) |
+| **Scope** | Only the named state and its includes | All states matching the peel in top.zy |
+| **Use case** | Apply or test a specific state | Converge the entire peel configuration |
+| **Top file** | Not used | Required |
+
+Use `state.apply` when you want to apply a specific state file — for example, deploying a configuration change or testing a new state. Use `state.highstate` when you want to ensure the peel's full configuration matches the declared desired state.
+
+<Callout type="info" title="When to use which">
+**Targeted change**: You updated the nginx configuration template and want to push it to web servers.
+
+```bash
+zester 'web*' state.apply webserver.config
+```
+
+**Full convergence**: You want all peels to match their declared state after a maintenance window.
+
+```bash
+zester '*' state.highstate
+```
+</Callout>
+
+---
+
+## Top File Requirement
+
+Highstate requires a `top.zy` file at `/data/states/top.zy`. If the file does not exist, the highstate run fails with an error:
+
+```
+compiler: read state top file: open /data/states/top.zy: no such file or directory
+```
+
+---
+
+## Empty Result
+
+If `top.zy` exists but no states match the targeted peel (no patterns match its ID or facts), highstate reports an empty result:
+
+```
+web-01:
+    No states matched in top.zy
+```
+
+The peel returns this as an error via `respondError`. Check the peel's facts and the targeting patterns in `top.zy` if you expected states to match.
+
+---
+
+## Execution Order
+
+When multiple state references match a peel, they are loaded and merged in the order they appear in the top file (across all environments). Within the merged state set, execution order is determined entirely by the DAG — explicit requisite declarations control which states run before others.
+
+States without any requisite relationships to each other may execute in parallel, regardless of the order they appeared in `top.zy`.
+
+<Callout type="success" title="Controlling order across states">
+If state `webserver` must run after state `common.packages`, add an explicit `require` dependency in the webserver state file. Do not rely on top file ordering for execution sequencing — use requisites.
+</Callout>
+
+---
+
+## See Also
+
+- [State Top File](/docs/guides/states/topfile) — Top file format and targeting patterns
+- [State Composition](/docs/guides/states/composition) — Include and extend directives
+- [Dependencies](/docs/guides/states/dependencies) — Requisite types and DAG resolution
+- [Execution Model](/docs/guides/states/execution) — Check/Apply/Revert lifecycle

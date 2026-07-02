@@ -1,0 +1,75 @@
+---
+title: "file.touch"
+description: "Creates an empty file when it is missing, or updates the modification time of an existing file. Modeled after Salt's file.touch module."
+---
+
+**Source**: `pkg/state/modules/file_touch.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Absolute path to the file to touch. `path` is accepted as an alias. |
+| `makedirs` | `bool` | No | `false` | Create parent directories (mode `0755`) if needed. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+- If the file exists, the state reports **no changes needed** — regardless of its timestamps.
+- If the file does not exist, changes are needed.
+
+---
+
+## Apply Behavior
+
+1. Creates parent directories when `makedirs` is set.
+2. If the file is missing, creates it empty with mode `0644`.
+3. If the file already exists (only reached on a force-apply, e.g. via `watch`), runs the system `touch` command to update its modification time.
+
+---
+
+## Revert Behavior
+
+- If Apply created the file, Revert removes it.
+- If Apply only updated the mtime of an existing file, Revert is a no-op (`Changed: false`) — the previous timestamp is not restored.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+zester 'web-01' file.touch /var/run/myapp/.initialized
+```
+
+### State File
+
+**Create a marker file:**
+
+```yaml
+/var/lib/myapp/.provisioned:
+  file.touch:
+    - makedirs: true
+```
+
+**Bump a reload trigger whenever config changes:**
+
+```yaml
+/etc/myapp/reload-trigger:
+  file.touch:
+    - watch:
+      - "file.managed:/etc/myapp/config.yaml"
+```
+
+---
+
+## Divergences from Salt
+
+- **The mtime is not refreshed on a normal run when the file already exists.** Salt's `file.touch` updates atime/mtime every time it runs; Zester's Check reports an existing file as satisfied, so the timestamp-update path in Apply only executes when the state is force-applied (for example by a `watch` requisite).
+- Salt's `atime` and `mtime` parameters (setting explicit timestamps) are not supported.

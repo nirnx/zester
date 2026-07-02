@@ -1,0 +1,3 @@
+greet-user:
+  greeter.hello:
+    - name: "Zester Developer"

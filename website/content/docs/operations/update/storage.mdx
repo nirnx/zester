@@ -1,0 +1,67 @@
+---
+title: "Update Storage Model"
+description: "This page documents self-update persistence in JetStream KV and Object Store."
+---
+
+## Buckets and Object Store
+
+Source of truth: `pkg/bus/kv.go`.
+
+| Storage | Name | Key Pattern | TTL | History |
+|---|---|---|---|---|
+| KV | `update-manifests` | `<component>.<goos>.<goarch>.<version>` | none | 5 |
+| KV | `update-status` | `<component>.<id>` | 60s | 1 |
+| KV | `update-rollouts` | `<rollout-id>` | none | 10 |
+| Object Store | `update-binaries` | `<component>/<goos>/<goarch>/<version>` | 30 days | n/a |
+
+## Manifest Schema
+
+Source of truth: `pkg/update/manifest.go`.
+
+`Manifest` fields:
+
+- `version`
+- `component`
+- `goos`
+- `goarch`
+- `sha256`
+- `size`
+- `object_key`
+- `published`
+- `publisher`
+
+Key helpers:
+
+- Manifest KV key: `<component>.<goos>.<goarch>.<version>`
+- Binary object key: `<component>/<goos>/<goarch>/<version>`
+
+## Binary Integrity
+
+Binary integrity is verified twice:
+
+1. Upload: SHA-256 is computed and stored in manifest.
+2. Download: object bytes are hashed and matched against expected digest before staging.
+
+## Rollout State Persistence
+
+Source of truth: `pkg/update/rollout.go`.
+
+- Rollout state is stored as one KV entry per rollout ID.
+- Save semantics:
+  - first write: KV `Create` (revision 0 -> new revision)
+  - subsequent writes: KV `Update` with last revision (CAS)
+- CAS prevents concurrent stale writers from silently overwriting rollout state.
+
+## Node Status Persistence
+
+Source of truth: `pkg/update/status.go`.
+
+- Watchdog reporter periodically writes `NodeStatus` to `update-status`.
+- Entry expiry (60s TTL) naturally drops offline nodes from active status lists.
+- Rollout controller uses these entries to infer node platform (`goos`/`goarch`) and select matching manifests.
+
+## Operational Notes
+
+- `update-status` is ephemeral by design (heartbeat-like signal).
+- `update-rollouts` retains progress/history until manually purged.
+- `update-binaries` has bounded retention (30 days); keep manifests aligned with available objects.

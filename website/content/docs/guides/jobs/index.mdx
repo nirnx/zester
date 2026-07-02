@@ -1,0 +1,79 @@
+---
+title: "Overview"
+---
+
+Jobs are the execution unit in Zester. Every action dispatched from the master to one or more peels — whether applying states, running ad-hoc commands, or collecting data — is wrapped in a **job**. Jobs provide tracking, timeout handling, status aggregation, and persistent result storage.
+
+---
+
+## How Jobs Work
+
+1. The CLI creates a `Job` with a unique KSUID-based identifier (JID), a function to execute, arguments, and a list of target peels.
+2. The CLI dispatches the job to the master via `zester.dispatch` (request/reply). In a multi-master deployment, NATS queue group `zester.masters` delivers the request to exactly one master.
+3. The receiving master sets the job's `Owner` field to its own instance ID, stores the job in the NATS KV `jobs` bucket, and publishes an `ExecRequest` to each target peel via `zester.cmd.<peel-id>`.
+4. Each peel executes the function and publishes its result (return) to `zester.job.<jid>.return.<peel-id>`.
+5. A `Watcher` goroutine on the **owning master** tracks returns. When all targets have returned — or the timeout expires — the watcher finalizes the job with an aggregated status.
+6. The final job state and returns are persisted in NATS KV for later retrieval.
+7. If the owning master fails, surviving masters detect the missing heartbeat and **recover orphaned jobs** by creating new watchers. See [High Availability](/docs/architecture/ha) for details.
+
+---
+
+## Section Contents
+
+<Cards>
+<Card title="Dispatching" href="/docs/guides/jobs/dispatching">
+How to dispatch jobs: target expressions, functions, arguments, and timeout behavior.
+</Card>
+<Card title="Tracking" href="/docs/guides/jobs/tracking">
+Job tracking: KSUID format, status lifecycle, KV persistence, returns, and the event stream.
+</Card>
+<Card title="Timeouts & Cancellation" href="/docs/guides/jobs/timeouts">
+Timeout handling, cancellation, partial results, and retry patterns.
+</Card>
+</Cards>
+
+
+---
+
+## Key Concepts
+
+| Concept | Description |
+|---|---|
+| **JID** | Job ID — a KSUID (K-Sorted Unique ID) that is time-ordered and globally unique |
+| **Function** | The operation to execute (e.g., `state.apply`, `cmd.run`) |
+| **Targets** | The list of peel IDs that should execute the job |
+| **Owner** | The master instance ID that dispatched and is watching the job (for multi-master HA) |
+| **Epoch** | KV revision from ownership CAS; serves as a fencing token to prevent duplicate execution |
+| **Return** | The execution result from a single peel |
+| **Ack** | Optional acknowledgment subject reserved by the protocol (currently not emitted by peel runtime) |
+| **Watcher** | A master-side goroutine that tracks job progress and finalizes status |
+| **Status** | The lifecycle state of a job: pending, claimed, running, complete, partial, timeout, failed, canceled |
+
+---
+
+## NATS Subjects
+
+Jobs use a structured NATS subject hierarchy:
+
+| Subject | Direction | Purpose |
+|---|---|---|
+| `zester.dispatch` | CLI -> Master | Submit a job for dispatch (request/reply, queue group: `zester.masters`) |
+| `zester.cmd.<peel-id>` | Master -> Peel | Deliver ExecRequest to a target peel |
+| `zester.job.<jid>.dispatch` | Master -> JetStream | Job dispatched event (logged) |
+| `zester.job.<jid>.ack.<peel-id>` | Peel -> Master | Peel acknowledges an accepted dispatch (published after fencing/dedup, before execution) |
+| `zester.job.<jid>.return.<peel-id>` | Peel -> Master/CLI | Peel publishes execution result |
+| `zester.job.<jid>.status` | Master -> JetStream | Aggregated job status (finalization) |
+| `zester.job.<jid>.cancel` | CLI -> Master -> Peels | Cancellation signal (stops peel execution) |
+
+---
+
+## KV Storage
+
+Jobs and returns are persisted in NATS JetStream KV buckets:
+
+| Bucket | Key Format | TTL | History | Content |
+|---|---|---|---|---|
+| `jobs` | `<jid>` | 7 days | 10 revisions | Full job spec and current status |
+| `job-returns` | `<jid>.<peel-id>` | 7 days | 1 revision | Incremental per-peel returns (the sole store for return payloads) |
+
+The `jobs` bucket keeps 10 revisions of history per key, allowing you to trace how a job's status evolved over time (pending -> running -> complete). Both buckets have a 7-day TTL, after which entries are automatically purged.

@@ -1,0 +1,12 @@
+services:
+  master-2:
+    build: .
+    command: ["zester-master", "--config", "/data/nats/master.yaml"]
+    depends_on:
+      nats:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth:ro
+      - state-data:/data/states
+      - settings-data:/data/settings:ro
+      - nats-config:/data/nats:ro

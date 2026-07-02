@@ -1,0 +1,719 @@
+{
+  "components": {
+    "schemas": {
+      "DispatchRequest": {
+        "properties": {
+          "args": {
+            "additionalProperties": true,
+            "description": "Arguments for the function.",
+            "example": {
+              "command": "hostname -f"
+            },
+            "type": "object"
+          },
+          "function": {
+            "description": "Module function to execute (e.g. cmd.run, test.ping, state.apply).",
+            "example": "cmd.run",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Arbitrary key-value metadata attached to the job.",
+            "example": {
+              "triggered_by": "ci-pipeline-42"
+            },
+            "type": "object"
+          },
+          "target": {
+            "description": "Target expression (glob, compound, fact-based, etc.). Either target or targets must be provided.",
+            "example": "web-*",
+            "type": "string"
+          },
+          "targets": {
+            "description": "Explicit list of peel IDs. Bypasses target resolution when provided.",
+            "example": [
+              "web-01",
+              "web-02"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timeout": {
+            "description": "Go duration string for job timeout. Default 60s.",
+            "example": "30s",
+            "type": "string"
+          }
+        },
+        "required": [
+          "function"
+        ],
+        "type": "object"
+      },
+      "DispatchResponse": {
+        "properties": {
+          "jid": {
+            "description": "Job ID assigned to this dispatch.",
+            "example": "2OVxgJl5Mn3yB8R4TqK1v6ZN9wP",
+            "type": "string"
+          },
+          "status": {
+            "description": "Initial job status.",
+            "example": "pending",
+            "type": "string"
+          },
+          "targets": {
+            "description": "Resolved peel IDs that will execute this job.",
+            "example": [
+              "web-01",
+              "web-02"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "EnrollmentDecisionRequest": {
+        "properties": {
+          "reason": {
+            "description": "Optional human-readable justification recorded on the enrollment record.",
+            "example": "host decommissioned",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EnrollmentItem": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "id": {
+            "example": "enr-2OVxgJl5Mn3yB8R4TqK1v6ZN9wP",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "peel_id": {
+            "example": "web-01",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "issued",
+              "active",
+              "revoked"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "description": "Human-readable error message.",
+            "example": "target is required",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "JobStatusResponse": {
+        "properties": {
+          "complete": {
+            "description": "True when the job has reached a terminal state.",
+            "type": "boolean"
+          },
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "function": {
+            "example": "cmd.run",
+            "type": "string"
+          },
+          "jid": {
+            "example": "2OVxgJl5Mn3yB8R4TqK1v6ZN9wP",
+            "type": "string"
+          },
+          "returns": {
+            "items": {
+              "$ref": "#/components/schemas/ReturnItem"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "Current job status: pending, claimed, running, complete, partial, timeout, failed, canceled.",
+            "example": "complete",
+            "type": "string"
+          },
+          "targets": {
+            "example": [
+              "web-01"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "updated": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ReturnItem": {
+        "properties": {
+          "duration": {
+            "description": "Execution duration in nanoseconds.",
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "peel_id": {
+            "example": "web-01",
+            "type": "string"
+          },
+          "return_data": {
+            "description": "Module-specific return data."
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "token",
+        "description": "API token read from a configured token file on the master. Pass as \"Bearer <token>\".",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "REST API for job dispatch and enrollment management on zester-master.",
+    "title": "Zester Master API",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/enrollments": {
+      "get": {
+        "description": "Returns enrollment records filtered by state. Defaults to pending enrollments only.",
+        "operationId": "listEnrollments",
+        "parameters": [
+          {
+            "description": "Filter by enrollment state. Use 'all' to return all states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "pending",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "issued",
+                "active",
+                "revoked",
+                "all"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EnrollmentItem"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "List of enrollment records"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid state parameter"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List enrollments",
+        "tags": [
+          "enrollments"
+        ]
+      }
+    },
+    "/enrollments/{id}/approve": {
+      "post": {
+        "description": "Approves a pending enrollment request. The authenticated API username is recorded as the approver.",
+        "operationId": "approveEnrollment",
+        "parameters": [
+          {
+            "description": "Enrollment ID (e.g. enr-...)",
+            "example": "enr-2OVxgJl5Mn3yB8R4TqK1v6ZN9wP",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentItem"
+                }
+              }
+            },
+            "description": "Enrollment approved successfully"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Enrollment not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid state transition (e.g. already approved)"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Approve enrollment",
+        "tags": [
+          "enrollments"
+        ]
+      }
+    },
+    "/enrollments/{id}/reject": {
+      "post": {
+        "description": "Rejects a pending enrollment request. The authenticated API username is recorded as the decider; an optional reason may be supplied in the request body.",
+        "operationId": "rejectEnrollment",
+        "parameters": [
+          {
+            "description": "Enrollment ID (e.g. enr-...)",
+            "example": "enr-2OVxgJl5Mn3yB8R4TqK1v6ZN9wP",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentDecisionRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentItem"
+                }
+              }
+            },
+            "description": "Enrollment rejected successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid JSON body"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Enrollment not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid state transition (e.g. not pending)"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Reject enrollment",
+        "tags": [
+          "enrollments"
+        ]
+      }
+    },
+    "/enrollments/{id}/revoke": {
+      "post": {
+        "description": "Revokes an approved, issued, or active enrollment. The authenticated API username is recorded as the decider; an optional reason may be supplied in the request body.",
+        "operationId": "revokeEnrollment",
+        "parameters": [
+          {
+            "description": "Enrollment ID (e.g. enr-...)",
+            "example": "enr-2OVxgJl5Mn3yB8R4TqK1v6ZN9wP",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentDecisionRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentItem"
+                }
+              }
+            },
+            "description": "Enrollment revoked successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid JSON body"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Enrollment not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid state transition (e.g. already revoked)"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Revoke enrollment",
+        "tags": [
+          "enrollments"
+        ]
+      }
+    },
+    "/jobs": {
+      "post": {
+        "description": "Resolves a target expression to peel IDs, creates a job, and dispatches it for execution. Returns immediately with the job ID.",
+        "operationId": "dispatchJob",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchResponse"
+                }
+              }
+            },
+            "description": "Job accepted and dispatched"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error (missing fields, invalid timeout, no matching peels)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Job ID conflict (duplicate JID)"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Dispatch job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/jobs/{jid}": {
+      "get": {
+        "description": "Retrieves the current status of a job and any returns received from peels.",
+        "operationId": "getJob",
+        "parameters": [
+          {
+            "description": "Job ID (KSUID)",
+            "example": "2OVxgJl5Mn3yB8R4TqK1v6ZN9wP",
+            "in": "path",
+            "name": "jid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            },
+            "description": "Job state with returns"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Job not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get job status and returns",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPIJSON",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OpenAPI specification in JSON format"
+          }
+        },
+        "summary": "OpenAPI spec (JSON)",
+        "tags": [
+          "docs"
+        ]
+      }
+    },
+    "/openapi.yaml": {
+      "get": {
+        "operationId": "getOpenAPIYAML",
+        "responses": {
+          "200": {
+            "content": {
+              "application/yaml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OpenAPI specification in YAML format"
+          }
+        },
+        "summary": "OpenAPI spec (YAML)",
+        "tags": [
+          "docs"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ]
+}

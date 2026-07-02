@@ -1,0 +1,18 @@
+---
+title: "Overview"
+description: "Zester's self-update system is split across the CLI, master rollout controller, and node-local watchdog."
+---
+
+## Components
+
+- `zester update` CLI: publish binaries, start/abort rollouts, inspect rollout/node status, trigger rollback.
+- Master rollout controller (`pkg/update/rollout.go`): coordinates batch updates across target nodes.
+- Watchdog (`cmd/zester-watchdog` + `pkg/update`): supervises the child process, applies binary swaps, reports status.
+- NATS storage (`pkg/bus/kv.go`): manifests, rollout state, node status heartbeats, and binary object store.
+
+## Read Next
+
+- [Update Architecture](/docs/operations/update/architecture)
+- [Watchdog Runtime](/docs/operations/update/watchdog)
+- [Update Storage Model](/docs/operations/update/storage)
+- [CLI Update Commands](/docs/reference/cli/update)

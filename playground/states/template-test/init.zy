@@ -1,0 +1,10 @@
+/tmp/template-test.txt:
+  file.managed:
+    - source: /data/states/template-test/files/config.j2
+    - template: jinja
+    - context:
+        app_port: "8080"
+    - defaults:
+        app_port: "3000"
+        log_level: info
+    - mode: "0644"

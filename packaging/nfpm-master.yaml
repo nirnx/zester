@@ -1,0 +1,22 @@
+name: zester-master
+arch: "${GOARCH}"
+platform: linux
+version: "${VERSION}"
+maintainer: "Zester Maintainers"
+description: "Zester master daemon"
+license: "Proprietary"
+depends:
+  - zester-watchdog (>= ${VERSION})
+contents:
+  - src: bin/release/zester-master
+    dst: /usr/local/bin/zester-master
+    file_info:
+      mode: 0755
+  - src: packaging/systemd/zester-master.service
+    dst: /lib/systemd/system/zester-master.service
+  - src: packaging/config/master.yaml
+    dst: /etc/zester/master.yaml
+    type: config|noreplace
+scripts:
+  postinstall: packaging/scripts/postinstall-master.sh
+  preremove: packaging/scripts/preremove-master.sh

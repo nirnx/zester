@@ -1,0 +1,63 @@
+---
+title: "pip.installed"
+description: "Ensures a Python package is installed via pip. Supports version pinning and requirements files."
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Package name to install (mutually exclusive with `requirements`) |
+| `version` | string | — | Pin to a specific version (e.g. `"2.28.0"`) |
+| `requirements` | string | — | Path to a requirements.txt file; when set, `name` is ignored for install |
+| `bin` | string | `pip3` | Path or name of the pip binary to use |
+
+## Behavior
+
+**Check**
+
+- If `requirements` is set: always returns `NeedsChange: true` (cannot verify a requirements file without installing).
+- Otherwise: runs `<bin> show <package>`. Exit code non-zero → `NeedsChange: true`.
+- If `version` is set, parses the `Version:` line from `pip show` output and compares. Mismatch → `NeedsChange: true`.
+
+**Apply**
+
+- Package mode: `<bin> install <package>[==version]`.
+- Requirements mode: `<bin> install -r <requirements>`.
+
+**Revert**
+
+- Package mode: `<bin> uninstall -y <package>`.
+- Requirements mode: returns `Changed: false` (cannot determine which packages to remove from a requirements file).
+
+## Examples
+
+```yaml
+# Install latest requests
+requests:
+  pip.installed: []
+
+# Pin to a specific version
+requests:
+  pip.installed:
+    - version: "2.28.0"
+
+# Install from requirements file
+myapp-dependencies:
+  pip.installed:
+    - requirements: /opt/myapp/requirements.txt
+    - require:
+      - pkg.installed:python3-pip
+
+# Use a virtual environment's pip
+myapp-venv-requests:
+  pip.installed:
+    - name: requests
+    - bin: /opt/myapp/venv/bin/pip
+```
+
+## Notes
+
+- The module requires `pip3` (or the configured `bin`) to be available on `PATH`.
+- There is no cache refresh step; run `pip install --upgrade pip` separately if needed.
+- Version comparison uses the `Version:` field from `pip show` output. Pre-release suffixes are compared as strings.

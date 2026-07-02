@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/* ---------------------------------------------------------------------------
+ * Zester theme — citrus on rind.
+ * pith  #FAFAF7 / ink #171E1A   (light)
+ * rind  #0C1210 / pale #E8EDE8  (dark)
+ * lime  #4D7C0F light · #A3E635 dark
+ * zest  #B45309 light · #FBBF24 dark  (used sparingly — the "Salt" side)
+ * ------------------------------------------------------------------------- */
+:root {
+  --color-fd-background: hsl(60 14% 98%);
+  --color-fd-foreground: hsl(150 13% 10%);
+  --color-fd-muted: hsl(80 10% 94%);
+  --color-fd-muted-foreground: hsl(150 8% 38%);
+  --color-fd-card: hsl(60 14% 97%);
+  --color-fd-card-foreground: hsl(150 13% 10%);
+  --color-fd-popover: hsl(60 14% 98%);
+  --color-fd-popover-foreground: hsl(150 13% 10%);
+  --color-fd-border: hsl(90 8% 88%);
+  --color-fd-primary: hsl(86 82% 27%);
+  --color-fd-primary-foreground: hsl(60 14% 98%);
+  --color-fd-secondary: hsl(80 12% 93%);
+  --color-fd-secondary-foreground: hsl(150 13% 14%);
+  --color-fd-accent: hsl(84 30% 90%);
+  --color-fd-accent-foreground: hsl(150 13% 12%);
+  --color-fd-ring: hsl(86 82% 27%);
+
+  --zester-zest: hsl(28 88% 37%);
+  --zester-terminal: hsl(160 20% 7%);
+}
+
+.dark {
+  --color-fd-background: hsl(160 20% 5.5%);
+  --color-fd-foreground: hsl(120 8% 90%);
+  --color-fd-muted: hsl(160 12% 11%);
+  --color-fd-muted-foreground: hsl(120 6% 62%);
+  --color-fd-card: hsl(160 16% 7.5%);
+  --color-fd-card-foreground: hsl(120 8% 90%);
+  --color-fd-popover: hsl(160 16% 8%);
+  --color-fd-popover-foreground: hsl(120 8% 90%);
+  --color-fd-border: hsl(150 10% 16%);
+  --color-fd-primary: hsl(82 78% 55%);
+  --color-fd-primary-foreground: hsl(160 20% 6%);
+  --color-fd-secondary: hsl(160 12% 12%);
+  --color-fd-secondary-foreground: hsl(120 8% 88%);
+  --color-fd-accent: hsl(160 12% 14%);
+  --color-fd-accent-foreground: hsl(120 8% 92%);
+  --color-fd-ring: hsl(82 78% 55%);
+
+  --zester-zest: hsl(43 96% 56%);
+  --zester-terminal: hsl(160 20% 4.5%);
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+.font-display {
+  font-family: var(--font-display), var(--font-sans, Inter), sans-serif;
+}
+
+/* Terminal hero: staggered line reveal on load */
+@keyframes zester-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.terminal-line {
+  opacity: 0;
+  animation: zester-line-in 0.3s ease-out forwards;
+  animation-delay: calc(var(--line, 0) * 220ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-line {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* Salt → Zester translation strip */
+.swap-pair .swap-salt {
+  color: var(--zester-zest);
+  transition: opacity 0.2s ease;
+}
+
+.swap-pair:hover .swap-salt {
+  opacity: 0.55;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}

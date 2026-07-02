@@ -1,0 +1,361 @@
+---
+title: "Querying Facts"
+description: "Facts can be queried from the CLI, inside templates, directly from NATS KV, or programmatically using the Go index API. This page covers every method."
+---
+
+## Dot-Notation Querying
+
+All facts use **dot notation** to traverse the nested map. The top-level key is the collector namespace, followed by the field name:
+
+```
+os.name              → "linux"
+network.hostname     → "web-01"
+cpu.physical_count   → 4
+memory.used_percent  → 43.75
+disk.mounts          → [{...}, {...}]
+role                 → "webserver"       (custom fact -- top level, no namespace)
+datacenter           → "us-east-1"      (custom fact)
+```
+
+Dot notation works consistently across the CLI, templates, and Go code. It is implemented by the `Facts.Get()` method in `pkg/facts/collector.go`:
+
+```go
+// Get retrieves a nested fact value using dot notation.
+func (f Facts) Get(key string) (any, bool) {
+    return getNestedValue(f, key)
+}
+```
+
+The key is split on `.` characters and each segment is used to traverse one level of the map.
+
+## Direct Execution (Salt-Style)
+
+The `facts.*` modules query facts directly from peels via NATS request/reply, similar to Salt's `grains.*` functions. These run on the peel and return live in-memory facts.
+
+### facts.items
+
+Return all facts for the targeted peels (equivalent to Salt's `grains.items`):
+
+```bash
+$ zester '*' facts.items
+web-01:
+    os:
+      name: linux
+      family: debian
+      ...
+    network:
+      hostname: web-01
+      ...
+    cpu:
+      count: 8
+      ...
+    role: webserver
+    datacenter: us-east-1
+```
+
+### facts.get
+
+Look up a specific fact by dot-separated key path (equivalent to Salt's `grains.get`):
+
+```bash
+$ zester 'web-01' facts.get os.family
+web-01:
+    debian
+
+$ zester 'web-01' facts.get datacenter
+web-01:
+    us-east-1
+
+# With a default value if the key is missing
+$ zester 'web-01' facts.get tier default=standard
+web-01:
+    standard
+```
+
+### facts.keys
+
+List top-level fact namespace names (equivalent to Salt's `grains.ls`):
+
+```bash
+$ zester '*' facts.keys
+web-01:
+    cpu
+    datacenter
+    disk
+    memory
+    network
+    os
+    role
+    tier
+```
+
+### Output Formats
+
+All `facts.*` modules support `--format json` and `--format yaml`:
+
+```bash
+$ zester 'web-01' facts.items --format json
+$ zester 'web-01' facts.get os.name --format yaml
+```
+
+---
+
+## Management CLI
+
+The `zester kv fact get` command retrieves facts from the NATS KV bucket. Unlike `facts.*` modules, this reads from KV without contacting the peel.
+
+### Get All Facts for a Peel
+
+```bash
+$ zester kv fact get web-01
+{
+  "os": {
+    "name": "linux",
+    "family": "debian",
+    "platform": "ubuntu",
+    "platform_version": "22.04",
+    "arch": "amd64",
+    "kernel": "6.1.0-18-amd64",
+    "kernel_arch": "x86_64",
+    "uptime": 864523,
+    "boot_time": 1707321600
+  },
+  "network": {
+    "hostname": "web-01",
+    "fqdn": "web-01.prod.example.com",
+    "ipv4": ["10.0.1.15"],
+    "ipv6": ["fe80::1"],
+    "interfaces": [...]
+  },
+  "cpu": { ... },
+  "memory": { ... },
+  "disk": { ... }
+}
+```
+
+### Get a Specific Fact Key
+
+Use dot notation as the second argument to drill into the map:
+
+```bash
+$ zester kv fact get web-01 os.name
+"linux"
+
+$ zester kv fact get web-01 network.ipv4
+["10.0.1.15"]
+
+$ zester kv fact get web-01 cpu.count
+8
+```
+
+### Error Handling
+
+If the key does not exist, the command exits with an error:
+
+```bash
+$ zester kv fact get web-01 os.nonexistent
+Error: fact key "os.nonexistent" not found for peel web-01
+```
+
+If the peel has not published facts yet:
+
+```bash
+$ zester kv fact get unknown-peel
+Error: get facts for unknown-peel: bus: kv get "unknown-peel": key not found
+```
+
+## Template Access
+
+Inside `.zy` template files, facts are available as the `facts` variable. Use standard Jinja2/Gonja dot notation or bracket notation:
+
+```yaml
+# Dot notation
+hostname: {{ facts.network.hostname }}
+os: {{ facts.os.name }}
+cpus: {{ facts.cpu.count }}
+
+# Bracket notation (useful for dynamic keys)
+{% set collector = "os" %}
+platform: {{ facts[collector]["platform"] }}
+```
+
+### Conditional Logic with Facts
+
+```yaml
+{% if facts.os.name == "linux" %}
+package_manager: apt
+{% elif facts.os.name == "darwin" %}
+package_manager: brew
+{% endif %}
+
+{% if facts.memory.total > 17179869184 %}
+# More than 16 GB RAM
+cache_size: large
+{% else %}
+cache_size: small
+{% endif %}
+```
+
+### Iterating Over Facts
+
+```yaml
+# List all IPv4 addresses
+{% for ip in facts.network.ipv4 %}
+allowed_ip: {{ ip }}
+{% endfor %}
+
+# List all mount points
+{% for mount in facts.disk.mounts %}
+# {{ mount.mountpoint }} - {{ mount.fstype }} ({{ mount.used_percent }}% used)
+{% endfor %}
+```
+
+### Using `facts_get()` with Defaults
+
+The `facts_get()` template function looks up a fact by dot-path key and returns an optional default if the key is not found. It uses the same dot notation as the CLI and Go APIs:
+
+```yaml
+worker_count: {{ facts_get("cpu.count", 2) }}
+log_level: {{ facts_get("log_level", "info") }}
+os_family: {{ facts_get("os.family", "unknown") }}
+
+# Without a default (returns nil if missing)
+optional: {{ facts_get("tag") }}
+```
+
+See [Template Functions](/docs/guides/templating/functions#facts_get) for full documentation and examples.
+
+## NATS KV Direct Access
+
+Facts are stored in the JetStream KV bucket named `facts`. Each key is a peel ID and the value is a MessagePack-encoded map.
+
+### Bucket Details
+
+| Property    | Value |
+|-------------|-------|
+| Bucket name | `facts` |
+| Encoding    | MessagePack |
+| History     | 5 revisions per key |
+| TTL         | None (no automatic expiry) |
+| Key format  | `<peel-id>` |
+
+### Reading with NATS CLI
+
+You can read raw facts using the NATS CLI, though the values are MessagePack-encoded:
+
+```bash
+# List all peels with facts
+nats kv ls facts
+
+# Get raw value (MessagePack binary)
+nats kv get facts web-01
+```
+
+### Reading with Go
+
+```go
+kv, err := bus.GetBucket(ctx, js, bus.BucketFacts)
+if err != nil {
+    log.Fatal(err)
+}
+
+var facts map[string]any
+if err := bus.KVGet(ctx, kv, "web-01", &facts); err != nil {
+    log.Fatal(err)
+}
+
+fmt.Println(facts["os"].(map[string]any)["name"])
+// Output: linux
+```
+
+## Facts Index API
+
+On the master side, the `facts.Index` provides fast lookup for targeting. The index flattens all facts into dot-separated key-value pairs and supports glob matching.
+
+### How the Index Works
+
+Facts are flattened before indexing:
+
+```
+Original:  {"os": {"name": "linux", "arch": "amd64"}}
+Flattened: {"os.name": "linux", "os.arch": "amd64"}
+```
+
+Each flattened key-value pair is stored as a composite key `"fact.key\x00value"` mapped to the set of peel IDs that have that combination. This enables constant-time exact lookups and efficient glob scans.
+
+### Index.Match
+
+`Match(key, pattern)` finds all peels where a specific fact key's value matches a glob pattern:
+
+```go
+idx := facts.NewIndex()
+
+// Update index when facts arrive
+idx.Update("web-01", factsWeb01)
+idx.Update("db-01", factsDB01)
+
+// Exact match
+peels := idx.Match("os.name", "linux")
+// → ["db-01", "web-01"]
+
+// Glob match
+peels = idx.Match("network.hostname", "web-*")
+// → ["web-01"]
+
+// Wildcard: all peels with os.name set
+peels = idx.Match("os.name", "*")
+// → ["db-01", "web-01"]
+```
+
+### Index.MatchKeyGlob
+
+`MatchKeyGlob(keyPattern, valuePattern)` supports glob patterns on **both** the key and value:
+
+```go
+// Match any network-related fact containing "web"
+peels := idx.MatchKeyGlob("network.*", "web-*")
+// → ["web-01"]
+```
+
+### Glob Pattern Syntax
+
+| Pattern    | Meaning |
+|------------|---------|
+| `*`        | Matches any sequence of characters |
+| `?`        | Matches exactly one character |
+| `linux`    | Exact match |
+| `web-*`    | Starts with `web-` |
+| `*-prod`   | Ends with `-prod` |
+| `db-0?`    | Matches `db-01`, `db-02`, etc. |
+
+### Additional Index Methods
+
+```go
+// Get flattened facts for a specific peel
+flat := idx.GetPeelFacts("web-01")
+// → {"os.name": "linux", "os.arch": "amd64", "network.hostname": "web-01", ...}
+
+// List all indexed peel IDs
+ids := idx.PeelIDs()
+// → ["db-01", "web-01"]
+
+// Remove a peel from the index
+idx.Remove("web-01")
+```
+
+## Facts Watch (Master Side)
+
+The master can watch the facts KV bucket for real-time updates using `facts.Watch`:
+
+```go
+cancel, err := facts.Watch(ctx, js, func(peelID string, f facts.Facts) {
+    log.Printf("Facts updated for %s", peelID)
+    index.Update(peelID, f)
+}, logger)
+if err != nil {
+    log.Fatal(err)
+}
+defer cancel()
+```
+
+The watch callback fires for every KV put operation, including initial values and scheduled collector updates. Delete and purge operations are silently skipped.

@@ -1,0 +1,85 @@
+---
+title: "Query Modules"
+description: "Query modules bypass the state registry and runner. They are handled as special cases in the peel's exec handler because they need direct access to the facts manager or settings resolver."
+---
+
+<Callout type="info" title="Not in the registry">
+Unlike state modules, query modules cannot be used in `.zy` state files. They are CLI-only operations for inspecting peel data.
+</Callout>
+
+---
+
+## facts.items
+
+Returns all collected facts as a key-value map.
+
+```bash
+zester 'web-01' facts.items
+```
+
+See [Querying Facts](/docs/guides/facts/querying) for full documentation.
+
+---
+
+## facts.get
+
+Returns the value of a single fact by key. Supports dot-notation for nested keys. An optional `default` argument specifies the value to return when the key does not exist.
+
+```bash
+zester 'web-01' facts.get os.family
+zester 'web-01' facts.get network.default_ipv4
+zester 'web-01' facts.get custom.datacenter default=unknown
+```
+
+---
+
+## facts.keys
+
+Returns a list of all available fact keys.
+
+```bash
+zester '*' facts.keys
+```
+
+---
+
+## facts.set
+
+Sets a custom fact on the peel. The value is written to `/etc/zester/facts` and persists across peel restarts. The in-memory facts are also updated immediately so the fact is available right away without a restart.
+
+```bash
+zester 'web-01' facts.set datacenter us-east-1
+```
+
+---
+
+## settings.items
+
+Returns all resolved settings for the peel. The peel serves its cached settings — resolved at startup and re-resolved whenever settings change in KV. If the peel has not resolved settings yet, the query returns an error (`settings not yet resolved on this peel`).
+
+```bash
+zester 'web-01' settings.items
+```
+
+See [Settings](/docs/guides/settings) for full documentation.
+
+---
+
+## settings.get
+
+Returns the value of a single setting by key. Supports dot-notation and an optional default value.
+
+```bash
+zester 'web-01' settings.get database.port
+zester 'web-01' settings.get database.port default=5432
+```
+
+---
+
+## settings.keys
+
+Returns a list of all available settings keys.
+
+```bash
+zester '*' settings.keys
+```

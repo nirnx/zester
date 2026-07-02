@@ -1,0 +1,211 @@
+---
+title: "Configuration"
+description: "Basket functions are configured through the settings system (not the peel YAML config). The peel reads basket_functions from its compiled settings, which are rendered by the master and delivered via NATS KV."
+---
+
+---
+
+## Settings Configuration
+
+The `basket_functions` setting defines which functions produce shareable data and their refresh intervals. Each key is a function name, and the value is a duration string:
+
+```yaml title="settings/common/base.zy"
+basket_functions:
+  default_ipv4: "5m"
+  network.hostname: "5m"
+```
+
+The peel's `basket.ParseFunctions()` reads `basket_functions` from the compiled settings map and returns a map of function name to refresh interval.
+
+### Configuration Format
+
+| Setting Key | Type | Description |
+|---|---|---|
+| `basket_functions` | `map[string]string` | Map of function name to refresh interval (duration string). Default interval is `5m` if the duration is invalid. |
+
+---
+
+## Basket Functions
+
+Basket functions reference fact keys. When the basket fires, it reads the current value from the peel's collected facts and publishes it to the NATS KV `basket` bucket.
+
+```yaml title="settings/common/base.zy"
+basket_functions:
+  default_ipv4: "5m"
+  network.hostname: "10m"
+  network.fqdn: "30m"
+```
+
+The function name uses dot-notation to look up nested fact values (e.g., `network.hostname` reads `facts["network"]["hostname"]`).
+
+---
+
+## What Gets Published
+
+When a peel starts (or when the interval fires), it:
+
+1. Executes the configured function (e.g., `network.ip_addrs`).
+2. Serializes the result with MessagePack.
+3. Stores the result in the NATS KV `basket` bucket with the key `<peel-id>.<function>`.
+
+```
+Peel "web-01" executes network.ip_addrs
+  -> Result: "10.0.1.50"
+  -> KV PUT: basket/web-01.network.ip_addrs = <msgpack("10.0.1.50")>
+```
+
+### Refresh Cycle
+
+```
+Peel startup
+  │
+  ├── For each configured basket function:
+  │     ├── Execute function immediately
+  │     ├── Publish result to KV
+  │     └── Start periodic timer (interval)
+  │
+  └── On each interval tick:
+        ├── Re-execute function
+        └── Update KV with new result
+```
+
+All configured functions run immediately at peel startup, so basket data is available as soon as the peel connects to NATS.
+
+---
+
+## Update Interval
+
+The `interval` field controls how frequently a peel re-publishes its basket data. If omitted, it defaults to `5m` (five minutes).
+
+Choose intervals based on how quickly the data changes and how critical freshness is:
+
+| Function Type | Suggested Interval | Rationale |
+|---|---|---|
+| Network addresses | 5m | IPs rarely change; frequent enough for failover |
+| Disk usage | 15m | Changes slowly; avoid unnecessary KV writes |
+| Application version | 1h | Only changes on deploy |
+| System load | 1m | For real-time monitoring (use sparingly) |
+| Static data | 30m - 1h | Data that rarely changes |
+
+<Callout type="warn" title="Performance consideration">
+Very short intervals (< 1m) on many peels create significant KV write load. For clusters with hundreds of peels, keep intervals at 5 minutes or longer unless real-time data is essential.
+</Callout>
+
+---
+
+## NATS KV Storage
+
+Basket data is stored in the `basket` KV bucket (`bus.BucketBasket`):
+
+| Property | Value |
+|---|---|
+| Bucket name | `basket` |
+| Key format | `<peel-id>.<function>` |
+| TTL | None (no automatic expiry) |
+| History | 1 revision (only latest value kept) |
+| Replicas | 1 (configurable for production) |
+
+### Key Examples
+
+| Peel | Function | KV Key |
+|---|---|---|
+| `web-01` | `network.ip_addrs` | `web-01.network.ip_addrs` |
+| `web-02` | `network.ip_addrs` | `web-02.network.ip_addrs` |
+| `db-01` | `disk.usage` | `db-01.disk.usage` |
+| `app-01` | `custom.app_version` | `app-01.custom.app_version` |
+
+### Data Format
+
+Values are MessagePack-encoded. The actual data type depends on the function:
+
+| Function | Typical Return Type | Example |
+|---|---|---|
+| `network.ip_addrs` | `string` | `"10.0.1.50"` |
+| `disk.usage` | `map[string]any` | `{"root": "45%", "data": "72%"}` |
+| `custom.app_version` | `string` | `"2.1.0"` |
+
+---
+
+## Example Configurations
+
+### Web Server Settings
+
+```yaml title="settings/webservers/nginx.zy"
+basket_functions:
+  default_ipv4: "5m"
+  network.fqdn: "30m"
+```
+
+### Database Server Settings
+
+```yaml title="settings/database/base.zy"
+basket_functions:
+  default_ipv4: "5m"
+  network.fqdn: "30m"
+```
+
+### All Peels (Common Settings)
+
+```yaml title="settings/common/base.zy"
+basket_functions:
+  default_ipv4: "5m"
+  network.hostname: "5m"
+```
+
+<Callout type="info" title="Minimal configuration">
+A peel with no `basket_functions` in its settings simply does not publish any data to the basket bucket. Basket is entirely opt-in.
+</Callout>
+
+---
+
+## Basket Scope
+
+The `basket_scope` setting automatically filters every `basket()` call by compound-ANDing a targeting expression with the caller's target. This is essential for **multi-cluster deployments** where peels should only see basket data from their own cluster.
+
+### How It Works
+
+When a peel has `basket_scope` configured, every `basket()` call's target is rewritten:
+
+```
+# What the template writes:
+basket("*", "default_ipv4")
+
+# What actually executes (with basket_scope = "G@cluster_name:cluster-a"):
+basket("* and G@cluster_name:cluster-a", "default_ipv4")
+```
+
+The scope is compound-ANDed with the original target, so `target.DetectType` sees the ` and ` keyword and parses it as a compound expression. This works with any targeting type -- glob, fact-based, list, or compound.
+
+### Configuration
+
+Add `basket_scope` to your settings files. Since settings are template-rendered with local facts, you can reference the peel's own facts:
+
+```yaml title="settings/common/base.zy"
+basket_scope: "G@cluster_name:{{ facts.cluster_name }}"
+```
+
+This resolves to (e.g.) `G@cluster_name:cluster-a` on a peel with `cluster_name: cluster-a` in its facts.
+
+### Per-Role Override
+
+Override `basket_scope` in role-specific settings to customize filtering per role:
+
+```yaml title="settings/monitoring/monitor.zy"
+# Monitoring peels need cross-cluster visibility
+basket_scope: ""
+```
+
+Setting `basket_scope` to an empty string disables scope filtering for that role, restoring the default behavior where `basket()` queries return data from all peels.
+
+### Scope Updates
+
+The `basket_scope` value is refreshed automatically whenever settings are re-resolved (e.g., when settings files or secrets change in NATS KV). There is no need to restart the peel after changing the scope in settings.
+
+<Callout type="success" title="Cluster isolation">
+For the scope to work, each peel must have a fact that identifies its cluster. The simplest approach is a custom fact in `/etc/zester/facts`:
+
+```yaml title="/etc/zester/facts"
+role: webserver
+cluster_name: cluster-a
+```
+</Callout>

@@ -1,0 +1,398 @@
+---
+title: "Troubleshooting"
+description: "This guide covers common operational issues, debugging procedures, and resolution steps for Zester deployments."
+---
+
+## Common Issues
+
+### Quick Reference Table
+
+| Symptom | Likely Cause | Quick Fix |
+|---|---|---|
+| Peel not connecting | Wrong master URL, bad credentials, firewall | Check `peel.yaml`, verify network, check `.creds` file |
+| All peels disconnected | Master down, NATS crash, TLS cert expired | `systemctl status zester-master`, check certs |
+| Jobs timing out | Peel overloaded, network latency, state module slow | Check peel resources, increase job timeout |
+| Fact sync failing | JetStream full, KV bucket error | Check `jsz` endpoint, purge old data |
+| High memory on master | Too many connections, large fact index | Increase RAM, check for peel connection storms |
+| NATS connection refused | NATS server down or misconfigured | Check `nats-server` status, verify URL and TLS |
+| Slow state applies | Peel disk I/O, package mirror slow, large state tree | Check peel resources, profile state modules |
+| "Slow consumer" in logs | Consumer not keeping up with message rate | Check consumer lag, increase resources |
+| NATS reconnect storms | Master restart, network flap | Normal behavior — wait for backoff to settle |
+
+## Connectivity Debugging
+
+### Peel Cannot Connect to Master
+
+**Step 1: Verify the master is running and listening.**
+
+```bash
+# On the master
+systemctl status zester-master
+curl -s http://localhost:8222/varz | jq '{server_id, host, port, connections}'
+```
+
+**Step 2: Check network connectivity from the peel.**
+
+```bash
+# On the peel
+nc -zv master.example.com 4222
+# Expected: Connection to master.example.com 4222 port [tcp/*] succeeded!
+
+# If TLS:
+openssl s_client -connect master.example.com:4222 </dev/null 2>/dev/null | \
+  openssl x509 -noout -subject -dates
+```
+
+**Step 3: Check the peel configuration.**
+
+```bash
+# Verify master URL
+grep -A5 'master:' /etc/zester/peel.yaml
+
+# Verify credentials file exists and is readable
+ls -la /etc/zester/peel.creds
+```
+
+**Step 4: Check peel logs for specific errors.**
+
+```bash
+journalctl -u zester-peel --since '5 minutes ago' --no-pager
+```
+
+Common log messages and their meanings:
+
+| Log Message | Meaning | Resolution |
+|---|---|---|
+| `disconnected from NATS` | Connection lost | Check network, master status |
+| `reconnected to NATS` | Connection restored | Normal — no action needed |
+| `NATS connection closed` | Connection permanently closed | Restart peel, check credentials |
+| `bus: connect to NATS: ...` | Initial connection failed | Check URL, TLS, credentials |
+| `bus: load nkey seed: ...` | Credential file error | Check `.creds` file format and permissions |
+
+### Checking Connection State
+
+**On the master**, use the NATS monitoring endpoint to see connected clients:
+
+```bash
+# Count connected clients
+curl -s http://master:8222/connz | jq '.num_connections'
+
+# List connected clients with details
+curl -s http://master:8222/connz?limit=100 | jq '.connections[] | {name, ip, uptime, subscriptions}'
+
+# Find a specific peel
+curl -s http://master:8222/connz?limit=0 | jq '.connections[] | select(.name | contains("web-01"))'
+```
+
+**On the peel**, check the peel process and logs:
+
+```bash
+systemctl status zester-peel
+journalctl -u zester-peel --since '5 minutes ago' --no-pager | tail -20
+```
+
+## Authentication Failures
+
+### Symptoms
+
+- Peel logs show `authorization violation` or `authentication timeout`
+- NATS logs show `auth failure` events
+- Peel `zester_peel_connected` metric stays at 0
+
+### Debugging Steps
+
+**Step 1: Verify the credentials file.**
+
+```bash
+# Check that the file exists and has correct permissions
+ls -la /etc/zester/peel.creds
+# Expected: -rw------- root:zester
+
+# Verify it's a valid NATS credentials file (contains JWT + nkey seed)
+head -5 /etc/zester/peel.creds
+# Should start with: -----BEGIN NATS USER JWT-----
+```
+
+**Step 2: Check if the user JWT is expired or revoked.**
+
+```bash
+# Decode and inspect the JWT
+nsc describe user --creds-file /etc/zester/peel.creds
+
+# Check for revocations
+nsc list revocations --account <account-name>
+```
+
+**Step 3: Verify the account JWT is pushed to the resolver.**
+
+```bash
+nsc list accounts
+nsc describe account <account-name>
+nsc push --account <account-name>  # Re-push if needed
+```
+
+**Step 4: Check TLS certificate chain.**
+
+```bash
+# Verify client certificate is signed by the expected CA
+openssl verify -CAfile /etc/zester/tls/ca.crt /etc/zester/tls/server.crt
+
+# Check certificate expiry
+openssl x509 -in /etc/zester/tls/server.crt -noout -dates
+```
+
+### Regenerating Peel Credentials
+
+If credentials are corrupted or expired:
+
+```bash
+# Generate new credentials on the operator workstation
+nsc generate nkey --user
+nsc add user --account prod --name <peel-id> --public-key <new-public-key>
+nsc generate creds --account prod --name <peel-id> > /tmp/peel.creds
+
+# Deploy to the peel
+scp /tmp/peel.creds peel-host:/etc/zester/peel.creds
+ssh peel-host 'chmod 600 /etc/zester/peel.creds && systemctl restart zester-peel'
+```
+
+## Slow State Applies
+
+### Diagnosis
+
+**Step 1: Check overall state.apply performance.**
+
+```bash
+# Check a specific job
+zester job show <jid>
+```
+
+**Step 2: Identify slow peels.**
+
+```bash
+# Inspect per-peel durations in the "Returns" section
+zester job show <jid>
+```
+
+**Step 3: Check peel-side resources.**
+
+```bash
+ssh slow-peel 'top -bn1 | head 20'
+ssh slow-peel 'df -h'
+ssh slow-peel 'iostat -x 1 3'
+ssh slow-peel 'journalctl -u zester-peel --since "5 minutes ago"'
+```
+
+### Common Causes
+
+| Cause | Indicators | Fix |
+|---|---|---|
+| Peel CPU contention | High CPU in `top`, other processes competing | Identify competing processes, increase CPU |
+| Peel disk I/O saturation | High `iowait` in `top`, high disk utilization in `iostat` | Upgrade disk, reduce concurrent state operations |
+| Slow package mirror | `pkg.installed` states take minutes | Configure a local package mirror or cache |
+| Large file transfers | `file.managed` with large `source` | Use a CDN or local file server |
+| Template rendering | Complex Jinja templates with many loops | Simplify templates, pre-render where possible |
+| Network latency | High RTT between peel and master | Deploy leaf nodes closer to peels |
+
+## JetStream Issues
+
+### Storage Full
+
+**Symptoms:** Jobs fail to dispatch, fact sync errors, "no space" errors in logs.
+
+```bash
+# Check JetStream storage usage
+curl -s http://master:8222/jsz | jq '{memory, storage, reserved_memory, reserved_storage}'
+
+# Check individual stream sizes
+nats stream list
+nats stream info KV_facts
+nats stream info KV_job-returns
+```
+
+**Resolution:**
+
+```bash
+# Option 1: Increase storage limit on the NATS server (edit nats-server.conf and reload)
+# In nats-server.conf: jetstream { max_file: 200GB }
+nats-server --signal reload
+
+# Option 2: Purge expired data
+nats stream purge KV_job-returns --keep 1000
+nats stream purge job-events --keep 10000
+
+# Option 3: Reduce retention
+nats stream edit KV_jobs --max-age 3d
+nats stream edit KV_job-returns --max-age 3d
+nats stream edit job-events --max-age 3d
+```
+
+### Slow Consumers
+
+**Symptoms:** `slow consumer` warnings in logs, dropped messages, `zester_nats_slow_consumers_total` increasing.
+
+```bash
+# Check consumer status
+nats consumer list KV_facts
+nats consumer info KV_facts <consumer-name>
+
+# Check pending message count
+nats consumer info KV_facts <consumer-name> | grep -i pending
+```
+
+**Resolution:**
+
+- Increase master CPU/memory if the master cannot keep up
+- Increase `max_ack_pending` if the consumer backlog is growing
+- Check for state modules that block the event loop
+
+## Debug Logging
+
+### Enabling Debug Mode
+
+Temporarily enable debug logging for detailed diagnostics:
+
+```bash
+# Edit the configuration
+# In master.yaml or peel.yaml, change:
+#   log_level: "debug"
+
+# Restart to apply
+systemctl restart zester-master
+# or
+systemctl restart zester-peel
+```
+
+<Callout type="warn" title="Disable debug logging after investigation">
+Debug logging is extremely verbose — it logs every NATS message, every template render, and every targeting resolution. It can significantly increase disk usage and CPU overhead. Always revert to `info` level after debugging.
+</Callout>
+
+### What Debug Logging Reveals
+
+| Component | Debug Log Content |
+|---|---|
+| NATS transport | Every message published/received with subject and size |
+| Targeting | Radix tree lookups, fact filter evaluations, resolved peel lists |
+| Template rendering | Variable resolution, template output for each peel |
+| State apply | Module-level execution details, change detection |
+| Fact collection | Individual fact collectors, timing, values collected |
+| Settings | Settings compilation and distribution details |
+
+### Useful Debug Commands
+
+```bash
+# Watch master logs in real time
+journalctl -u zester-master -f
+
+# Filter for a specific peel
+journalctl -u zester-master -f | jq 'select(.peel_id == "web-01")'
+
+# Filter for a specific job
+journalctl -u zester-master -f | jq 'select(.jid == "2oHfKnCPMQnLEYQeBQsNtUiJp3r")'
+
+# Show only errors and warnings
+journalctl -u zester-master -p warning
+
+# NATS server diagnostics
+curl -s http://master:8222/varz | jq .    # Server status
+curl -s http://master:8222/connz | jq .   # Connections
+curl -s http://master:8222/routez | jq .  # Cluster routes
+curl -s http://master:8222/jsz | jq .     # JetStream status
+curl -s http://master:8222/subsz | jq .   # Subscriptions
+```
+
+## Master Failures
+
+### Master Not Starting
+
+| Error | Cause | Fix |
+|---|---|---|
+| `connect to NATS: ...` | Cannot reach NATS server | Verify `--nats-url` flag and network connectivity |
+| `initialize storage: ...` | JetStream bucket/stream creation failed | Check NATS server has JetStream enabled |
+| `bind: address already in use` | Port conflict | Check for existing NATS or Zester process |
+| `permission denied` on store dir | Wrong file permissions | `chown -R zester:zester /var/lib/zester/nats` |
+| TLS errors | Bad certificate, wrong CA, expired cert | Verify cert chain, check expiry dates |
+
+### Master Crash Recovery
+
+```bash
+# 1. Check the crash logs
+journalctl -u zester-master --since '1 hour ago' | tail -100
+
+# 2. Check for core dumps
+coredumpctl list zester-master
+
+# 3. Verify JetStream data integrity
+# (Start in a temporary mode to check)
+nats-server --jetstream --store_dir /var/lib/zester/nats --check
+
+# 4. Restart
+systemctl restart zester-master
+
+# 5. Verify NATS connections are coming back
+curl -s http://localhost:8222/connz | jq '.num_connections'
+```
+
+## Peel Failures
+
+### Peel Not Reporting Facts
+
+```bash
+# Check the last fact sync
+journalctl -u zester-peel --since '10 minutes ago' | jq 'select(.msg | contains("fact"))'
+
+# Force a fact refresh by restarting the peel
+systemctl restart zester-peel
+```
+
+### Peel Reconnection Storm
+
+After a master restart, all peels attempt to reconnect simultaneously. This is expected behavior.
+
+**Indicators:**
+
+- CPU spike on master immediately after restart
+- `zester_connected_peels` climbs rapidly
+- `slow consumer` warnings in master logs
+
+**Resolution:** This resolves automatically. NATS clients use jitter (500ms--5s) in their reconnection backoff. If the storm is too severe:
+
+1. Increase `ReconnectWait` on peels from 2s to 5s
+2. Increase master CPU/memory allocation
+3. Configure `max_connections` on the NATS server to rate-limit incoming connections
+
+## Incident Response Checklist
+
+When paged for a Zester issue, follow this order:
+
+```bash
+# 1. Is NATS running?
+curl http://master:8222/varz | jq '{server_id, connections, routes}'
+
+# 3. How many peels are connected?
+curl http://master:8222/connz | jq '.num_connections'
+
+# 4. Is JetStream healthy?
+curl http://master:8222/jsz | jq '{streams, consumers, messages, bytes}'
+
+# 5. Are there active jobs?
+zester job active
+
+# 6. Any failed jobs?
+zester job list | grep failed
+
+# 7. Check recent logs
+journalctl -u zester-master --since '10 minutes ago' -p err
+
+# 8. Check cluster routes (if clustered)
+curl http://master:8222/routez | jq '.routes[] | {remote_id, ip, port, is_configured}'
+```
+
+### Severity Classification
+
+| Severity | Criteria | Response Time |
+|---|---|---|
+| **SEV-1** | All peels disconnected, no commands possible | < 15 minutes |
+| **SEV-2** | > 10% peels affected, jobs failing | < 1 hour |
+| **SEV-3** | Degraded performance, some jobs slow | < 4 hours |
+| **SEV-4** | Minor issue, no user impact | Next business day |

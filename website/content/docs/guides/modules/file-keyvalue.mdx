@@ -1,0 +1,86 @@
+---
+title: "file.keyvalue"
+---
+
+Ensures one or more `key<separator>value` lines are present in a file, updating the value in place when the key already exists. Useful for `sysctl.conf`, `/etc/os-release`, environment files, and similar formats. Modeled after Salt's `file.keyvalue` module.
+
+**Source**: `pkg/state/modules/file_keyvalue.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Absolute path to the target file. `path` is accepted as an alias. |
+| `key` | `string` | No | — | Single-entry form: the key to manage. Requires `value`. |
+| `value` | `any` | No | — | Single-entry form: the value for `key`. Required when `key` is set. |
+| `key_values` | `map` | No | `{}` | Multiple entries as a key → value map (Salt's parameter name). |
+| `entries` | `map` | No | `{}` | Alias for `key_values`. |
+| `separator` | `string` | No | `=` | Literal token written between key and value. When matching existing lines, surrounding whitespace around the separator is tolerated. |
+
+At least one entry must be provided (via `key`/`value` or `key_values`/`entries`); the builder fails otherwise. Values are stringified with `%v`, so numbers and booleans work as expected.
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+- If the file does not exist, the state reports changes needed (it will be created).
+- Otherwise the rewrite is computed in memory: for each key (processed in sorted order), the first line matching `key <sep> ...` (leading whitespace preserved, separator whitespace tolerated) is compared against the desired `key<separator>value` line. Changes are reported if any line would be rewritten or appended.
+
+---
+
+## Apply Behavior
+
+1. Reads the file if it exists (stored as a backup for revert).
+2. For each entry: the first matching line is rewritten in place as `key<separator>value` (preserving leading whitespace); if no line matches, `key<separator>value` is appended at the end.
+3. Writes the result with mode `0644`. A missing file is created.
+
+---
+
+## Revert Behavior
+
+- If the file did not exist before Apply, it is removed.
+- Otherwise the original content is restored from the backup.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Single entry
+zester 'web-01' file.keyvalue /etc/sysctl.conf key=vm.swappiness value=10
+```
+
+### State File
+
+**Single key/value:**
+
+```yaml
+/etc/default/grub:
+  file.keyvalue:
+    - key: GRUB_TIMEOUT
+    - value: 5
+```
+
+**Multiple entries:**
+
+```yaml
+/etc/sysctl.conf:
+  file.keyvalue:
+    - key_values:
+        vm.swappiness: 10
+        net.ipv4.ip_forward: 1
+```
+
+---
+
+## Divergences from Salt
+
+- Keys that are not found are **always appended** — Salt requires `append_if_not_found: True` for that; Zester has no such flag.
+- Salt's `count`, `uncomment`, `key_ignore_case`, and `value_ignore_case` parameters are not supported.
+- Only the **first** matching line per key is updated; duplicates further down are left alone.

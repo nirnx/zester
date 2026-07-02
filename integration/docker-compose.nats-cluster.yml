@@ -1,0 +1,119 @@
+# Docker Compose override: 3-node NATS cluster with Replicas:3 JetStream.
+#
+# Layered on top of ../docker-compose.yml and docker-compose.multi-master.yml.
+# Overrides the single-node "nats" to become cluster node 1, adds nodes 2 & 3,
+# and updates masters/peels/admin to use the full cluster URL list.
+
+services:
+  # --- NATS cluster -----------------------------------------------------------
+
+  nats:
+    # Override: use cluster config instead of base config.
+    command: ["-c", "/data/nats-cluster/nats-1.conf"]
+    volumes:
+      - auth-data:/data/auth:ro
+      - nats-config:/data/nats:ro
+      - jetstream-data:/data/jetstream
+      - ./integration/nats-cluster:/data/nats-cluster:ro
+
+  nats-2:
+    image: nats:2-alpine
+    command: ["-c", "/data/nats-cluster/nats-2.conf"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - auth-data:/data/auth:ro
+      - nats-config:/data/nats:ro
+      - jetstream-data-2:/data/jetstream
+      - ./integration/nats-cluster:/data/nats-cluster:ro
+
+  nats-3:
+    image: nats:2-alpine
+    command: ["-c", "/data/nats-cluster/nats-3.conf"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - auth-data:/data/auth:ro
+      - nats-config:/data/nats:ro
+      - jetstream-data-3:/data/jetstream
+      - ./integration/nats-cluster:/data/nats-cluster:ro
+
+  # --- Masters: multi-URL + replicas -----------------------------------------
+
+  master:
+    command:
+      - zester-master
+      - --config
+      - /data/nats/master.yaml
+      - --nats-url
+      - "tls://nats:4222,tls://nats-2:4222,tls://nats-3:4222"
+      - --jetstream-replicas
+      - "3"
+    environment:
+      SSL_CERT_FILE: /data/auth/nats-ca.crt
+    depends_on:
+      nats:
+        condition: service_started
+      nats-2:
+        condition: service_started
+      nats-3:
+        condition: service_started
+
+  master-2:
+    command:
+      - zester-master
+      - --config
+      - /data/nats/master.yaml
+      - --nats-url
+      - "tls://nats:4222,tls://nats-2:4222,tls://nats-3:4222"
+      - --jetstream-replicas
+      - "3"
+    environment:
+      SSL_CERT_FILE: /data/auth/nats-ca.crt
+    depends_on:
+      nats:
+        condition: service_started
+      nats-2:
+        condition: service_started
+      nats-3:
+        condition: service_started
+
+  # --- Peels: spread across NATS cluster nodes --------------------------------
+
+  web-01:
+    command: ["--id", "web-01", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt", "--nats-url", "tls://nats:4222,tls://nats-2:4222,tls://nats-3:4222"]
+    environment:
+      SSL_CERT_FILE: /data/auth/nats-ca.crt
+
+  web-02:
+    command: ["--id", "web-02", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt", "--nats-url", "tls://nats-2:4222,tls://nats:4222,tls://nats-3:4222"]
+    environment:
+      SSL_CERT_FILE: /data/auth/nats-ca.crt
+
+  web-03:
+    command: ["--id", "web-03", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt", "--nats-url", "tls://nats-3:4222,tls://nats:4222,tls://nats-2:4222"]
+    environment:
+      SSL_CERT_FILE: /data/auth/nats-ca.crt
+
+  db-01:
+    command: ["--id", "db-01", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt", "--nats-url", "tls://nats:4222,tls://nats-3:4222,tls://nats-2:4222"]
+    environment:
+      SSL_CERT_FILE: /data/auth/nats-ca.crt
+
+  db-02:
+    command: ["--id", "db-02", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt", "--nats-url", "tls://nats-2:4222,tls://nats-3:4222,tls://nats:4222"]
+    environment:
+      SSL_CERT_FILE: /data/auth/nats-ca.crt
+
+  # --- Admin: multi-URL for zester --direct ------------------------------------
+
+  admin:
+    environment:
+      NATS_URL: "tls://nats:4222,tls://nats-2:4222,tls://nats-3:4222"
+      SSL_CERT_FILE: /data/auth/nats-ca.crt
+
+volumes:
+  jetstream-data-2:
+  jetstream-data-3:

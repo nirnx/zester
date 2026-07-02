@@ -1,0 +1,99 @@
+---
+title: "service.running"
+description: "Ensures a service is started on the target system. When triggered via a watch requisite (e.g., a config file changed), it restarts the service rather than starting it."
+---
+
+**Source**: `pkg/state/modules/service.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | The service name. If omitted, the state ID is used. |
+| `enable` | `bool` | No | `false` | Also enable the service at boot when applying. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies). Note that a `watch` requisite force-applies this state, triggering a service restart.
+
+---
+
+## Check Behavior
+
+- Calls `systemctl is-active --quiet <service>` (via the injected ServiceExec).
+- Reports no changes needed if the service is already running.
+- Reports `NeedsChange: true` if the service is not running.
+
+---
+
+## Apply Behavior
+
+1. Checks whether the service is currently running.
+2. If the service is **not running**: calls `Start` and records that it started (for Revert).
+3. If the service is **already running** (e.g., triggered by watch): calls `Restart`.
+4. If `enable: true` and the service is not yet enabled: calls `Enable` and records that it enabled (for Revert).
+5. Returns `Changed: true` in all cases where action was taken.
+
+---
+
+## Revert Behavior
+
+- If Apply enabled the service: calls `Disable`.
+- If Apply started the service: calls `Stop`.
+- If Apply only restarted the service (was already running): returns `Changed: false` (no revert possible).
+
+---
+
+## Details Returned
+
+| Key | Description |
+|---|---|
+| `service` | The service name |
+| `action` | `"started"` or `"restarted"` |
+| `manager` | The service manager name (e.g., `"systemd"`) |
+
+---
+
+## Examples
+
+### Ensure nginx is running
+
+```yaml
+nginx:
+  service.running:
+    - require:
+      - pkg.installed:nginx
+```
+
+### Restart nginx when config changes
+
+```yaml
+nginx:
+  service.running:
+    - watch:
+      - file.managed:/etc/nginx/nginx.conf
+      - file.managed:/etc/nginx/sites-enabled/default
+```
+
+### Ensure running and enabled at boot
+
+```yaml
+nginx:
+  service.running:
+    - enable: true
+    - require:
+      - pkg.installed:nginx
+```
+
+### Full example with explicit name
+
+```yaml
+webserver-running:
+  service.running:
+    - name: nginx
+    - enable: true
+    - require:
+      - pkg.installed:nginx
+    - watch:
+      - file.managed:/etc/nginx/nginx.conf
+```

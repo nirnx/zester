@@ -1,0 +1,278 @@
+---
+title: "Scaling"
+description: "Zester scales from a handful of nodes to over 100,000 by leveraging NATS JetStream's built-in clustering, leaf nodes, and superclusters. This guide covers resource sizing, cluster topologies, and performance tuning."
+---
+
+## Resource Sizing
+
+### Master Resources
+
+| Scale | NATS Topology | CPU (Steady) | CPU (Burst) | RAM | Disk (JetStream) | Disk IOPS | Network |
+|---|---|---|---|---|---|---|---|
+| < 100 peels | Single NATS server | 0.1 core | 1 core | 512 MB | 10 GB SSD | 50 | 1 Mbps |
+| 100--1,000 peels | Single NATS server | 0.5 core | 4 cores | 2 GB | 50 GB SSD | 500 | 10 Mbps |
+| 1,000--10,000 peels | 3-node cluster | 4 CPU each | 8 CPU each | 8 GB each | 200 GB SSD each | 5,000 | 100 Mbps |
+| 10,000--50,000 peels | 5-node cluster | 8 CPU each | 16 CPU each | 16 GB each | 500 GB SSD each | 20,000 | 500 Mbps |
+| 50,000--100,000 peels | 5-node + leaf nodes | 16 CPU each | 32 CPU each | 32 GB each | 1 TB NVMe each | 50,000 | 1 Gbps |
+| 100,000+ peels | Supercluster | 16+ CPU each | 32+ CPU each | 64 GB each | 2 TB NVMe each | 50,000+ | 1+ Gbps |
+
+CPU burst occurs during mass state.apply or full fact sync. Steady-state load comes from heartbeats and incremental fact updates.
+
+<Callout type="success" title="Use NVMe for 10k+ peels">
+JetStream performance is directly tied to disk I/O. At scale, NVMe storage significantly improves job dispatch latency and fact sync throughput.
+</Callout>
+
+### Peel Resources
+
+Peels are lightweight agents with minimal resource requirements:
+
+| Resource | Idle | During State Apply |
+|---|---|---|
+| CPU | Negligible | Spikes depending on state modules |
+| RAM | 20--50 MB | Varies by state complexity |
+| Disk | Minimal (no local persistence) | Temporary during state operations |
+| Network | ~100 B/s (heartbeat) | Bursts during fact sync and state.apply |
+
+### Network Bandwidth Estimates
+
+| Operation | Per Peel | 1,000 Peels | 10,000 Peels | 100,000 Peels |
+|---|---|---|---|---|
+| Heartbeat (idle) | ~100 B/s | ~100 KB/s | ~1 MB/s | ~10 MB/s |
+| Fact sync (5m interval) | ~2 KB/event | ~33 KB/s | ~330 KB/s | ~3.3 MB/s |
+| State apply (typical) | ~10 KB/job | burst | burst | burst |
+| Settings push | ~5 KB/peel | ~5 MB total | ~50 MB total | ~500 MB total |
+
+## NATS Cluster Topologies
+
+### Single Master (Development / Small Deployments)
+
+```
+┌─────────────┐     ┌─────────────┐
+│   Master    │────│    NATS     │ ◄── all peels connect here
+│  (client)   │     │  (server)   │
+└─────────────┘     └─────────────┘
+```
+
+- Suitable for up to ~1,000 peels
+- No high availability — master failure means no new jobs
+- Peels survive master outage with cached state
+- Simplest to operate
+
+### 3-Node Cluster (Production Standard)
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│ Master-1 │────│ Master-2 │────│ Master-3 │
+│  (RAFT)  │     │  (RAFT)  │     │  (RAFT)  │
+└──────────┘     └──────────┘     └──────────┘
+     ▲                ▲                ▲
+     └── peels distribute connections ─┘
+```
+
+- Tolerates 1 node failure
+- RAFT consensus for JetStream data
+- Automatic leader election (~2 seconds)
+- Recommended for 1,000--10,000 peels
+
+### 5-Node Cluster (Large Scale)
+
+- Tolerates 2 simultaneous node failures
+- Better read distribution across nodes
+- Required for 10,000--50,000 peels
+- Same topology as 3-node, with two additional nodes
+
+### Cluster + Leaf Nodes (Edge / DMZ)
+
+```
+┌────────── Core Cluster ──────────┐
+│ ┌────────┐ ┌────────┐ ┌────────┐│
+│ │Master-1│ │Master-2│ │Master-3││
+│ └────────┘ └────────┘ └────────┘│
+└──────────────────────────────────┘
+         ▲            ▲
+    ┌────┴────┐  ┌────┴────┐
+    │  Leaf   │  │  Leaf   │
+    │ (DMZ)   │  │ (Edge)  │
+    └─────────┘  └─────────┘
+      ▲   ▲        ▲   ▲
+    peels         peels
+```
+
+Leaf nodes act as local proxies, similar to Salt's syndic but built into NATS:
+
+- **Reduce latency** for remote/edge peels by providing a local NATS endpoint
+- **Cross firewall boundaries** with a single outbound connection from leaf to core
+- **Isolate traffic** — local peel-to-peel communication stays on the leaf
+- **Scale horizontally** — each leaf handles its own connection pool
+
+Configure a leaf node:
+
+```yaml
+# On the leaf node server
+nats:
+  listen: "0.0.0.0:4222"
+  leaf_node:
+    remotes:
+      - url: "tls://core-master-01:7422"
+        credentials: "/etc/zester/leaf.creds"
+```
+
+### Supercluster (Multi-Region / Global)
+
+```
+┌─── Region: US-East ────┐     ┌─── Region: EU-West ────┐
+│  ┌──────┐  ┌──────┐    │     │    ┌──────┐  ┌──────┐  │
+│  │ M-1  │──│ M-2  │    │     │    │ M-1  │──│ M-2  │  │
+│  └──────┘  └──────┘    │     │    └──────┘  └──────┘  │
+│       ▲                 │     │         ▲               │
+│     peels               │     │       peels             │
+└─────────┬───────────────┘     └─────────┬───────────────┘
+          │       NATS Gateway            │
+          └───────────────────────────────┘
+```
+
+NATS superclusters connect multiple independent clusters via gateways:
+
+- Each region operates independently if gateways fail
+- Cross-region job dispatch and fact sharing via gateway routing
+- JetStream data replication across regions (configurable)
+- Replaces Salt's complex syndic chains
+
+## Performance Tuning
+
+### Server Configuration Parameters
+
+These parameters control the NATS server behavior (configured on the external NATS server):
+
+| Parameter | Default | Tuning Guidance |
+|---|---|---|
+| `JetStreamMaxMemory` | 75% of RAM | Increase for large fact indexes. At 10k+ peels, allocate at least 4 GB. |
+| `JetStreamMaxStore` | 75% of disk | Set explicitly to prevent JetStream from consuming all disk space. |
+| `JetStreamDomain` | none | Set for multi-cluster isolation to prevent stream name collisions. |
+| `ReadyTimeout` | 10 seconds | Increase to 30s if JetStream recovery takes longer after restart with large stores. |
+
+### Client Configuration Parameters
+
+These parameters in `ClientConfig` control peel-to-master connections:
+
+| Parameter | Default | Tuning Guidance |
+|---|---|---|
+| `MaxReconnects` | `-1` (unlimited) | Keep at -1 for production. Peels should always retry. |
+| `ReconnectWait` | 2 seconds | Base wait between reconnection attempts. NATS adds jitter automatically. Increase to 5s for very large fleets to reduce thundering herd. |
+| `ReconnectBufSize` | 8 MB | Buffer for messages published during reconnection. Increase if peels generate high event volume during outages. |
+| `PingInterval` | 20 seconds | NATS ping/pong health check interval. Reduce to 10s for faster disconnect detection. Increase to 30s for high-latency links. |
+| `MaxPingsOut` | 3 | Outstanding pings before declaring unhealthy. At default PingInterval, disconnect detection takes up to 60s (3 x 20s). |
+| `DrainTimeout` | 30 seconds | Time allowed for draining subscriptions during graceful shutdown. |
+
+### NATS Tuning for Scale
+
+For deployments above 10,000 peels, tune the NATS server configuration:
+
+```yaml
+nats:
+  max_connections: 20000
+  max_payload: "8MB"
+  write_deadline: "10s"
+  jetstream:
+    max_file_store: "500GB"
+    max_mem_store: "4GB"
+    limits:
+      max_ack_pending: 50000
+      duplicate_window: "600s"
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `max_connections` | 65536 | Maximum concurrent client connections. Set to 2x expected peel count. |
+| `max_payload` | 1 MB | Maximum message payload size. Increase to 8 MB for large state applies or fact sets. |
+| `write_deadline` | 2s | Maximum time to write to a client before dropping. Increase for slow links. |
+| `max_ack_pending` | 65536 | Maximum unacknowledged messages per consumer. Increase for high-throughput job dispatch. |
+| `duplicate_window` | 2m | Window for detecting duplicate messages. Increase to 10m for high-latency environments. |
+
+### KV Bucket Tuning
+
+Default bucket configurations from the codebase:
+
+| Bucket | History | TTL | Replicas | Tuning Notes |
+|---|---|---|---|---|
+| `facts` | 5 | None | 1 | Increase replicas to 3 in clustered deployments. History of 5 enables fact change tracking. |
+| `settings-files` | 3 | None | 1 | Increase replicas to 3 in clusters. Stores sanitized .zy templates for peel-side rendering. |
+| `secrets` | 3 | None | 1 | Increase replicas to 3 in clusters. Per-peel encrypted values. |
+| `basket` | 1 | None | 1 | Consider adding TTL if basket data grows unbounded. |
+| `jobs` | 10 | 7 days | 1 | Increase replicas to 3 in clusters. Reduce TTL to 3d if storage is constrained. |
+| `job-returns` | 1 | 7 days | 1 | Increase replicas to 3 in clusters. Most storage-heavy bucket at scale. |
+| `master-heartbeat` | 1 | 15s | 1 | Increase replicas to 3 in clusters. Low storage, auto-expires. |
+| `enrollments` | 10 | None | 1 | Increase replicas to 3 in clusters. Enrollment records. |
+| `enroll-challenges` | 1 | 5 min | 1 | Memory storage. Ephemeral challenge nonces. |
+| `state-files` | 3 | None | 1 | State file distribution from master to peels. |
+| `update-manifests` | 5 | None | 1 | Self-update binary manifests. |
+| `update-status` | 1 | 60s | 1 | Watchdog update status heartbeats. |
+| `update-rollouts` | 10 | None | 1 | Fleet rollout state tracking. |
+
+To update bucket replicas for a clustered deployment:
+
+```bash
+# Each KV bucket is a stream prefixed with KV_
+nats stream edit KV_facts --replicas 3
+nats stream edit KV_jobs --replicas 3
+nats stream edit KV_job-returns --replicas 3
+nats stream edit job-events --replicas 3
+```
+
+### Operating System Tuning
+
+For masters handling 10,000+ connections:
+
+```bash
+# /etc/sysctl.d/99-zester.conf
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+net.core.netdev_max_backlog = 65535
+net.ipv4.ip_local_port_range = 1024 65535
+net.ipv4.tcp_tw_reuse = 1
+
+# File descriptor limits (also set in systemd unit)
+fs.file-max = 2097152
+```
+
+```bash
+# Apply without reboot
+sysctl --system
+```
+
+## Scaling Checklist
+
+When scaling to a new tier, work through this checklist:
+
+### Moving to 1,000+ Peels
+
+- [ ] Deploy 3-node NATS cluster for high availability
+- [ ] Set KV bucket replicas to 3
+- [ ] Configure Prometheus monitoring and alerting
+- [ ] Set up automated JetStream backups
+- [ ] Increase `LimitNOFILE` in systemd unit to 65536
+
+### Moving to 10,000+ Peels
+
+- [ ] Deploy 5-node NATS cluster
+- [ ] Switch to NVMe storage for JetStream
+- [ ] Tune `max_connections`, `max_payload`, and `write_deadline`
+- [ ] Apply OS-level tuning (`sysctl`, file descriptors)
+- [ ] Use Prometheus service discovery for peel scraping
+- [ ] Consider leaf nodes for remote sites
+
+### Moving to 50,000+ Peels
+
+- [ ] Deploy leaf nodes for edge and DMZ networks
+- [ ] Increase `ReconnectWait` on peels to 5s to reduce thundering herd
+- [ ] Increase JetStream memory allocation to 16+ GB
+- [ ] Monitor and tune `max_ack_pending` for job dispatch throughput
+- [ ] Consider target slicing/run partitioning to limit concurrent fan-out
+
+### Moving to 100,000+ Peels
+
+- [ ] Deploy NATS supercluster for multi-region
+- [ ] Configure JetStream domain isolation per region
+- [ ] Increase `ReconnectBufSize` on peels for longer outage tolerance
+- [ ] Implement graduated rollout for mass state applies (partitioned target sets)
+- [ ] Dedicated monitoring infrastructure for Zester metrics

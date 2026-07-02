@@ -1,0 +1,80 @@
+---
+title: "service.enabled"
+description: "Ensures a service is enabled to start at boot. Does not affect whether the service is currently running."
+---
+
+**Source**: `pkg/state/modules/service.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | The service name. If omitted, the state ID is used. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+- Calls `systemctl is-enabled --quiet <service>` (via the injected ServiceExec).
+- Reports no changes needed if the service is already enabled.
+- Reports `NeedsChange: true` if the service is not enabled.
+
+---
+
+## Apply Behavior
+
+1. Calls `Enable` on the service manager.
+2. Returns `Changed: true`.
+
+---
+
+## Revert Behavior
+
+- Calls `Disable` on the service manager.
+- Returns `Changed: true`.
+
+---
+
+## Details Returned
+
+| Key | Description |
+|---|---|
+| `service` | The service name |
+| `manager` | The service manager name (e.g., `"systemd"`) |
+
+---
+
+## Examples
+
+### Ensure sshd starts at boot
+
+```yaml
+sshd:
+  service.enabled:
+    - require:
+      - pkg.installed:openssh-server
+```
+
+### Enable after installation
+
+```yaml
+openssh-server:
+  pkg.installed: []
+
+sshd:
+  service.enabled:
+    - require:
+      - pkg.installed:openssh-server
+```
+
+### Explicit name
+
+```yaml
+enable-nginx-boot:
+  service.enabled:
+    - name: nginx
+```

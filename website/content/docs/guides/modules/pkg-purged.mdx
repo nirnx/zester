@@ -1,0 +1,80 @@
+---
+title: "pkg.purged"
+---
+
+Ensures a package is removed **along with its configuration files**. On Debian this runs `apt-get purge`; on the RedHat family it runs `dnf`/`yum remove` (rpm has no separate purge concept). The purge is performed by shelling out to the package manager CLI, independent of what the package provider's `Remove` does.
+
+**Source**: `pkg/state/modules/pkg_purged.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Name of the package to purge. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+- Installation status is checked via the package provider when available, otherwise by probing `dpkg -s <pkg>` (Debian) or `rpm -q <pkg>` (RedHat).
+- Installed → changes needed; not installed → no changes.
+- On an unknown package system without a package provider, Check errors.
+
+---
+
+## Apply Behavior
+
+| OS family | Command |
+|---|---|
+| Debian/Ubuntu | `apt-get purge -y <pkg>` |
+| RedHat (dnf/yum) | `<mgr> remove -y <pkg>` |
+| Unknown | Falls back to the package provider's `Remove`; errors if no provider is available. |
+
+The OS family is detected from the `os.family` fact, falling back to the active package provider name.
+
+---
+
+## Revert Behavior
+
+Reinstalls the package — via the package provider when available, otherwise `<mgr> install -y <pkg>`. Purged configuration files are **not** restored.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+zester 'web-01' pkg.purged apache2
+```
+
+### State File
+
+```yaml
+apache2:
+  pkg.purged: []
+```
+
+**Purge before installing a replacement:**
+
+```yaml
+remove-old-webserver:
+  pkg.purged:
+    - name: apache2
+
+nginx:
+  pkg.installed:
+    - require:
+      - "pkg.purged:remove-old-webserver"
+```
+
+---
+
+## Divergences from Salt
+
+- On the RedHat family, purge is identical to remove (as in Salt — rpm does not track config purging separately).
+- Salt's `pkgs` (multi-package) parameter is not supported; use the generic `names` attribute to expand one state per package.

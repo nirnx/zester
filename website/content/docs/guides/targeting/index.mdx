@@ -1,0 +1,83 @@
+---
+title: "Overview"
+---
+
+Zester's targeting engine determines which peels (managed nodes) receive a
+command. Every command that operates on remote peels -- `state.apply`,
+`basket get`, and others -- accepts a **target expression** as its first
+positional argument.
+
+The targeting engine lives in `pkg/target/` and supports six expression types
+that can be used independently or composed together in compound expressions.
+
+## How Targeting Works
+
+1. You provide a target expression on the command line.
+2. Zester auto-detects the expression type from its prefix (or defaults to glob).
+3. The expression is compiled into a **Matcher**.
+4. Every known peel ID (and its facts, when needed) is tested against the matcher.
+5. Only matching peels receive the dispatched command.
+
+## Cheat Sheet
+
+| Type | Prefix | Syntax | Example | Description |
+|------|--------|--------|---------|-------------|
+| **Glob** | *(none)* | `pattern` | `web*` | Shell-style wildcard match on peel ID |
+| **Regex** | `E@` | `E@<regex>` | `E@web-dc[12]-srv\d+` | RE2 regular expression match on peel ID |
+| **Fact** | `G@` | `G@key:value` | `G@os:ubuntu` | Match peels by fact key/value |
+| **Fact Alias** | `I@` | `I@key:value` | `I@role:webserver` | Alias of fact matching (uses fact data source) |
+| **List** | `L@` | `L@id1,id2,...` | `L@web-01,web-02` | Explicit comma-separated peel ID list |
+| **Compound** | *(auto)* | `expr and/or/not expr` | `web* and G@os:ubuntu` | Boolean combination of any matchers |
+
+## Auto-Detection
+
+Zester automatically detects the target type from the expression prefix. You
+never need to specify the type manually:
+
+| Prefix | Detected Type |
+|--------|---------------|
+| `E@` | Regex (RE2) |
+| `G@` | Fact |
+| `I@` | Fact (alias of `G@`) |
+| `L@` | List |
+| Contains ` and `, ` or `, or starts with `not ` | Compound |
+| *(anything else)* | Glob |
+
+<Callout type="success" title="Compound auto-detection">
+An expression is detected as compound when it contains ` and ` or ` or `
+(with surrounding spaces) or starts with `not ` (case-insensitive). This
+means a bare glob like `my-and-server` will **not** be misdetected -- the
+spaces around the operator are required.
+</Callout>
+
+## Quick Examples
+
+```bash
+# All peels whose ID starts with "web"
+zester 'web*' state.apply base.install
+
+# Regex: peels matching a pattern
+zester 'E@^db-\d{2}$' state.apply postgres.setup
+
+# Fact: only Ubuntu peels
+zester 'G@os:ubuntu' state.apply apt.upgrade
+
+# Fact with comparison: peels with 4+ CPUs
+zester 'G@cpu_count:>=4' state.apply performance.tune
+
+# Explicit list
+zester 'L@web-01,web-02,web-03' state.apply nginx.reload
+
+# Compound: web servers running Ubuntu
+zester 'web* and G@os:ubuntu' state.apply deploy.app
+
+# Compound with negation
+zester 'G@role:webserver and not E@.*-dev-.*' state.apply deploy.prod
+```
+
+## Sections
+
+- [Glob Patterns](/docs/guides/targeting/glob) -- Shell-style wildcard matching
+- [Regular Expressions](/docs/guides/targeting/regex) -- RE2 regex matching with `E@` prefix
+- [Fact-Based Targeting](/docs/guides/targeting/facts) -- Match on peel facts with `G@` prefix
+- [Compound Expressions](/docs/guides/targeting/compound) -- Combine matchers with `and`, `or`, `not`

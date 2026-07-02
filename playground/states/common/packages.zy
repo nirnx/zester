@@ -1,0 +1,4 @@
+common-packages:
+  cmd.run:
+    - command: echo "common packages applied"
+    - creates: /tmp/.common-packages-applied

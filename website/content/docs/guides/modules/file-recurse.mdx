@@ -1,0 +1,51 @@
+---
+title: "file.recurse"
+description: "Recursively copies a source directory tree to a destination directory. Mirrors the source structure, creating directories and files with the specified permissions and ownership."
+---
+
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Destination directory path |
+| `source` | string | (required) | Source directory path to copy from |
+| `file_mode` | string | `"0644"` | File permission mode for copied files (octal string) |
+| `dir_mode` | string | `"0755"` | Directory permission mode for created directories (octal string) |
+| `user` | string | — | Username to set as owner of copied files |
+| `group` | string | — | Group name to set on copied files |
+| `clean` | bool | `false` | Remove files in destination that are not present in source |
+| `makedirs` | bool | `false` | Create the destination's parent directory if it does not exist |
+
+## Example
+
+```yaml
+# Copy a config directory to /etc/app.
+/etc/app:
+  file.recurse:
+    - source: /srv/config/app
+    - file_mode: "0640"
+    - dir_mode: "0750"
+    - user: appuser
+    - group: appgroup
+    - clean: true
+    - makedirs: true
+    - require:
+      - "pkg.installed:myapp"
+```
+
+## Behavior
+
+| Phase | Action |
+|-|-|
+| Check | Walk source tree. For each file, compare size and SHA-256 hash against destination. For each directory, verify it exists. Returns `NeedsChange: true` if any file differs or is missing. |
+| Apply | Walk source tree. Create directories with `dir_mode`. Copy files with `file_mode`. Optionally set ownership. If `clean: true`, remove destination files not present in source. |
+| Revert | Remove only the files that Apply created (files already present before Apply are not touched). |
+
+## Notes
+
+- Check uses SHA-256 content comparison — it detects content changes even if sizes match.
+- `clean: true` only removes regular files from the destination that are absent from the source. Empty directories left behind after clean are not removed.
+- Revert is best-effort: it removes files created by the most recent Apply call. If the module is re-instantiated (e.g., after peel restart), revert information is lost.
+- `user` and `group` are resolved via `os/user.Lookup` and `os/user.LookupGroup`. The peel must run with sufficient privileges to set ownership.

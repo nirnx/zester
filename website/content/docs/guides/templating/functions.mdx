@@ -1,0 +1,387 @@
+---
+title: "Functions"
+---
+
+Global functions are callable directly in template expressions without a pipe operator. Zester registers custom functions on top of the built-in Gonja/Jinja2 function set. Global functions are defined in `pkg/template/functions.go`; per-render functions like `facts_get` are injected in `pkg/template/engine.go`.
+
+```yaml
+{{ function_name(arg1, arg2) }}
+{% for item in function_name(arg) %}...{% endfor %}
+```
+
+---
+
+## Zester Functions
+
+### basket
+
+Queries data from other peels by targeting pattern and fact function. Returns a list of maps, each containing `peel_id` and `value` keys.
+
+**Signature:** `basket(target, function) -> list[map]`
+
+| Parameter  | Type     | Description |
+|------------|----------|-------------|
+| `target`   | `string` | A targeting expression (e.g., `"role:webserver"`, `"web*"`, `"os:linux"`) |
+| `function` | `string` | The fact key to retrieve from matching peels (e.g., `"network.ip_addrs"`, `"network.fqdn"`) |
+
+**Returns:** A list of maps with the following structure:
+
+| Key       | Type  | Description |
+|-----------|-------|-------------|
+| `peel_id` | `string` | The ID of the matched peel |
+| `value`   | `any`    | The retrieved fact value from that peel |
+
+```yaml title="Building an upstream server list from API peels"
+upstream_backends:
+  {% for peel in basket("role:api", "network.ipv4") %}
+  - host: {{ peel.value }}
+    port: 8080
+    id: {{ peel.peel_id }}
+  {% endfor %}
+```
+
+```yaml title="Generating an nginx allow list from web peers"
+# /srv/zester/states/nginx/firewall.zy
+allowed_sources:
+  {% for peer in basket("role:webserver", "network.ipv4") %}
+  - {{ peer.value }}
+  {% endfor %}
+```
+
+```yaml title="Building /etc/hosts entries for database servers"
+db_hosts:
+  {% for db in basket("role:database", "network.fqdn") %}
+  - name: {{ db.peel_id }}
+    fqdn: {{ db.value }}
+  {% endfor %}
+```
+
+#### Fallback When No Peels Match
+
+When no peels match the target pattern, `basket` returns an empty list. Use `{% else %}` in a for loop to handle this:
+
+```yaml title="Graceful fallback with basket"
+redis_nodes:
+  {% for node in basket("role:redis", "network.ipv4") %}
+  - {{ node.value }}:6379
+  {% else %}
+  - localhost:6379
+  {% endfor %}
+```
+
+<Callout type="warn" title="BasketFn must be configured">
+The `basket` function depends on a `BasketFn` being set in `EngineConfig`. If no `BasketFn` is configured (e.g., during standalone template testing), `basket` always returns an empty list. In production, the master provides this function to query the facts index.
+</Callout>
+
+<Callout type="success" title="Combine with filters">
+The output of `basket` is a regular list, so you can use it with standard list filters:
+
+```yaml
+# Count matching peels
+api_count: {{ basket("role:api", "network.ipv4") | length }}
+
+# Get only the first match
+primary_db: {{ basket("role:database", "network.fqdn") | first }}
+```
+</Callout>
+
+---
+
+### facts_get
+
+Looks up a fact by dot-path key from the current peel's facts and returns an optional default if the key is not found. The function supports nested keys using dot notation (e.g., `"os.name"`, `"network.hostname"`).
+
+**Signature:** `facts_get(key, default?) -> any`
+
+| Parameter | Type     | Description |
+|-----------|----------|-------------|
+| `key`     | `string` | Dot-separated fact key (e.g., `"os.name"`, `"cpu.count"`) |
+| `default` | `any`    | *(optional)* Fallback value returned when the key is not found. If omitted, returns `nil`. |
+
+```yaml title="Safe fact access with defaults"
+# With a default value
+cpu_count: {{ facts_get("cpu.count", 1) }}
+region: {{ facts_get("region", "us-east-1") }}
+
+# Without a default (returns nil if missing)
+app_tag: {{ facts_get("tag") }}
+```
+
+```yaml title="Nested key lookups"
+# Dot notation traverses the facts map
+os_name: {{ facts_get("os.name", "unknown") }}
+hostname: {{ facts_get("network.hostname", "localhost") }}
+```
+
+```yaml title="Using facts_get in conditionals"
+{% set max_workers = facts_get("cpu.count", 4) %}
+{% if max_workers > 8 %}
+thread_pool: large
+{% else %}
+thread_pool: standard
+{% endif %}
+
+worker_processes: {{ max_workers }}
+```
+
+```yaml title="facts_get vs dot notation"
+# These are equivalent when the fact exists:
+cpu_a: {{ facts.cpu.count }}
+cpu_b: {{ facts_get("cpu.count") }}
+
+# But facts_get is safer when the key might be missing:
+optional: {{ facts_get("label", "unlabeled") }}
+```
+
+<Callout type="info" title="When to use facts_get vs default filter">
+Both `facts_get("key", fallback)` and `{{ facts.key | default(fallback) }}` provide safe access to potentially missing values. Use `facts_get` when you need to pass the result to another function or when the key name is dynamic. Use the `default` filter for simple inline fallbacks.
+</Callout>
+
+---
+
+### mlist
+
+Creates a mutable list that supports in-place mutation in templates. This is required because Go slices are value types — `{% do mylist.append(item) %}` on a plain list creates a new slice header that the template context never sees. `mlist()` wraps the list in a pointer-receiver struct that preserves Python-like mutation semantics.
+
+**Signature:** `mlist(items...) -> MutableList`
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `.Append(item)` | Add a single item (like Python `list.append`) |
+| `.Extend(list)` | Append all items from a list (like Python `list.extend`) |
+| `.Len()` | Return the number of items |
+| `.Items()` | Return the underlying list for iteration |
+| `.Get(index)` | Return the item at index, or `nil` if out of bounds |
+
+The `| length` filter works with `mlist` objects, so `{% if mylist | length %}` is a valid emptiness check.
+
+```yaml title="Building a list across loop iterations"
+{% set servers = mlist() %}
+{% for peer in basket("role:api", "network.ipv4") %}
+{% do servers.Append(peer.value) %}
+{% endfor %}
+
+upstream_count: {{ servers | length }}
+```
+
+```yaml title="Conditional include based on accumulated state"
+{% set used_sudo = mlist() %}
+{% for name, user in pillar.get('users', {}).items() %}
+{%- if user.get('sudouser') %}
+{%- do used_sudo.Append(1) %}
+{%- endif %}
+{% endfor %}
+
+{%- if used_sudo | length %}
+include:
+  - users.sudo
+{%- endif %}
+```
+
+<Callout type="warn" title="Plain lists are immutable in templates">
+`{% set mylist = [] %}` followed by `{% do mylist.append(x) %}` will **silently fail** — the list remains empty. Always use `mlist()` when you need to build a list incrementally across loop iterations or conditionals.
+</Callout>
+
+**Source:** `pkg/template/mutable_list.go`
+
+---
+
+## Salt Compatibility Functions
+
+These functions provide compatibility with Salt's execution module calling conventions. They are registered per-render and have access to the current peel's facts and settings. For full details, see [Salt Compatibility](/docs/guides/templating/salt-compatibility).
+
+### salt (accessor)
+
+Salt's canonical `salt['module.function'](...)` form works for literal module names. Calls are dispatched to facts (`grains.*`), resolved settings (`pillar.*`/`settings.*`), or the exec-module registry (`pkg.version`, `cmd.run`, `service.status`, ...).
+
+**Signature:** `salt['mod.func'](args..., kw=...) -> any`
+
+```yaml
+nginx_version: {{ salt['pkg.version']('nginx') }}
+os_family: {{ salt['grains.get']('os.family') }}
+```
+
+The accessor is seeded by scanning the template source for **literal** `salt[...]` subscripts, so dynamic names and calls inside `{% include %}`d files require the `salt_call` fallback. See [Salt Compatibility: The salt Accessor](/docs/guides/templating/salt-compatibility#the-salt-accessor).
+
+### salt_call
+
+Function-call fallback form of the salt accessor. The first argument is the module name; remaining positional and keyword arguments are forwarded to the module. Use it for dynamic module names or inside included files.
+
+**Signature:** `salt_call(name, args..., kw=...) -> any`
+
+```yaml
+{% set fn = 'pkg.version' %}
+nginx_version: {{ salt_call(fn, 'nginx') }}
+```
+
+<Callout type="warn" title="Requires a module dispatcher">
+Both the accessor and `salt_call` require `EngineConfig.ModuleFn` to be configured (the peel wires this up). Without it, any call raises a render error stating that execution-module calls are unavailable.
+</Callout>
+
+**Source:** `pkg/template/module_accessor.go`
+
+### pillar_get
+
+Looks up a value in settings using colon-separated key notation. Matches Salt's `pillar.get`.
+
+**Signature:** `pillar_get(key, default?) -> any`
+
+```yaml
+user_shell: {{ pillar_get('users:deploy:shell', '/bin/bash') }}
+```
+
+### grains_filter_by
+
+Selects a configuration dict from a lookup table based on a fact value. Defaults to looking up `os.family`. Matches Salt's `grains.filter_by`.
+
+**Signature:** `grains_filter_by(lookup_dict, grain?, merge?, base?) -> dict`
+
+```yaml
+{% set pkg_map = grains_filter_by({
+    'debian': {'pkg': 'nginx'},
+    'redhat': {'pkg': 'nginx'}
+}) %}
+```
+
+### user_info
+
+Looks up a system user by name and returns a dict with `name`, `uid`, `gid`, `home`, `shell`, `groups`.
+
+**Signature:** `user_info(name) -> dict`
+
+<Callout type="info" title="`shell` field is always empty">
+The `shell` field is always an empty string. Go's `os/user` package does not provide shell information — it only exposes username, UID, GID, home directory, and group memberships. To determine a user's shell, read `/etc/passwd` via a `cmd.run` state or store the shell in settings.
+</Callout>
+
+### cmd_has_exec
+
+Checks if a command is available in the system PATH.
+
+**Signature:** `cmd_has_exec(name) -> bool`
+
+### file_dirname
+
+Returns the directory component of a file path.
+
+**Signature:** `file_dirname(path) -> string`
+
+**Source:** `pkg/template/functions_salt.go`
+
+---
+
+## Built-in Gonja/Jinja2 Functions
+
+All standard Gonja global functions are available in Zester templates:
+
+### range
+
+Generates a list of integers. Useful for creating numbered sequences:
+
+```yaml title="Generating numbered items"
+# range(stop)
+ports:
+  {% for i in range(3) %}
+  - {{ 8080 + i }}
+  {% endfor %}
+# Output: [8080, 8081, 8082]
+
+# range(start, stop)
+{% for i in range(1, 4) %}
+worker_{{ i }}: enabled
+{% endfor %}
+
+# range(start, stop, step)
+{% for port in range(8080, 8090, 2) %}
+  - {{ port }}
+{% endfor %}
+# Output: [8080, 8082, 8084, 8086, 8088]
+```
+
+### lipsum
+
+Generates lorem ipsum placeholder text. Primarily useful during development:
+
+```yaml title="Placeholder text"
+description: {{ lipsum(1) }}
+```
+
+### cycler
+
+Creates a cycler object that cycles through a list of values. Useful for alternating values in loops:
+
+```yaml title="Alternating values in loops"
+{% set row_class = cycler("odd", "even") %}
+{% for server in facts.network.interfaces %}
+  - name: {{ server }}
+    class: {{ row_class.next() }}
+{% endfor %}
+```
+
+---
+
+## Practical Patterns
+
+### Cross-Peel Service Discovery
+
+One of the most powerful patterns in Zester templating is using `basket` for dynamic service discovery:
+
+```yaml title="/srv/zester/settings/haproxy/backends.zy"
+haproxy:
+  backends:
+    api_servers:
+      {% for peer in basket("role:api", "network.ipv4") %}
+      - address: {{ peer.value }}
+        port: {{ settings.api.port | default(8080) }}
+        name: {{ peer.peel_id }}
+      {% else %}
+      - address: 127.0.0.1
+        port: 8080
+        name: fallback
+      {% endfor %}
+
+    db_readers:
+      {% for peer in basket("role:db-reader", "network.fqdn") %}
+      - address: {{ peer.value }}
+        port: 5432
+      {% endfor %}
+```
+
+### Combining Functions with Filters
+
+```yaml title="Counted and formatted peer list"
+{% set api_peers = basket("role:api", "network.ipv4") %}
+api_peer_count: {{ api_peers | length }}
+
+{% if api_peers | length > 0 %}
+primary_api: {{ api_peers | first | attr("value") }}
+{% endif %}
+
+{% set worker_count = facts_get("cpu.count", 2) %}
+threads_per_worker: {{ (facts_get("memory.total_mb", 1024) / worker_count) | int }}
+```
+
+### Dynamic Configuration Based on Cluster Size
+
+```yaml title="Scaling configuration with cluster awareness"
+{% set db_nodes = basket("role:database", "network.ipv4") %}
+{% set node_count = db_nodes | length %}
+
+replication:
+  {% if node_count >= 3 %}
+  mode: cluster
+  min_replicas: {{ (node_count / 2) | int }}
+  {% elif node_count == 2 %}
+  mode: primary-replica
+  min_replicas: 1
+  {% else %}
+  mode: standalone
+  min_replicas: 0
+  {% endif %}
+
+  nodes:
+    {% for node in db_nodes %}
+    - {{ node.value }}
+    {% endfor %}
+```

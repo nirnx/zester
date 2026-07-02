@@ -1,0 +1,32 @@
+---
+title: "sysctl.present"
+description: "Ensures a kernel parameter is set to the desired value at runtime and optionally persisted across reboots."
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Sysctl key (e.g. `net.ipv4.ip_forward`) |
+| `value` | string | — | **Required.** Desired value |
+| `persist` | bool | `true` | Write to `/etc/sysctl.d/99-zester.conf` |
+| `require` | list | — | Requisite states |
+
+## Example
+
+```yaml
+net.ipv4.ip_forward:
+  sysctl.present:
+    - value: "1"
+    - persist: true
+
+vm.swappiness:
+  sysctl.present:
+    - value: "10"
+```
+
+## Behaviour
+
+- Check: compares current runtime value via `sysctl -n <key>`.
+- Apply: sets via `sysctl -w key=value`; if `persist=true`, writes to `/etc/sysctl.d/99-zester.conf` (existing key replaced).
+- Revert: restores the original value captured before Apply.

@@ -1,0 +1,28 @@
+---
+title: "cron.absent"
+description: "Ensures a crontab entry does not exist for a user."
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Label for the state |
+| `user` | string | `root` | User whose crontab is managed |
+| `command` | string | — | **Required.** Command to remove |
+| `require` | list | — | Requisite states |
+
+## Example
+
+```yaml
+remove-legacy-backup:
+  cron.absent:
+    - user: root
+    - command: /usr/local/bin/old_backup.sh
+```
+
+## Behaviour
+
+- Check: returns NeedsChange if an entry matching the command exists.
+- Apply: removes the entry.
+- Revert: no-op (cannot restore a deleted cron entry).

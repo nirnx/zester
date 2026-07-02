@@ -1,0 +1,468 @@
+---
+title: "Deployment"
+description: "This guide covers installing Zester binaries, configuring master and peel services, running in containers, and performing upgrades."
+---
+
+## Directory Layout
+
+Zester follows a predictable filesystem layout on both master and peel nodes.
+
+### Master
+
+```
+/usr/bin/zester-master              # Master binary
+/etc/zester/master.yaml             # Master configuration
+/etc/zester/master.creds            # NATS credentials (JWT + nkey)
+/srv/zester/states/                 # State tree (SLS files)
+/srv/zester/settings/               # Settings tree (per-peel config)
+/var/log/zester/                    # Log files (if not using journald)
+```
+
+### Peel
+
+```
+/usr/bin/zester-peel                # Peel binary
+/etc/zester/peel.yaml               # Peel configuration
+/etc/zester/peel.creds              # NATS credentials (JWT + nkey)
+/etc/zester/facts/                  # Custom fact definitions
+/etc/zester/beacons.d/              # Beacon configurations
+/var/log/zester/                    # Log files (if not using journald)
+```
+
+### File Permissions
+
+| Path | Owner | Mode | Notes |
+|---|---|---|---|
+| `/etc/zester/master.yaml` | `root:zester` | `0640` | Contains listen addresses |
+| `/etc/zester/master.creds` | `root:zester` | `0600` | Master NATS credentials |
+| `/etc/zester/peel.yaml` | `root:zester` | `0640` | Contains master URL |
+| `/etc/zester/peel.creds` | `root:zester` | `0600` | Contains private nkey seed |
+| `/srv/zester/states/` | `root:zester` | `0750` | State files |
+| `/srv/zester/settings/` | `root:zester` | `0750` | Settings files |
+
+<Callout type="success" title="Create a dedicated service account">
+Create a `zester` user and group for running the service. Never run the master or peel as root unless required by specific state modules.
+
+```bash
+useradd --system --shell /usr/sbin/nologin --home-dir /var/lib/zester zester
+mkdir -p /var/log/zester /etc/zester
+chown -R zester:zester /var/log/zester
+```
+</Callout>
+
+## systemd Units
+
+### Master Service
+
+Create `/etc/systemd/system/zester-master.service`:
+
+```ini
+[Unit]
+Description=Zester Master
+Documentation=https://github.com/ptorbus/zester
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zester
+Group=zester
+ExecStart=/usr/bin/zester-master --nats-url nats://nats:4222
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+LimitNPROC=4096
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log/zester
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Peel Service
+
+Create `/etc/systemd/system/zester-peel.service`:
+
+```ini
+[Unit]
+Description=Zester Peel Agent
+Documentation=https://github.com/ptorbus/zester
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/zester-peel --id %H --nats-url nats://nats:4222
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/zester /var/log/zester /etc/zester
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+<Callout type="info" title="Peel runs as root">
+The peel agent typically runs as root because state modules (package installation, service management, file operations) require root privileges. If your use case only needs non-privileged operations, you can run the peel as a dedicated user.
+</Callout>
+
+### Enable and Start
+
+```bash
+# Master
+systemctl daemon-reload
+systemctl enable zester-master
+systemctl start zester-master
+systemctl status zester-master
+
+# Peel
+systemctl daemon-reload
+systemctl enable zester-peel
+systemctl start zester-peel
+systemctl status zester-peel
+```
+
+### Restart to Apply Changes
+
+Neither master nor peel currently supports live configuration reload. To apply configuration changes, restart the service:
+
+```bash
+systemctl restart zester-master
+systemctl restart zester-peel
+```
+
+## Configuration
+
+### Master Configuration
+
+The master is configured via command-line flags:
+
+```bash
+zester-master \
+  --nats-url nats://nats.example.com:4222 \
+  --enroll-addr :8443 \
+  --enroll-tls-cert /data/auth/enroll.crt \
+  --enroll-tls-key /data/auth/enroll.key
+```
+
+The master loads credentials from `<auth-dir>/master.creds`, the account seed from `<auth-dir>/account.seed`, and settings from the settings directory. The default auth directory is `/data/auth`; override with `--auth-dir` or `auth_dir` in the YAML config.
+
+### Account Seed
+
+The account seed (`account.seed`) is the root key for settings encryption. It is created once during cluster bootstrap using your NATS key-management workflow (for example `nsc`) and then distributed securely to all master nodes.
+
+The master binary loads two files from the auth directory at startup:
+
+- `master.creds` — NATS authentication (each master can have its own unique creds)
+- `account.seed` — encryption key derivation (**must be identical on all masters**)
+
+<Callout type="warn" title="Multi-master requirement">
+In multi-master deployments, every instance **must** use the same `account.seed` file. Mismatched seeds cause settings decryption failure, orphan job re-encryption failure, and JWT signature mismatch. Use `--auth-dir` or `auth_dir` in the YAML config to point all masters at a shared location containing the same seed, or distribute the seed via a shared secret store (Vault, Kubernetes Secret).
+</Callout>
+
+### Peel Configuration
+
+The peel is configured via command-line flags:
+
+```bash
+zester-peel \
+  --id web-01 \
+  --nats-url nats://nats.example.com:4222 \
+  --master-url https://master:8443 \
+  --enroll-ca /data/auth/enroll-ca.crt
+```
+
+The peel loads credentials from `/data/auth/<peel-id>.creds`. If no credentials file exists and `--master-url` is set, the peel runs auto-enrollment. The `--id` flag is required.
+
+### Key Configuration Parameters
+
+**Master flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--nats-url` | `nats://nats:4222` | NATS server URL |
+| `--enroll-addr` | `:8443` | Enrollment HTTP API listen address |
+| `--enroll-tls-cert` | `/data/auth/enroll.crt` | TLS certificate for enrollment API |
+| `--enroll-tls-key` | `/data/auth/enroll.key` | TLS private key for enrollment API |
+
+**Peel flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--id` | (required) | Peel identifier |
+| `--nats-url` | `nats://nats:4222` | NATS server URL |
+| `--master-url` | `""` | Master enrollment API URL |
+| `--enroll-ca` | `""` | CA certificate for enrollment TLS |
+
+## Container Deployment
+
+### Dockerfile
+
+The actual Dockerfile uses a multi-stage build with `golang:1.25-alpine` and `alpine:3.21`:
+
+```dockerfile
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-master ./cmd/zester-master
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-peel ./cmd/zester-peel
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester ./cmd/zester
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates curl bash
+
+COPY --from=builder /bin/zester-master /usr/local/bin/zester-master
+COPY --from=builder /bin/zester-peel /usr/local/bin/zester-peel
+COPY --from=builder /bin/zester /usr/local/bin/zester
+
+ENTRYPOINT []
+```
+
+### Docker Compose Example
+
+The actual `docker-compose.yml` uses an init container to generate credentials, TLS certificates, and NATS config, then starts NATS, master, peel, and admin services. Peels auto-enroll via the master's HTTPS enrollment API:
+
+```yaml
+services:
+  init:
+    build: .
+    command: ["playground-init"]
+    volumes:
+      - auth-data:/data/auth
+      - state-data:/data/states
+      - settings-data:/data/settings
+      - nats-config:/data/nats
+
+  nats:
+    image: nats:2-alpine
+    command: ["-c", "/data/nats/nats-server.conf"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    ports:
+      - "4222:4222"
+    volumes:
+      - auth-data:/data/auth:ro
+      - nats-config:/data/nats:ro
+      - jetstream-data:/data/jetstream
+
+  master:
+    build: .
+    command: ["zester-master"]
+    depends_on:
+      nats:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth:ro
+      - state-data:/data/states:ro
+      - settings-data:/data/settings:ro
+
+  web-01:
+    build: .
+    command: ["zester-peel", "--id", "web-01", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt"]
+    depends_on:
+      master:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth
+      - state-data:/data/states:ro
+
+  admin:
+    build: .
+    depends_on:
+      nats:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /etc/zester && cp /data/nats/zester.yaml /etc/zester/master.yaml && sleep infinity"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - auth-data:/data/auth:ro
+      - nats-config:/data/nats:ro
+
+volumes:
+  auth-data:
+  state-data:
+  settings-data:
+  jetstream-data:
+  nats-config:
+```
+
+### Kubernetes Deployment
+
+Deploy NATS separately using the [NATS Helm chart](https://github.com/nats-io/k8s/tree/main/helm/charts/nats) or as a dedicated StatefulSet. The master is a stateless NATS client, so deploy it as a **Deployment**:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zester-master
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: zester-master
+  template:
+    metadata:
+      labels:
+        app: zester-master
+    spec:
+      containers:
+        - name: master
+          image: zester-master:latest
+          volumeMounts:
+            - name: config
+              mountPath: /etc/zester/master.yaml
+              subPath: master.yaml
+              readOnly: true
+            - name: creds
+              mountPath: /etc/zester/master.creds
+              subPath: master.creds
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: zester-master-config
+        - name: creds
+          secret:
+            secretName: zester-master-creds
+```
+
+Deploy peels as a **DaemonSet** on managed nodes:
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zester-peel
+spec:
+  selector:
+    matchLabels:
+      app: zester-peel
+  template:
+    metadata:
+      labels:
+        app: zester-peel
+    spec:
+      containers:
+        - name: peel
+          image: zester-peel:latest
+```
+
+## Ports Reference
+
+| Port | Protocol | Component | Purpose |
+|---|---|---|---|
+| `4222` | TCP | NATS Server | Client connections |
+| `4223` | TCP | NATS Server | Cluster peering |
+| `8222` | HTTP | NATS Server | Monitoring endpoints |
+| `8443` | HTTPS | Master | Enrollment HTTP API |
+
+## Upgrade Procedures
+
+### Rolling Master Upgrade (Multi-Master)
+
+The master is a stateless NATS client, so rolling upgrades are straightforward. For deployments with multiple master instances behind a load balancer:
+
+1. **Verify health** before starting:
+    ```bash
+    curl -s http://master-01:8222/varz | jq '{server_id, connections}'
+    ```
+
+2. **Stop the master:**
+    ```bash
+    systemctl stop zester-master
+    ```
+
+3. **Replace the binary:**
+    ```bash
+    cp zester-master-new /usr/bin/zester-master
+    chmod +x /usr/bin/zester-master
+    ```
+
+4. **Start the master:**
+    ```bash
+    systemctl start zester-master
+    ```
+
+5. **Verify it reconnects to NATS:**
+    ```bash
+    curl -s http://master-01:8222/connz | jq '.num_connections'
+    ```
+
+6. **Repeat** for the next master instance.
+
+Since each master is a stateless NATS client, upgrading one does not affect the others. The NATS cluster is managed and upgraded separately.
+
+### Single-Master Upgrade
+
+Single-master deployments require a brief outage:
+
+1. **Stop, replace, and start:**
+    ```bash
+    systemctl stop zester-master
+    cp zester-master-new /usr/bin/zester-master
+    systemctl start zester-master
+    ```
+
+2. **Peels remain connected to NATS** and continue receiving messages. The master reconnects to the external NATS server on startup.
+
+Expected downtime: **under 30 seconds**.
+
+### Peel Upgrade
+
+Peels are stateless — upgrade is a simple binary replacement:
+
+```bash
+# Using Zester itself for mass peel upgrade
+zester '*' cmd.run 'curl -O https://releases.example.com/zester-peel && \
+  chmod +x zester-peel && mv zester-peel /usr/bin/ && \
+  systemctl restart zester-peel'
+
+# Or target a subset with a narrower target expression
+zester 'G@os:ubuntu' cmd.run 'apt upgrade zester-peel -y'
+```
+
+Peels can be upgraded in parallel without risk. They reconnect automatically after restart.
+
+### Blue-Green Deployment
+
+For zero-downtime master upgrades in environments that support it:
+
+1. **Deploy new master instances** alongside the existing ones, pointing at the same external NATS cluster.
+2. **Shift traffic** to the new instances via load balancer or DNS.
+3. **Decommission old master instances** once the new ones are healthy.
+
+This approach works because the master is a stateless NATS client. Multiple masters can coexist, connected to the same NATS cluster, without coordination.
+
+<Callout type="info" title="NATS cluster upgrades are separate">
+Upgrading the external NATS cluster follows the standard [NATS upgrade procedures](https://docs.nats.io/running-a-nats-service/nats_admin/upgrading_cluster). This is independent of Zester master upgrades.
+</Callout>

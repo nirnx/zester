@@ -1,0 +1,122 @@
+---
+title: "cmd.run"
+description: "Executes a command on the target system and captures its output. Commands are not inherently idempotent, so the creates parameter provides an idempotency mechanism."
+---
+
+**Source**: `pkg/state/modules/cmd.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `command` | `string` | No | State ID | The command to execute. If omitted, the state ID is used as the command. |
+| `args` | `list` | No | `[]` | Additional arguments passed to the command. When empty, the command is executed via `sh -c`. When provided, the command is executed directly with these arguments. |
+| `cwd` | `string` | No | *(process cwd)* | Working directory for command execution. |
+| `env` | `map` | No | `{}` | Environment variables to set for the command. These are merged with the current environment. |
+| `creates` | `string` | No | `""` | A file path that, if it exists, means the command has already run. Provides idempotency by skipping execution when this path exists. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+- If `creates` is set and the specified path exists, the state reports no changes needed.
+- Otherwise, the state always reports that changes are needed (the command needs to run).
+
+---
+
+## Apply Behavior
+
+1. Builds the command:
+    - If `args` is empty, runs via shell: `sh -c "<command>"`.
+    - If `args` is provided, runs the command directly with the arguments.
+2. Sets the working directory if `cwd` is specified.
+3. Merges `env` variables with the current process environment.
+4. Executes the command and captures stdout and stderr.
+5. Reports the result with exit code, stdout, and stderr in the details map.
+
+---
+
+## Revert Behavior
+
+Commands are **not revertible**. The Revert method returns a no-op result with `Changed: false`. If you need revertible command execution, manage the undo logic with a separate state.
+
+---
+
+## Details Returned
+
+After execution, the `ApplyResult.Details` map contains:
+
+| Key | Description |
+|---|---|
+| `command` | The command that was executed |
+| `stdout` | Standard output (trimmed) |
+| `stderr` | Standard error (trimmed) |
+| `exitcode` | Process exit code as a string |
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Run a command on a single peel
+zester 'web-01' cmd.run 'uptime'
+
+# Run on all peels
+zester '*' cmd.run 'hostname'
+
+# Run on web peels only
+zester 'web*' cmd.run 'df -h'
+```
+
+### State File
+
+**Simple command with idempotency guard:**
+
+```yaml
+initialize_database:
+  cmd.run:
+    - command: /usr/local/bin/init-db --setup
+    - creates: /var/lib/myapp/.db-initialized
+```
+
+**Command with arguments and working directory:**
+
+```yaml
+build_application:
+  cmd.run:
+    - command: make
+    - args:
+      - build
+      - "-j4"
+    - cwd: /opt/myapp/src
+```
+
+**Command with environment variables:**
+
+```yaml
+run_migrations:
+  cmd.run:
+    - command: python manage.py migrate --noinput
+    - cwd: /opt/webapp
+    - env:
+        DJANGO_SETTINGS_MODULE: myproject.settings.production
+        DATABASE_URL: "postgresql://localhost/mydb"
+    - creates: /opt/webapp/.migrations-done
+    - require:
+      - pkg.installed:install_python
+```
+
+**Shell pipeline (no args means sh -c execution):**
+
+```yaml
+cleanup_logs:
+  cmd.run:
+    - command: find /var/log/myapp -name "*.log" -mtime +30 -delete && touch /tmp/.logs-cleaned
+    - creates: /tmp/.logs-cleaned
+```

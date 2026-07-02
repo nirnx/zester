@@ -1,0 +1,381 @@
+---
+title: "Architecture Overview"
+---
+
+Zester is a configuration management system built in pure Go that replaces SaltStack's Python-based architecture with a modern, high-performance design centered on NATS JetStream. This document covers the system topology, package structure, component interactions, and end-to-end data flows.
+
+## Master / Peel Topology
+
+Zester uses a **master/agent model** where the central control plane is called the **master** and managed nodes are called **peels** (a nod to Zester's citrus-themed naming). All components — the master, peels, and CLI — connect to an external NATS server as clients. The master orchestrates operations, while peels receive commands, apply state, and report back.
+
+```mermaid
+graph TB
+    NATS["External NATS Server<br/>+ JetStream"]
+
+    subgraph Master["Master Node"]
+        direction TB
+        M_API["CLI / API"]
+        M_ENGINE["Orchestration Engine"]
+        M_TARGET["Targeting Engine"]
+        M_FACTS["Fact Index<br/>(radix tree)"]
+        M_JOBS["Job Manager"]
+    end
+
+    subgraph Peels["Managed Nodes"]
+        P1["Peel: web-01"]
+        P2["Peel: web-02"]
+        P3["Peel: db-01"]
+        P4["Peel: cache-01"]
+        PN["Peel: ..."]
+    end
+
+    M_API --> M_ENGINE
+    M_ENGINE --> M_TARGET
+    M_ENGINE --> M_JOBS
+    M_TARGET --> M_FACTS
+    M_JOBS --> NATS
+
+    Master <-->|"TLS 1.3 + nkey auth"| NATS
+    NATS <-->|"TLS 1.3 + nkey auth"| P1
+    NATS <-->|"TLS 1.3 + nkey auth"| P2
+    NATS <-->|"TLS 1.3 + nkey auth"| P3
+    NATS <-->|"TLS 1.3 + nkey auth"| P4
+    NATS <-->|"TLS 1.3 + nkey auth"| PN
+```
+
+**Key characteristics:**
+
+- NATS runs as an **external server** with JetStream enabled. The master, peels, and CLI all connect to it as clients.
+- The master authenticates to NATS using a `master.creds` file with permissions scoped to orchestration subjects.
+- Peels connect over the network using **TLS 1.3** with **mTLS** (mutual TLS) and authenticate via **nkey challenge-response** with JWT-based authorization.
+- All data -- facts, settings, job state, event history -- is persisted in NATS JetStream KV buckets and streams. There is no external database.
+
+### Multi-Master Topology
+
+Zester supports **active-active multi-master** deployment for high availability. Multiple master instances connect to the same NATS cluster and share the workload using NATS queue groups. There is no primary/secondary distinction -- all masters are equal peers.
+
+```mermaid
+graph TB
+    subgraph Cluster["NATS Cluster (RAFT)"]
+        N1["NATS Node 1"]
+        N2["NATS Node 2"]
+        N3["NATS Node 3"]
+        N1 <-->|RAFT| N2
+        N2 <-->|RAFT| N3
+        N1 <-->|RAFT| N3
+    end
+
+    subgraph Masters["Master Instances"]
+        M1["Master A<br/>(active)"]
+        M2["Master B<br/>(active)"]
+        M3["Master C<br/>(active)"]
+    end
+
+    M1 <-->|"TLS + creds"| Cluster
+    M2 <-->|"TLS + creds"| Cluster
+    M3 <-->|"TLS + creds"| Cluster
+
+    subgraph Peels["Managed Nodes"]
+        P1["Peel: web-01"]
+        P2["Peel: web-02"]
+        P3["Peel: db-01"]
+        PN["Peel: ..."]
+    end
+
+    Cluster <-->|"TLS + nkey"| P1
+    Cluster <-->|"TLS + nkey"| P2
+    Cluster <-->|"TLS + nkey"| P3
+    Cluster <-->|"TLS + nkey"| PN
+```
+
+In multi-master mode:
+
+- All masters subscribe to `zester.dispatch` with queue group `zester.masters`. NATS delivers each dispatch request to exactly one master.
+- Each master publishes a periodic **heartbeat** to the `master-heartbeat` KV bucket. Surviving masters detect missing heartbeats and recover orphaned jobs.
+- Job **ownership** is tracked via the `Owner` and `Epoch` fields on the `Job` struct. The `Epoch` (KV revision from CAS) serves as a fencing token to prevent duplicate execution during network partitions.
+- All masters share the same **account seed** for encryption consistency.
+- All masters subscribe to `zester.job.*.cancel` for cancel propagation.
+
+<Callout type="info" title="See also">
+For full details on multi-master deployment, queue group dispatch, fencing tokens, heartbeat monitoring, and orphan recovery, see the [High Availability](/docs/architecture/ha) documentation.
+</Callout>
+
+## Package Structure
+
+Zester's Go packages are organized by responsibility:
+
+```mermaid
+graph LR
+    subgraph bus["pkg/bus"]
+        B_CLIENT["client.go<br/>NATS client connection"]
+        B_KV["kv.go<br/>KV buckets + streams"]
+        B_SUBJ["subjects.go<br/>Subject hierarchy"]
+        B_TLS["tls.go<br/>TLS configuration"]
+        B_CODEC["codec.go<br/>MessagePack"]
+    end
+
+    subgraph auth["pkg/auth"]
+        A_KEYS["keys.go<br/>nkey management"]
+        A_JWT["jwt.go<br/>JWT hierarchy"]
+        A_CREDS["creds.go<br/>Credential files"]
+        A_ENC["encrypt.go<br/>NaCl box"]
+        A_ACCEPT["accept.go<br/>Key acceptance"]
+    end
+
+    subgraph facts["pkg/facts"]
+        F_COLL["collector.go<br/>Fact collection"]
+        F_MGR["manager.go<br/>Fact lifecycle"]
+        F_IDX["index.go<br/>Radix tree index"]
+        F_COLLS["collectors/<br/>os, cpu, mem, disk, net"]
+    end
+
+    subgraph state["pkg/state"]
+        S_STATE["state.go<br/>State definitions"]
+        S_DAG["dag.go<br/>Dependency graph"]
+        S_RUN["runner.go<br/>State execution"]
+        S_MOD["modules/<br/>file, cmd, pkg"]
+    end
+
+    subgraph other["Supporting Packages"]
+        O_TMPL["pkg/template<br/>Gonja engine"]
+        O_TGT["pkg/target<br/>Targeting"]
+        O_SET["pkg/settings<br/>Per-peel config"]
+        O_JOB["pkg/job<br/>Job lifecycle<br/>(heartbeat, recovery, resolve)"]
+    end
+
+    bus --> auth
+    state --> bus
+    facts --> bus
+    other --> bus
+    other --> auth
+```
+
+| Package | Responsibility |
+|---------|---------------|
+| `pkg/bus` | NATS client management, JetStream KV/streams, subject hierarchy, MessagePack codec, TLS |
+| `pkg/auth` | nkey generation/management, JWT trust hierarchy, NaCl box encryption, credential files, key acceptance |
+| `pkg/facts` | System fact collection (OS, CPU, memory, disk, network), fact indexing with radix tree |
+| `pkg/state` | State file parsing, DAG-based dependency resolution, state module execution |
+| `pkg/template` | Jinja2-compatible template engine with custom filters/functions |
+| `pkg/target` | Peel targeting via glob, PCRE, fact matching, list, and compound expressions |
+| `pkg/settings` | Per-peel settings management, top file matching, encrypted value handling |
+| `pkg/job` | Job creation, dispatch, acknowledgment tracking, return collection, lifecycle management, master heartbeat, orphan recovery, ownership resolution |
+
+## Component Interaction
+
+The following diagram shows how the core components interact during normal operation. In a multi-master deployment, the CLI dispatches to `zester.dispatch` using a NATS queue group, and exactly one master handles each job.
+
+```mermaid
+sequenceDiagram
+    participant CLI as CLI / API
+    participant NATS as External NATS
+    participant Master as Master<br/>(queue: zester.masters)
+    participant Peel as Peel Agent
+
+    Note over Peel,NATS: Peel connects with TLS + nkey/JWT auth
+    Peel->>NATS: Publish facts to zester.fact.<peel-id>
+
+    CLI->>NATS: Request zester.dispatch<br/>(job spec)
+    Note over NATS: Queue group: zester.masters<br/>Deliver to ONE master
+    NATS->>Master: Deliver job to master
+
+    Master->>Master: Resolve targets, create job
+    Master->>Master: Set Owner = master-id
+    Master->>NATS: Store job in KV, publish dispatch event
+    Master->>NATS: Publish ExecRequest to<br/>zester.cmd.<peel-id>
+    Master-->>CLI: Reply {jid}
+
+    NATS->>Peel: Deliver ExecRequest
+    Note over Peel: Execute state DAG
+    Peel->>NATS: Publish zester.job.<jid>.return.<peel-id>
+
+    NATS->>Master: Collect returns
+    Master->>NATS: Publish zester.job.<jid>.status
+    Master-->>CLI: Job complete
+```
+
+## Message Flows
+
+### Command Dispatch
+
+When an operator issues a command (e.g., `zester 'web*' state.apply webserver`), the flow is:
+
+1. **CLI resolves the target** -- The CLI queries the NATS KV facts bucket to resolve matching peel IDs.
+2. **CLI creates a job** -- A job ID (JID) is generated with the resolved targets.
+3. **CLI dispatches to master** -- The job is sent to `zester.dispatch` via request/reply. In a multi-master deployment, NATS queue group `zester.masters` delivers the request to exactly one master.
+4. **Master claims ownership** -- The receiving master sets the job's `Owner` field to its own instance ID and stores the job in the `jobs` KV bucket.
+5. **Master dispatches to peels** -- An `ExecRequest` is published to `zester.cmd.<peel-id>` for each target. A dispatch event is published to `zester.job.<jid>.dispatch` for audit.
+6. **Peels execute and return** -- Each peel executes the function and publishes its result to `zester.job.<jid>.return.<peel-id>`. For job dispatches, peels also subscribe to `zester.job.<jid>.cancel` so cancellation stops execution.
+7. **Master aggregates** -- The owning master's watcher collects returns, computes aggregate status, and publishes to `zester.job.<jid>.status`. Returns are stored in the `job-returns` KV bucket.
+
+### Fact Synchronization
+
+Fact data flows from peels to the master and into the targeting index:
+
+```mermaid
+graph LR
+    subgraph Peel["Peel Agent"]
+        C_OS["OS Collector"]
+        C_CPU["CPU Collector"]
+        C_MEM["Memory Collector"]
+        C_DISK["Disk Collector"]
+        C_NET["Network Collector"]
+        F_MGR["Fact Manager"]
+    end
+
+    subgraph Master["Master"]
+        KV_FACTS["KV: facts<br/>key: peel-id"]
+        FACT_IDX["Fact Index<br/>(radix tree)"]
+    end
+
+    C_OS --> F_MGR
+    C_CPU --> F_MGR
+    C_MEM --> F_MGR
+    C_DISK --> F_MGR
+    C_NET --> F_MGR
+
+    F_MGR -->|"Publish to<br/>zester.fact.&lt;peel-id&gt;"| KV_FACTS
+    KV_FACTS -->|"KV watch"| FACT_IDX
+```
+
+1. Each peel runs **fact collectors** (OS, CPU, memory, disk, network) on a periodic schedule.
+2. Collected facts are serialized with MessagePack and published to `zester.fact.<peel-id>`.
+3. The master stores facts in the `facts` KV bucket (keyed by peel ID, 5 history revisions).
+4. A KV watch on the `facts` bucket triggers updates to the in-memory **radix tree index**, which supports fast pattern matching for the targeting engine.
+
+### State Application
+
+The state application flow is Zester's core workflow:
+
+```mermaid
+sequenceDiagram
+    participant Master
+    participant NATS as NATS Bus
+    participant Peel as Peel Agent
+    participant DAG as DAG Runner
+    participant Modules as State Modules
+
+    Master->>NATS: Publish ExecRequest to<br/>zester.cmd.<peel-id>
+    NATS->>Peel: Deliver ExecRequest
+
+    Peel->>Peel: Resolve settings from<br/>KV: settings-files + secrets
+
+    Peel->>Peel: Render templates<br/>(Gonja engine)
+
+    Peel->>DAG: Build dependency graph
+    Note over DAG: Topological sort
+
+    loop For each state in DAG order
+        DAG->>Modules: Execute state module
+        Note over Modules: file.managed, pkg.installed,<br/>cmd.run, etc.
+        Modules-->>DAG: Result (changed/unchanged/failed)
+    end
+
+    Peel->>NATS: Publish return to<br/>zester.job.<jid>.return.<peel-id>
+    NATS->>Master: Deliver return
+```
+
+1. The master publishes an `ExecRequest` (with module `state.apply`) to `zester.cmd.<peel-id>`.
+2. The peel resolves settings from `settings-files` and `secrets` KV buckets (peel-side rendering model).
+3. Templates in the state file are rendered using the Gonja engine, with access to facts, settings, and basket data.
+4. The state is parsed into a **DAG** (directed acyclic graph) and topologically sorted to respect `require` dependencies.
+5. Each state in the DAG is executed by its corresponding **state module** (e.g., `file.managed`, `pkg.installed`, `cmd.run`).
+6. Results are collected and published as a job return.
+
+<Callout type="info" title="Peel-side rendering">
+Peel-side settings rendering is implemented. The master distributes sanitized `.zy` files (with `__ZESTER_SECRET:*__` placeholders replacing `!encrypted` literals) via the `settings-files` KV bucket and encrypted secrets via the `secrets` KV bucket. Each peel renders templates locally using its own facts. This eliminates per-peel CPU load on the master and simplifies multi-master coordination. See [High Availability](/docs/architecture/ha#peel-side-rendering) for details.
+</Callout>
+
+### Job Returns
+
+Job returns flow through the system with persistence for audit and replay:
+
+```mermaid
+graph LR
+    PEEL["Peel"] -->|"zester.job.&lt;jid&gt;.return.&lt;peel-id&gt;"| STREAM["Stream: job-events<br/>(7-day retention)"]
+    PEEL -->|"Same subject"| KV_RET["KV: job-returns<br/>(7-day TTL)"]
+    KV_RET --> MASTER["Job Manager"]
+    STREAM --> AUDIT["Audit / Replay"]
+    MASTER --> KV_JOBS["KV: jobs<br/>(status update)"]
+```
+
+- Job returns are published to subjects matching `zester.job.<jid>.return.<peel-id>`.
+- The `job-events` JetStream stream captures **all** job-related messages (`zester.job.>`) for 7 days, providing a complete audit trail and replay capability.
+- The `job-returns` KV bucket stores incremental per-peel entries — the sole store for return payloads; the finalized job record carries summary counts.
+- The `jobs` KV bucket tracks aggregate job status (10 history revisions).
+
+## Data Model
+
+All data is persisted in NATS JetStream. The storage layer consists of **KV buckets** for key-value state and **streams** for ordered event logs:
+
+| Storage | Type | Purpose | Retention |
+|---------|------|---------|-----------|
+| `facts` | KV bucket | Per-peel system facts | No TTL, 5 revisions |
+| `settings-files` | KV bucket | Sanitized `.zy` settings files for peel-side rendering | No TTL, 3 revisions |
+| `secrets` | KV bucket | Per-peel encrypted `!encrypted` values | No TTL, 3 revisions |
+| `basket` | KV bucket | Peel-to-peel shared data | No TTL, 1 revision |
+| `jobs` | KV bucket | Job specs, status, ownership, and epoch | 7-day TTL, 10 revisions |
+| `job-returns` | KV bucket | Incremental per-peel returns | 7-day TTL, 1 revision |
+| `master-heartbeat` | KV bucket | Master instance health and active job list | 15-second TTL, 1 revision |
+| `job-events` | Stream | Full job event log | 7-day max age, file storage |
+
+All values are serialized with **MessagePack** (`github.com/vmihailenco/msgpack/v5`), chosen for its compact binary format, self-describing structure, and no-codegen requirement.
+
+## Serialization
+
+Zester uses MessagePack for all wire-format serialization via the `pkg/bus/codec.go` module:
+
+```go
+// All NATS messages use these two functions
+func Encode(v any) ([]byte, error)  // struct -> MessagePack bytes
+func Decode(data []byte, v any) error  // MessagePack bytes -> struct
+```
+
+**Why MessagePack over alternatives:**
+
+| Criteria | MessagePack | Protobuf | CBOR |
+|----------|-------------|----------|------|
+| Schema required | No | Yes (.proto) | No |
+| Code generation | None | Required | None |
+| Self-describing | Yes | No | Yes |
+| Go library | vmihailenco/msgpack | google.golang.org/protobuf | fxamacker/cbor |
+| Relative size | Baseline | Smallest | Similar |
+
+MessagePack was selected because it requires no build-time code generation, is self-describing (simplifying debugging), and the `vmihailenco/msgpack/v5` library is mature and well-tested in Go.
+
+## External NATS Architecture
+
+Zester uses an external NATS server for all messaging and persistence. The master connects to NATS as a client using `bus.NewClient`, the same connection layer used by peels:
+
+```go
+type Client struct {
+    nc     *nats.Conn           // NATS connection
+    js     jetstream.JetStream  // JetStream context
+}
+```
+
+**Benefits of the external NATS approach:**
+
+- **Dedicated resources** -- NATS has its own process with dedicated memory and CPU, independent of the master.
+- **Production-grade HA** -- Deploy a 3+ node NATS cluster with RAFT consensus for high availability.
+- **Simplified master** -- The master is a pure client, reducing its complexity and resource footprint.
+- **Standard operations** -- Use standard NATS tooling for monitoring, backup, and management.
+- **JWT-enforced auth** -- NATS natively enforces the operator/account/user JWT hierarchy, with each connection scoped to its authorized subjects.
+
+The `ClientConfig` accepts `URLs` for connecting to one or more NATS servers, with full reconnection support. For multi-cluster isolation, use NATS JetStream domains.
+
+## Peel Resilience
+
+The peel client (`pkg/bus/client.go`) is designed for resilience during network disruptions:
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `MaxReconnects` | -1 (unlimited) | Never stop trying to reconnect |
+| `ReconnectWait` | 2 seconds | Base wait between attempts |
+| `ReconnectJitter` | 500ms - 5s | Randomized jitter to avoid thundering herd |
+| `ReconnectBufSize` | 8 MB | Buffer messages during reconnection |
+| `PingInterval` | 20 seconds | Health check frequency |
+| `MaxPingsOut` | 3 | Missed pings before declaring unhealthy |
+| `DrainTimeout` | 30 seconds | Graceful shutdown drain timeout |
+
+The client exposes `DisconnectNotify()` and `ReconnectNotify()` channels, allowing the peel agent to react to connectivity changes (e.g., pausing state application during disconnection and replaying buffered events on reconnection).

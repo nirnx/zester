@@ -1,0 +1,56 @@
+---
+title: "Overview"
+description: "Zester uses YAML configuration files for both master and peel nodes. The configuration system is intentionally simple -- most settings have sensible defaults so that a minimal config file is enough to get started."
+---
+
+## Configuration Files
+
+| Node | Default Paths | Format |
+|------|---------------|--------|
+| **Master** | `/etc/zester/master.yaml` | YAML |
+| **Peel** | `/etc/zester/peel.yaml` | YAML |
+| **CLI** | `/etc/zester/master.yaml`, `~/.zester/config.yaml` | YAML |
+
+The CLI checks `/etc/zester/master.yaml` first, then falls back to `~/.zester/config.yaml`. If neither exists, it connects to `nats://localhost:4222` with no authentication.
+
+## Section Contents
+
+| Page | Description |
+|------|-------------|
+| [Master Configuration](/docs/reference/configuration/master) | NATS client connection settings: server URLs, credentials, reconnection behavior, and timeouts |
+| [Peel Configuration](/docs/reference/configuration/peel) | All NATS client settings: server URLs, credentials, reconnection behavior, health checks, and timeouts |
+
+## Minimal Examples
+
+### Master
+
+The master uses command-line flags rather than a YAML config file:
+
+```bash
+zester-master --nats-url nats://nats:4222
+```
+
+The master connects to an external NATS server as a client. Credentials are loaded from `/data/auth/master.creds` and the account seed from `/data/auth/account.seed`.
+
+### Peel
+
+The peel uses command-line flags:
+
+```bash
+zester-peel --id web-01 --nats-url nats://nats:4222
+```
+
+Credentials are loaded from `/data/auth/<peel-id>.creds`. The peel connects with unlimited reconnect attempts, 2-second backoff with jitter, and 8 MB reconnect buffer.
+
+### CLI
+
+```yaml
+master:
+  urls:
+    - nats://master.example.com:4222
+  creds_file: ~/.zester/admin.creds
+```
+
+<Callout type="success" title="Environment-specific configs">
+Use the `--config` flag to point at an alternative config file: `zester --config /path/to/staging.yaml peel list`.
+</Callout>

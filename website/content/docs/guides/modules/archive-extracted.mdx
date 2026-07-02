@@ -1,0 +1,80 @@
+---
+title: "archive.extracted"
+description: "Extracts a tar or zip archive from a local path or URL into a target directory. Idempotency is path-based: set if_missing to a file or directory the extraction creates."
+---
+
+**Source**: `pkg/state/modules/archive.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Target directory the archive is extracted into. |
+| `source` | `string` | **Yes** | — | Local file path, or an `http://` / `https://` / `ftp://` URL. Remote sources are downloaded with `curl` (falling back to `wget`). |
+| `archive_format` | `string` | No | `auto` | `tar`, `zip`, or `auto`. With `auto`, the format is inferred from the source name: `.zip` → zip, everything else (`.tar*`, `.tgz`, `.tbz2`, `.txz`, unknown) → tar. |
+| `if_missing` | `string` | No | `""` | A path whose existence means the archive is already extracted. When set, it is the **sole** idempotency check. |
+| `makedirs` | `bool` | No | `false` | Create the target directory (and parents, mode `0755`) before extracting. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+- With `if_missing` set: no changes needed if that path exists, changes needed otherwise.
+- Without `if_missing` (weak fallback): no changes needed if the target directory exists, changes needed otherwise.
+
+<Callout type="warn" title="Set `if_missing`">
+Without `if_missing`, an existing target directory is considered "already extracted" — even if it is empty. Point `if_missing` at a file the archive actually creates.
+</Callout>
+
+---
+
+## Apply Behavior
+
+1. Creates the target directory when `makedirs` is set (recorded so Revert knows it may remove it).
+2. Remote sources are downloaded to a temp file via `curl -fSL` (or `wget` when curl is unavailable).
+3. Extraction: `unzip -o <archive> -d <dir>` for zip, `tar -xf <archive> -C <dir>` for tar. A non-zero exit code fails the state.
+
+---
+
+## Revert Behavior
+
+- If Apply created the target directory (via `makedirs`), Revert removes it recursively.
+- Otherwise Revert is a no-op (`Changed: false`) — extracted files are not tracked individually.
+
+---
+
+## Examples
+
+### State File
+
+**Extract a release tarball once:**
+
+```yaml
+/opt/prometheus:
+  archive.extracted:
+    - source: https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz
+    - if_missing: /opt/prometheus/prometheus-2.53.0.linux-amd64
+    - makedirs: true
+```
+
+**Local zip archive:**
+
+```yaml
+/srv/webapp:
+  archive.extracted:
+    - source: /tmp/webapp-release.zip
+    - archive_format: zip
+    - if_missing: /srv/webapp/index.html
+```
+
+---
+
+## Divergences from Salt
+
+- Idempotency is purely path-based (`if_missing` / target-dir existence). Salt's `source_hash` verification is not supported — the download is not checksummed.
+- Salt's `enforce_toplevel`, `options`, `user`/`group`, `clean`, and `trim_output` parameters are not supported.
+- Requires `tar`/`unzip` (and `curl` or `wget` for remote sources) to be present on the peel.

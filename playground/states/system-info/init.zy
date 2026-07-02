@@ -1,0 +1,21 @@
+/tmp/system-info.txt:
+  file.managed:
+    - content: |
+        System Information for {{ facts.id }}
+        ========================================
+        OS Family: {{ facts.os.family }}
+        Platform: {{ facts.os.platform }}
+        Arch: {{ facts.os.arch }}
+        Hostname: {{ facts.network.hostname }}
+        Default IPv4: {{ facts.default_ipv4 }}
+        Timezone: {{ settings.timezone | default("UTC") }}
+        Log Level: {{ settings.log_level | default("info") }}
+    - mode: "0644"
+    - makedirs: true
+
+verify-system-info:
+  cmd.run:
+    - command: echo "system-info generated for {{ facts.network.hostname }} at {{ facts.default_ipv4 }}"
+    - creates: /tmp/.system-info-verified
+    - require:
+      - "file.managed:/tmp/system-info.txt"

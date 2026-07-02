@@ -1,0 +1,103 @@
+---
+title: "zester kv fact"
+description: "Read peel facts from the NATS KV cache. Facts are key-value data reported by each peel, including system information like OS, architecture, CPU count, memory, and any custom facts configured on the peel."
+---
+
+<Callout type="info" title="KV cache vs direct query">
+`zester kv fact get` reads from the NATS KV facts bucket (no round-trip to
+the peel). To query a peel directly, use `zester '<peel>' facts.get <key>`
+or `zester '<peel>' facts.items`.
+</Callout>
+
+## Synopsis
+
+```
+zester kv fact get <peel> [key]
+```
+
+## Description
+
+Fetches the full facts map for the specified peel from the NATS KV facts
+bucket. If a key argument is provided, only the value at that key path is
+returned.
+
+The key argument supports **dot notation** to traverse nested fact structures.
+For example, `os.family` looks up `facts["os"]["family"]`.
+
+## Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<peel>` | Yes | Peel ID to query |
+| `[key]` | No | Dot-notation fact key to filter |
+
+## Flags
+
+This command has no subcommand-specific flags. See [global flags](/docs/reference/cli#global-flags).
+
+## Output
+
+Output is formatted as indented JSON.
+
+## Examples
+
+### Get all facts
+
+```bash
+zester kv fact get web-01
+```
+
+```json
+{
+  "os": "ubuntu",
+  "os_family": "debian",
+  "arch": "amd64",
+  "cpu_count": 8,
+  "memory_gb": 32,
+  "hostname": "web-01.example.com",
+  "roles": [
+    "web",
+    "api"
+  ]
+}
+```
+
+### Get a specific fact
+
+```bash
+zester kv fact get web-01 os
+```
+
+```json
+"ubuntu"
+```
+
+### Get a nested fact using dot notation
+
+```bash
+zester kv fact get web-01 network.interfaces.eth0.ip
+```
+
+```json
+"10.0.1.42"
+```
+
+### Fact key not found
+
+```bash
+zester kv fact get web-01 nonexistent.key
+```
+
+```
+Error: fact key "nonexistent.key" not found for peel web-01
+```
+
+### Peel not found
+
+```bash
+zester kv fact get unknown-peel
+```
+
+```
+Error: get facts for unknown-peel: key not found
+```

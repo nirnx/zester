@@ -1,0 +1,447 @@
+---
+title: "Built-in Collectors"
+description: "Zester ships with seven built-in fact collectors. Each collector gathers information about one domain of the system and stores it under its own namespace in the facts map."
+---
+
+All collectors implement the `Collector` interface defined in `pkg/facts/collector.go`:
+
+```go
+type Collector interface {
+    Name() string
+    Collect(ctx context.Context) (map[string]any, error)
+    Interval() time.Duration
+}
+```
+
+If `Interval()` returns zero, the collector runs once at startup. A non-zero interval causes the Facts Manager to re-run the collector on that schedule and republish updated facts.
+
+---
+
+## OS Collector
+
+**Namespace:** `os`
+**Refresh:** Once at startup
+**Source:** `pkg/facts/collectors/os.go`
+
+Collects operating system and kernel metadata using [gopsutil](https://github.com/shirou/gopsutil) with a fallback to Go's `runtime` package.
+
+### Fields
+
+| Key                | Type     | Description |
+|--------------------|----------|-------------|
+| `os.name`          | `string` | Operating system name (e.g., `"linux"`, `"darwin"`, `"windows"`) |
+| `os.family`        | `string` | Platform family (e.g., `"debian"`, `"rhel"`, `"standalone"`) |
+| `os.platform`      | `string` | Specific distribution (e.g., `"ubuntu"`, `"centos"`, `"arch"`) |
+| `os.platform_version` | `string` | Distribution version (e.g., `"22.04"`, `"9.3"`) |
+| `os.arch`          | `string` | CPU architecture from Go runtime (e.g., `"amd64"`, `"arm64"`) |
+| `os.kernel`        | `string` | Kernel version string (e.g., `"6.1.0-18-amd64"`) |
+| `os.kernel_arch`   | `string` | Kernel architecture (e.g., `"x86_64"`, `"aarch64"`) |
+| `os.uptime`        | `uint64` | System uptime in seconds |
+| `os.boot_time`     | `uint64` | Unix timestamp of last boot |
+
+### Example Output
+
+```json
+{
+  "os": {
+    "name": "linux",
+    "family": "debian",
+    "platform": "ubuntu",
+    "platform_version": "22.04",
+    "arch": "amd64",
+    "kernel": "6.1.0-18-amd64",
+    "kernel_arch": "x86_64",
+    "uptime": 864523,
+    "boot_time": 1707321600
+  }
+}
+```
+
+<Callout type="info" title="Fallback behavior">
+If gopsutil cannot read host information (e.g., in a minimal container), the OS collector falls back to Go's `runtime` package and returns only `name`, `arch`, and `family`.
+</Callout>
+
+---
+
+## Network Collector
+
+**Namespace:** `network`
+**Refresh:** Once at startup
+**Source:** `pkg/facts/collectors/network.go`
+
+Collects hostname, FQDN, IP addresses, and network interface details.
+
+### Fields
+
+| Key                         | Type              | Description |
+|-----------------------------|-------------------|-------------|
+| `network.hostname`          | `string`          | Short hostname from `os.Hostname()` |
+| `network.fqdn`              | `string`          | Fully qualified domain name |
+| `network.ipv4`              | `[]string`        | All IPv4 addresses across all interfaces |
+| `network.ipv6`              | `[]string`        | All IPv6 addresses across all interfaces |
+| `network.interfaces`        | `[]object`        | List of network interface objects |
+| `network.interfaces[].name` | `string`          | Interface name (e.g., `"eth0"`, `"ens5"`) |
+| `network.interfaces[].mac`  | `string`          | MAC / hardware address |
+| `network.interfaces[].flags`| `[]string`        | Interface flags (e.g., `"up"`, `"broadcast"`) |
+| `network.interfaces[].addrs`| `[]string`        | CIDR addresses assigned to this interface |
+
+### Example Output
+
+```json
+{
+  "network": {
+    "hostname": "web-01",
+    "fqdn": "web-01.prod.example.com",
+    "ipv4": ["10.0.1.15", "172.17.0.1"],
+    "ipv6": ["fe80::1", "::1"],
+    "interfaces": [
+      {
+        "name": "eth0",
+        "mac": "02:42:ac:11:00:02",
+        "flags": ["up", "broadcast", "multicast"],
+        "addrs": ["10.0.1.15/24"]
+      },
+      {
+        "name": "lo",
+        "mac": "",
+        "flags": ["up", "loopback"],
+        "addrs": ["127.0.0.1/8", "::1/128"]
+      },
+      {
+        "name": "docker0",
+        "mac": "02:42:d8:5a:3b:1c",
+        "flags": ["up", "broadcast", "multicast"],
+        "addrs": ["172.17.0.1/16"]
+      }
+    ]
+  }
+}
+```
+
+---
+
+## DefaultIP Collector
+
+**Namespace:** *(root)*
+**Refresh:** Once at startup
+**Source:** `pkg/facts/collectors/defaultip.go`
+
+Determines the peel's default outgoing IPv4 address using the UDP dial trick: a UDP socket is opened to a non-routable address (TEST-NET-1, RFC 5737 — `192.0.2.1:9`) without sending any data, and the local address is read from the socket. The OS kernel selects the source address according to the routing table, making this a reliable way to detect the primary outbound interface's address even on multi-homed hosts.
+
+The result is **merged at the root level** of the facts map (like Custom facts) so it appears as `facts.default_ipv4`, not under a nested namespace.
+
+### Fields
+
+| Key              | Type     | Description |
+|------------------|----------|-------------|
+| `default_ipv4`   | `string` | Primary outbound IPv4 address (e.g., `"10.0.1.15"`) |
+
+### Example Output
+
+```json
+{
+  "default_ipv4": "10.0.1.15"
+}
+```
+
+<Callout type="info" title="Empty on failure">
+If the UDP dial fails (e.g., in a network-isolated container), the collector returns an empty map. No error is logged and no `default_ipv4` key is set.
+</Callout>
+
+---
+
+## CPU Collector
+
+**Namespace:** `cpu`
+**Refresh:** Once at startup
+**Source:** `pkg/facts/collectors/cpu.go`
+
+Collects CPU model, vendor, clock speed, and core counts.
+
+### Fields
+
+| Key                 | Type      | Description |
+|---------------------|-----------|-------------|
+| `cpu.count`         | `int`     | Logical CPU count (from Go `runtime.NumCPU()`) |
+| `cpu.logical_count` | `int`     | Logical CPU count (same as `count`) |
+| `cpu.physical_count`| `int`     | Physical core count (excludes hyperthreading) |
+| `cpu.model`         | `string`  | CPU model name (e.g., `"Intel(R) Xeon(R) Platinum 8375C"`) |
+| `cpu.vendor`        | `string`  | CPU vendor ID (e.g., `"GenuineIntel"`, `"AuthenticAMD"`) |
+| `cpu.mhz`           | `float64` | Clock speed in MHz |
+| `cpu.cache_size`    | `int32`   | L2 cache size in KB |
+
+### Example Output
+
+```json
+{
+  "cpu": {
+    "count": 8,
+    "logical_count": 8,
+    "physical_count": 4,
+    "model": "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz",
+    "vendor": "GenuineIntel",
+    "mhz": 2900.0,
+    "cache_size": 54272
+  }
+}
+```
+
+---
+
+## Memory Collector
+
+**Namespace:** `memory`
+**Refresh:** Every 5 minutes
+**Source:** `pkg/facts/collectors/memory.go`
+
+Collects RAM and swap usage statistics. This collector runs on a 5-minute interval because memory usage changes over time.
+
+### Fields
+
+| Key                   | Type      | Description |
+|-----------------------|-----------|-------------|
+| `memory.total`        | `uint64`  | Total physical memory in bytes |
+| `memory.available`    | `uint64`  | Available memory in bytes |
+| `memory.used`         | `uint64`  | Used memory in bytes |
+| `memory.used_percent` | `float64` | Memory usage as a percentage (0-100) |
+| `memory.free`         | `uint64`  | Free memory in bytes |
+| `memory.swap_total`   | `uint64`  | Total swap space in bytes |
+| `memory.swap_used`    | `uint64`  | Used swap space in bytes |
+| `memory.swap_free`    | `uint64`  | Free swap space in bytes |
+
+### Example Output
+
+```json
+{
+  "memory": {
+    "total": 17179869184,
+    "available": 8589934592,
+    "used": 7516192768,
+    "used_percent": 43.75,
+    "free": 1073741824,
+    "swap_total": 4294967296,
+    "swap_used": 0,
+    "swap_free": 4294967296
+  }
+}
+```
+
+<Callout type="success" title="Using memory facts for capacity planning">
+Memory facts update every 5 minutes. Use them in settings templates to dynamically size application buffers:
+```yaml
+# /srv/zester/settings/postgres/memory.zy
+postgres:
+  shared_buffers: {{ (facts.memory.total * 0.25) | int }}
+  effective_cache_size: {{ (facts.memory.total * 0.75) | int }}
+```
+</Callout>
+
+---
+
+## Disk Collector
+
+**Namespace:** `disk`
+**Refresh:** Every 5 minutes
+**Source:** `pkg/facts/collectors/disk.go`
+
+Collects mount point information and disk usage statistics. Only real partitions are included (pseudo-filesystems are excluded).
+
+### Fields
+
+| Key                              | Type      | Description |
+|----------------------------------|-----------|-------------|
+| `disk.mounts`                    | `[]object`| List of mount point objects |
+| `disk.mounts[].device`          | `string`  | Block device path (e.g., `"/dev/sda1"`) |
+| `disk.mounts[].mountpoint`      | `string`  | Mount path (e.g., `"/"`, `"/data"`) |
+| `disk.mounts[].fstype`          | `string`  | Filesystem type (e.g., `"ext4"`, `"xfs"`) |
+| `disk.mounts[].opts`            | `[]string`| Mount options |
+| `disk.mounts[].total`           | `uint64`  | Total space in bytes |
+| `disk.mounts[].used`            | `uint64`  | Used space in bytes |
+| `disk.mounts[].free`            | `uint64`  | Free space in bytes |
+| `disk.mounts[].used_percent`    | `float64` | Disk usage as a percentage (0-100) |
+
+### Example Output
+
+```json
+{
+  "disk": {
+    "mounts": [
+      {
+        "device": "/dev/sda1",
+        "mountpoint": "/",
+        "fstype": "ext4",
+        "opts": ["rw", "relatime"],
+        "total": 107374182400,
+        "used": 32212254720,
+        "free": 75161927680,
+        "used_percent": 30.0
+      },
+      {
+        "device": "/dev/sdb1",
+        "mountpoint": "/data",
+        "fstype": "xfs",
+        "opts": ["rw", "noatime"],
+        "total": 1099511627776,
+        "used": 549755813888,
+        "free": 549755813888,
+        "used_percent": 50.0
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Custom Collector
+
+**Merge:** Root level (no namespace)
+**Refresh:** Every 30 seconds
+**Source:** `pkg/facts/collectors/custom.go`
+
+Reads persistent custom facts from a YAML file on disk. This is the Zester equivalent of Salt's `/etc/salt/grains`. Custom facts are **merged at the top level** of the facts map -- a key `role: webserver` in the file becomes `facts.role`, not `facts.custom.role`. Operators create or edit the file directly on the peel; changes are picked up automatically within 30 seconds.
+
+### File Location
+
+```
+/etc/zester/facts
+```
+
+The file is plain YAML. If the file does not exist, the collector returns an empty map (no error).
+
+### Example File
+
+```yaml
+# /etc/zester/facts
+roles:
+  - webserver
+  - proxy
+datacenter: us-east-1
+tier: production
+cluster:
+  name: web-cluster-01
+  shard: 2
+```
+
+### Example Output
+
+After the Custom collector runs, its facts appear at the top level of the facts map (not under a `custom` namespace):
+
+```json
+{
+  "roles": ["webserver", "proxy"],
+  "datacenter": "us-east-1",
+  "tier": "production",
+  "cluster": {
+    "name": "web-cluster-01",
+    "shard": 2
+  }
+}
+```
+
+These sit alongside the built-in namespaces (`os`, `cpu`, etc.) -- just like Salt's `/etc/salt/grains`.
+
+### Querying Custom Facts
+
+```bash
+# Get a custom fact directly (no namespace prefix)
+zester 'web-01' facts.get datacenter
+
+# Get a nested custom fact
+zester 'web-01' facts.get cluster.name
+
+# Set a custom fact from the CLI (writes to /etc/zester/facts)
+zester 'web-01' facts.set datacenter us-west-2
+```
+
+### In Templates
+
+```yaml
+{% if "webserver" in facts.roles %}
+nginx:
+  worker_processes: {{ facts.cpu.count }}
+{% endif %}
+
+datacenter: {{ facts.datacenter }}
+```
+
+<Callout type="success" title="Configurable path">
+The `Custom` collector accepts a `Path` field. If empty (the default), it reads from `/etc/zester/facts`. Custom paths can be set when registering the collector in `cmd/zester-peel/main.go`.
+</Callout>
+
+---
+
+## Complete Facts Example
+
+When all seven collectors run, a peel produces a combined facts map like this:
+
+```json
+{
+  "os": {
+    "name": "linux",
+    "family": "debian",
+    "platform": "ubuntu",
+    "platform_version": "22.04",
+    "arch": "amd64",
+    "kernel": "6.1.0-18-amd64",
+    "kernel_arch": "x86_64",
+    "uptime": 864523,
+    "boot_time": 1707321600
+  },
+  "network": {
+    "hostname": "web-01",
+    "fqdn": "web-01.prod.example.com",
+    "ipv4": ["10.0.1.15"],
+    "ipv6": ["fe80::1"],
+    "interfaces": [
+      {
+        "name": "eth0",
+        "mac": "02:42:ac:11:00:02",
+        "flags": ["up", "broadcast", "multicast"],
+        "addrs": ["10.0.1.15/24"]
+      }
+    ]
+  },
+  "cpu": {
+    "count": 8,
+    "logical_count": 8,
+    "physical_count": 4,
+    "model": "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz",
+    "vendor": "GenuineIntel",
+    "mhz": 2900.0,
+    "cache_size": 54272
+  },
+  "memory": {
+    "total": 17179869184,
+    "available": 8589934592,
+    "used": 7516192768,
+    "used_percent": 43.75,
+    "free": 1073741824,
+    "swap_total": 4294967296,
+    "swap_used": 0,
+    "swap_free": 4294967296
+  },
+  "disk": {
+    "mounts": [
+      {
+        "device": "/dev/sda1",
+        "mountpoint": "/",
+        "fstype": "ext4",
+        "opts": ["rw", "relatime"],
+        "total": 107374182400,
+        "used": 32212254720,
+        "free": 75161927680,
+        "used_percent": 30.0
+      }
+    ]
+  },
+  "default_ipv4": "10.0.1.15",
+  "roles": ["webserver"],
+  "datacenter": "us-east-1",
+  "tier": "production"
+}
+```
+
+<Callout type="info" title="Custom facts are optional">
+Custom facts from `/etc/zester/facts` are merged at the top level. If the file is absent, no custom keys appear. Keys like `roles`, `datacenter`, and `tier` above come from the Custom collector.
+</Callout>

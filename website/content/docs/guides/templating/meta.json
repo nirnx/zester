@@ -1,0 +1,9 @@
+{
+  "title": "Templating",
+  "pages": [
+    "syntax",
+    "filters",
+    "functions",
+    "salt-compatibility"
+  ]
+}

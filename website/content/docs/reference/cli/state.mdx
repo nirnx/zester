@@ -1,0 +1,153 @@
+---
+title: "zester state"
+description: "Manage state application. States are declarative configuration definitions that are applied to peels to bring them into the desired state."
+---
+
+---
+
+## Direct Execution (Salt-Style)
+
+The primary way to apply states uses the Salt-like direct execution syntax:
+
+```bash
+zester '<target>' state.apply <state-name>
+```
+
+This is equivalent to Salt's `salt '<target>' state.apply <state-name>`.
+
+### Examples
+
+```bash
+# Apply a state to a single peel
+zester 'web-01' state.apply hello
+
+# Apply to all web peels
+zester 'web*' state.apply webserver
+
+# Apply to all peels
+zester '*' state.apply base
+```
+
+### Output
+
+```
+web-01:
+    file.managed:/tmp/hello-zester.txt:
+        changed: true
+        duration: 156.08us
+        diff: wrote 129 bytes to /tmp/hello-zester.txt (mode 644)
+        path: /tmp/hello-zester.txt
+        bytes: 129
+        mode: 0644
+```
+
+When a state contains multiple modules, each is listed by its state result name:
+
+```
+web-01:
+    pkg.installed:install_nginx:
+        changed: true
+        duration: 12.3s
+    file.managed:/etc/nginx/nginx.conf:
+        changed: true
+        duration: 1.2ms
+    cmd.run:reload_nginx:
+        changed: true
+        duration: 45ms
+```
+
+---
+
+## Flags
+
+State modules use the standard global flags. The `--timeout` flag has longer
+defaults for state operations than for other modules:
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--timeout` | `duration` | `5m` for `state.apply`, `10m` for `state.highstate` | Maximum time to wait |
+| `--direct` | `bool` | `false` | Bypass master, send directly to peels via NATS request/reply |
+| `--format` | `string` | `text` | Output format: `text`, `json`, or `yaml` |
+| `--test` | `bool` | `false` | Dry run: compile and check states without applying (Salt `test=True`) |
+
+---
+
+## Dry Run (`--test` / `test=True`)
+
+Preview what a state application would change without modifying the system.
+The `--test` flag and the `test=True` argument are equivalent — the flag sets
+`test=true` in the module args, and the peel treats either the same way:
+
+```bash
+zester 'web*' state.apply nginx --test
+zester 'web*' state.apply nginx test=True
+```
+
+In test mode the peel compiles the state as usual (includes, extends,
+templates), builds the DAG, then runs each state's **Check phase only**.
+Nothing is applied or reverted:
+
+```
+web-01:
+    file.managed:/etc/nginx/nginx.conf:
+        changed: true
+        duration: 1.1ms
+        diff: content differs for /etc/nginx/nginx.conf
+    pkg.installed:nginx:
+        changed: false
+        duration: 89ms
+```
+
+`changed: true` means the state **would** change if applied; `diff` describes
+the pending change. Requisite skip semantics still apply, but retry policies
+are not evaluated in test mode.
+
+The `test=` argument accepts `true`, `yes`, `1`, or `on` (case-insensitive)
+as truthy values.
+
+### Examples
+
+#### Apply to all peels matching a glob
+
+```bash
+zester 'web*' state.apply nginx.restart
+```
+
+```
+Targeting 3 peel(s): [web-01 web-02 web-03]
+Job 2hPx1FNsSgJMqVn5bLSTXeBQMpO dispatched
+web-01:
+    cmd.run:reload_nginx:
+        changed: true
+        duration: 45ms
+web-02:
+    cmd.run:reload_nginx:
+        changed: true
+        duration: 52ms
+web-03:
+    cmd.run:reload_nginx:
+        changed: true
+        duration: 41ms
+```
+
+#### Apply using fact targeting
+
+```bash
+zester 'G@os:ubuntu' state.apply apt.upgrade --timeout 15m
+```
+
+#### Direct mode
+
+```bash
+zester 'web-01' state.apply webserver --direct
+```
+
+#### No matches
+
+```bash
+zester 'nonexistent*' state.apply base
+```
+
+```
+Error: no peels matched target "nonexistent*"
+```

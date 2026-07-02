@@ -1,0 +1,136 @@
+---
+title: "State File Distribution"
+---
+
+By default, state files live on each peel's local filesystem (`/data/states`). For production deployments, Zester supports **KV-based state distribution** — the master publishes state files to a NATS KV bucket, and peels automatically cache them to local disk.
+
+This mirrors the settings pipeline: the master is the single source of truth, and peels stay in sync via KV watches.
+
+---
+
+## How It Works
+
+```mermaid
+flowchart LR
+    A[Git Repos] -->|gitfs pull| B[Master states dir]
+    B -->|publish| C[state-files KV bucket]
+    C -->|watch + cache| D[Peel cache dir]
+    D -->|read| E[Compiler]
+```
+
+### Master Side
+
+On startup, the master walks `--states-dir` and publishes all non-hidden files to the `state-files` KV bucket. This includes `.zy` state files, `.star` Starlark modules, and any other non-hidden files in the states directory. KV keys use forward-slash relative paths (e.g., `webserver/init.zy`, `_modules/nginx.star`, `common/packages.zy`, `top.zy`).
+
+State files are stored as **raw bytes** in KV (not MessagePack encoded), because peels write them directly to disk for the compiler.
+
+### Peel Side
+
+On startup, the peel:
+
+1. **Syncs** all entries from the `state-files` KV bucket to `--states-cache` (default `/data/states-cache`)
+2. **Watches** the bucket for changes and updates the cache incrementally
+3. **Falls back** to the baked-in `/data/states` directory if the cache is empty (e.g., on first boot before the master has published)
+
+The compiler reads state files from whichever directory has content — the KV cache takes priority over the baked-in states.
+
+<Callout type="success" title="Zero-downtime updates">
+Because peels watch the KV bucket continuously, pushing updated state files to the master's `--states-dir` (or via GitFS) propagates to all peels automatically. No peel restart required.
+</Callout>
+
+---
+
+## Configuration
+
+### Master Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--states-dir` | `/data/states` | Root directory for state files |
+| `--settings-dir` | `/data/settings` | Root directory for settings files |
+
+### Peel Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--states-cache` | `/data/states-cache` | Local cache directory for state files downloaded from KV |
+
+---
+
+## GitFS
+
+GitFS is an optional feature that syncs state files from one or more Git repositories. The master clones repos into `--states-dir`, periodically pulls updates, and republishes changed files to KV.
+
+This is similar to SaltStack's `gitfs_remotes` — you can manage your state files in Git and have them automatically distributed to all peels.
+
+### GitFS Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--gitfs-remotes` | `""` | Comma-separated Git remote URLs |
+| `--gitfs-interval` | `5m` | Pull interval |
+| `--gitfs-ssh-key` | `""` | Path to SSH private key for authentication |
+
+### Clone Strategy
+
+Each remote is cloned into `{states-dir}/{repo-name}/` where `repo-name` is the last path segment of the URL without `.git`:
+
+| Remote URL | Clone Directory |
+|-----------|----------------|
+| `git@github.com:org/nginx-formula.git` | `{states-dir}/nginx-formula/` |
+| `https://github.com/org/base-states.git` | `{states-dir}/base-states/` |
+
+Clones use `--depth 1` (shallow) for speed. Updates use `git pull --ff-only`.
+
+### SSH Authentication
+
+For private repositories, provide an SSH key:
+
+```bash
+zester-master --gitfs-remotes "git@github.com:org/states.git" \
+              --gitfs-ssh-key /data/auth/gitfs-deploy-key
+```
+
+The key is passed via `GIT_SSH_COMMAND` with `StrictHostKeyChecking=accept-new`.
+
+<Callout type="warn" title="Git must be installed">
+GitFS shells out to the `git` binary. The master Docker image includes `git` and `openssh-client` by default. If running outside Docker, ensure `git` is in `$PATH`.
+</Callout>
+
+### Example: Multiple Repos
+
+```bash
+zester-master --gitfs-remotes "git@github.com:org/base.git,git@github.com:org/app.git" \
+              --gitfs-interval 2m \
+              --gitfs-ssh-key /data/auth/deploy.key
+```
+
+This clones both repos into `--states-dir`, pulls every 2 minutes, and republishes all `.zy` files to KV after each sync. State files from both repos are available to peels via `state.apply` and `state.highstate`.
+
+### Error Handling
+
+- A failed `git pull` logs an error but does **not** crash the master. The next interval retries.
+- If a remote is unreachable on initial clone, other remotes still proceed.
+- The previous KV state remains intact until a successful pull + publish cycle.
+
+---
+
+## Fallback Behavior
+
+The peel uses the KV cache if it has any files, otherwise falls back to the baked-in `/data/states` directory. This means:
+
+- **Existing deployments** continue working without configuration changes
+- **New deployments** work immediately on first boot (before the master publishes)
+- **Master outage** — peels keep their cached state files and continue operating
+
+---
+
+## KV Bucket Details
+
+| Property | Value |
+|----------|-------|
+| Bucket name | `state-files` |
+| History | 3 versions per key |
+| Replicas | 1 (increase to 3 for production clusters) |
+| TTL | None (files persist until explicitly deleted) |
+| Encoding | Raw bytes (not MessagePack) |

@@ -1,0 +1,52 @@
+---
+title: "Overview"
+description: "This section covers everything you need to run Zester in production, from initial deployment through day-two operations, monitoring, scaling, and incident response."
+---
+
+## Overview
+
+Zester's operational model is simple by design. The master connects to an external NATS server as a client — there is no external database beyond NATS, and no additional runtime dependencies. A single static binary per role is all you deploy, plus a NATS server.
+
+| Component | Binary | Deploys To | Persistent State |
+|---|---|---|---|
+| **Master** | `zester-master` | Dedicated server(s) | None (stateless client) |
+| **NATS** | `nats-server` | Dedicated server(s) | JetStream data (`/var/lib/nats/jetstream/`) |
+| **Peel** | `zester-peel` | Every managed host | Local working state under `/data` (credentials, state-file cache, settings snapshot, job dedup) |
+| **CLI** | `zester` | Operator workstations | None |
+
+NATS JetStream holds all authoritative state — KV buckets for facts, settings, jobs, and returns, plus streams for the job event log. A peel keeps only its credentials and a small set of locally rebuilt working files (the state-file cache, a last-known-good settings snapshot, and a job-dedup record) that let it boot and enforce offline; everything except the credentials is repopulated from NATS, so peels can be replaced or upgraded without data loss.
+
+## Sections
+
+<Cards>
+<Card title="Deployment" href="/docs/operations/deployment">
+Directory layout, systemd units, container images, configuration reference, and upgrade procedures for both master and peel.
+</Card>
+<Card title="Monitoring" href="/docs/operations/monitoring">
+NATS server monitoring, structured logging, alerting recommendations, and observability guidance.
+</Card>
+<Card title="Backup & Recovery" href="/docs/operations/backup">
+JetStream backup and restore commands, data retention configuration, and disaster recovery procedures.
+</Card>
+<Card title="Scaling" href="/docs/operations/scaling">
+Resource sizing tables, NATS cluster sizing, leaf node deployment for edge and DMZ, and performance tuning parameters.
+</Card>
+<Card title="Troubleshooting" href="/docs/operations/troubleshooting">
+Common issues with symptom/cause/fix tables, connectivity debugging, authentication failures, and debug logging.
+</Card>
+<Card title="Enrollment" href="/docs/operations/enrollment">
+Peel enrollment operations: setup, approving/rejecting requests via CLI, monitoring, revocation, and troubleshooting.
+</Card>
+<Card title="SRE Runbook" href="/docs/operations/sre-runbook">
+On-call checklists, failure mode detection, emergency recovery procedures, and escalation paths.
+</Card>
+</Cards>
+
+
+## Operational Principles
+
+1. **Peels are cattle, not pets.** Beyond their credentials, they carry only locally rebuilt caches. Replace them freely.
+2. **The master is the single source of truth.** All persistent data lives in JetStream KV. Back it up.
+3. **NATS handles the hard parts.** Clustering, replication, failover, message delivery guarantees — let NATS do what it does best.
+4. **Graceful degradation is built in.** Peels survive master *and* NATS outages: they boot offline-first from cached state and snapshot settings, keep their schedules enforcing, retry connections, and resume seamlessly when the control plane returns.
+5. **Observe everything.** Every component produces structured JSON logs. Use NATS server monitoring endpoints and log aggregation for operational visibility.

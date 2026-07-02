@@ -1,0 +1,43 @@
+---
+title: "pkg.removed"
+description: "Ensures that a system package is not installed. Inverse of pkg.installed."
+---
+
+Uses the same package provider as `pkg.installed` (apt, dnf, yum, brew), selected at peel startup based on OS family.
+
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Name of the package to remove |
+
+## Example
+
+```yaml
+# Remove using the state ID as the package name.
+wget:
+  pkg.removed: []
+
+# Remove using an explicit name.
+remove-old-client:
+  pkg.removed:
+    - name: curl
+    - require:
+      - "cmd.run:stop-service"
+```
+
+## Behavior
+
+| Phase | Action |
+|-|-|
+| Check | `IsInstalled` — returns `NeedsChange: true` if the package is installed |
+| Apply | `Remove` — uninstalls the package via the package manager |
+| Revert | `Install` — reinstalls the package (empty version string installs latest) |
+
+## Notes
+
+- Revert reinstalls the package without a version constraint. If you need to pin a version on revert, use `pkg.installed` as the desired end state instead.
+- The module reports `NeedsChange: false` (already correct) when the package is not installed, making it safe to run repeatedly.
+- Use `require` to ensure dependent services are stopped before removal.

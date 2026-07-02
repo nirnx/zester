@@ -1,0 +1,90 @@
+---
+title: "file.copy"
+description: "Copies a source file that already exists on the peel to a destination path. Modeled after Salt's file.copy module."
+---
+
+**Source**: `pkg/state/modules/file_copy.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Destination path. `path` is accepted as an alias. |
+| `source` | `string` | **Yes** | — | Path of the file to copy from (local to the peel). |
+| `force` | `bool` | No | `false` | Overwrite the destination when it already exists. Without `force`, an existing destination is left untouched. |
+| `preserve` | `bool` | No | `false` | Copy the source file's permission mode to the destination (otherwise the destination is written with mode `0644`). |
+| `makedirs` | `bool` | No | `false` | Create parent directories of the destination (mode `0755`) if needed. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+1. Reads the source — a missing source is an **error**.
+2. If the destination does not exist, changes are needed.
+3. If the destination exists and `force` is not set, the state reports no changes needed (the existing file wins).
+4. With `force`, source and destination contents are compared by SHA-256 hash; a difference means changes are needed. With `preserve` additionally set, differing permission modes also trigger a change.
+
+---
+
+## Apply Behavior
+
+1. Reads the source file.
+2. If the destination exists and `force` is not set, Apply is a no-op (`Changed: false`). With `force`, the existing content is backed up for revert.
+3. Creates parent directories when `makedirs` is set.
+4. Writes the destination with mode `0644`, or the source's permission mode when `preserve` is set (a `chmod` is issued to enforce it).
+
+---
+
+## Revert Behavior
+
+- If the destination did not exist before Apply, it is removed.
+- If it was overwritten (`force`), the original content is restored.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+zester 'web-01' file.copy /etc/nginx/nginx.conf.bak source=/etc/nginx/nginx.conf
+```
+
+### State File
+
+**Back up a config file before editing it:**
+
+```yaml
+/etc/nginx/nginx.conf.bak:
+  file.copy:
+    - source: /etc/nginx/nginx.conf
+
+/etc/nginx/nginx.conf:
+  file.replace:
+    - pattern: "worker_processes .*"
+    - repl: "worker_processes auto;"
+    - require:
+      - "file.copy:/etc/nginx/nginx.conf.bak"
+```
+
+**Deploy from a staging area, keeping it in sync:**
+
+```yaml
+/opt/app/config.yaml:
+  file.copy:
+    - source: /opt/staging/config.yaml
+    - force: true
+    - preserve: true
+    - makedirs: true
+```
+
+---
+
+## Divergences from Salt
+
+- Only regular files are copied — Salt's recursive directory copy (`subdir`), `user`/`group` ownership, and `mode` parameters are not supported.
+- Ownership is not preserved; only the permission mode is (with `preserve`).

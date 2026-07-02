@@ -1,0 +1,34 @@
+{# Example user settings — equivalent to Salt pillar data #}
+
+api_header: "Bearer {{ settings.api_secret }}"
+
+groups:
+  developers:
+    gid: 2000
+    system: False
+  ops:
+    gid: 2001
+    system: False
+
+users:
+  deploy:
+    uid: 4000
+    shell: /bin/bash
+    fullname: Deploy User
+    home: /home/deploy
+    createhome: True
+    system: False
+    groups:
+      - developers
+      - ops
+    sudouser: True
+    sudo_rules:
+      - ALL=(ALL) NOPASSWD:ALL
+  testuser:
+    uid: 4001
+    shell: /bin/bash
+    fullname: Test User
+    home: /home/testuser
+    createhome: True
+    groups:
+      - developers

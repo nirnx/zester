@@ -1,0 +1,457 @@
+openapi: 3.1.0
+info:
+  title: Zester Master API
+  description: REST API for job dispatch and enrollment management on zester-master.
+  version: "v1"
+servers:
+  - url: /api/v1
+paths:
+  /jobs:
+    post:
+      summary: Dispatch job
+      description: Resolves a target expression to peel IDs, creates a job, and dispatches it for execution. Returns immediately with the job ID.
+      operationId: dispatchJob
+      tags:
+        - jobs
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DispatchRequest"
+      responses:
+        "202":
+          description: Job accepted and dispatched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DispatchResponse"
+        "400":
+          description: Validation error (missing fields, invalid timeout, no matching peels)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job ID conflict (duplicate JID)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /jobs/{jid}:
+    get:
+      summary: Get job status and returns
+      description: Retrieves the current status of a job and any returns received from peels.
+      operationId: getJob
+      tags:
+        - jobs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jid
+          in: path
+          required: true
+          description: Job ID (KSUID)
+          schema:
+            type: string
+          example: "2OVxgJl5Mn3yB8R4TqK1v6ZN9wP"
+      responses:
+        "200":
+          description: Job state with returns
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobStatusResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /enrollments:
+    get:
+      summary: List enrollments
+      description: Returns enrollment records filtered by state. Defaults to pending enrollments only.
+      operationId: listEnrollments
+      tags:
+        - enrollments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: state
+          in: query
+          required: false
+          description: "Filter by enrollment state. Use 'all' to return all states."
+          schema:
+            type: string
+            enum:
+              - pending
+              - approved
+              - rejected
+              - issued
+              - active
+              - revoked
+              - all
+            default: pending
+      responses:
+        "200":
+          description: List of enrollment records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EnrollmentItem"
+        "400":
+          description: Invalid state parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /enrollments/{id}/approve:
+    post:
+      summary: Approve enrollment
+      description: Approves a pending enrollment request. The authenticated API username is recorded as the approver.
+      operationId: approveEnrollment
+      tags:
+        - enrollments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Enrollment ID (e.g. enr-...)
+          schema:
+            type: string
+          example: "enr-2OVxgJl5Mn3yB8R4TqK1v6ZN9wP"
+      responses:
+        "200":
+          description: Enrollment approved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentItem"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Enrollment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid state transition (e.g. already approved)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /enrollments/{id}/reject:
+    post:
+      summary: Reject enrollment
+      description: Rejects a pending enrollment request. The authenticated API username is recorded as the decider; an optional reason may be supplied in the request body.
+      operationId: rejectEnrollment
+      tags:
+        - enrollments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Enrollment ID (e.g. enr-...)
+          schema:
+            type: string
+          example: "enr-2OVxgJl5Mn3yB8R4TqK1v6ZN9wP"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollmentDecisionRequest"
+      responses:
+        "200":
+          description: Enrollment rejected successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentItem"
+        "400":
+          description: Invalid JSON body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Enrollment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid state transition (e.g. not pending)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /enrollments/{id}/revoke:
+    post:
+      summary: Revoke enrollment
+      description: Revokes an approved, issued, or active enrollment. The authenticated API username is recorded as the decider; an optional reason may be supplied in the request body.
+      operationId: revokeEnrollment
+      tags:
+        - enrollments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Enrollment ID (e.g. enr-...)
+          schema:
+            type: string
+          example: "enr-2OVxgJl5Mn3yB8R4TqK1v6ZN9wP"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollmentDecisionRequest"
+      responses:
+        "200":
+          description: Enrollment revoked successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentItem"
+        "400":
+          description: Invalid JSON body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Enrollment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid state transition (e.g. already revoked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /openapi.yaml:
+    get:
+      summary: OpenAPI spec (YAML)
+      operationId: getOpenAPIYAML
+      tags:
+        - docs
+      responses:
+        "200":
+          description: OpenAPI specification in YAML format
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /openapi.json:
+    get:
+      summary: OpenAPI spec (JSON)
+      operationId: getOpenAPIJSON
+      tags:
+        - docs
+      responses:
+        "200":
+          description: OpenAPI specification in JSON format
+          content:
+            application/json:
+              schema:
+                type: object
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+      description: API token read from a configured token file on the master. Pass as "Bearer <token>".
+  schemas:
+    DispatchRequest:
+      type: object
+      required:
+        - function
+      properties:
+        target:
+          type: string
+          description: "Target expression (glob, compound, fact-based, etc.). Either target or targets must be provided."
+          example: "web-*"
+        targets:
+          type: array
+          items:
+            type: string
+          description: "Explicit list of peel IDs. Bypasses target resolution when provided."
+          example: ["web-01", "web-02"]
+        function:
+          type: string
+          description: "Module function to execute (e.g. cmd.run, test.ping, state.apply)."
+          example: "cmd.run"
+        args:
+          type: object
+          additionalProperties: true
+          description: "Arguments for the function."
+          example:
+            command: "hostname -f"
+        timeout:
+          type: string
+          description: "Go duration string for job timeout. Default 60s."
+          example: "30s"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: "Arbitrary key-value metadata attached to the job."
+          example:
+            triggered_by: "ci-pipeline-42"
+    DispatchResponse:
+      type: object
+      properties:
+        jid:
+          type: string
+          description: "Job ID assigned to this dispatch."
+          example: "2OVxgJl5Mn3yB8R4TqK1v6ZN9wP"
+        targets:
+          type: array
+          items:
+            type: string
+          description: "Resolved peel IDs that will execute this job."
+          example: ["web-01", "web-02"]
+        status:
+          type: string
+          description: "Initial job status."
+          example: "pending"
+    JobStatusResponse:
+      type: object
+      properties:
+        jid:
+          type: string
+          example: "2OVxgJl5Mn3yB8R4TqK1v6ZN9wP"
+        function:
+          type: string
+          example: "cmd.run"
+        targets:
+          type: array
+          items:
+            type: string
+          example: ["web-01"]
+        status:
+          type: string
+          description: "Current job status: pending, claimed, running, complete, partial, timeout, failed, canceled."
+          example: "complete"
+        created:
+          type: string
+          format: date-time
+        updated:
+          type: string
+          format: date-time
+        returns:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReturnItem"
+        complete:
+          type: boolean
+          description: "True when the job has reached a terminal state."
+    ReturnItem:
+      type: object
+      properties:
+        peel_id:
+          type: string
+          example: "web-01"
+        success:
+          type: boolean
+        return_data:
+          description: "Module-specific return data."
+        error:
+          type: string
+        duration:
+          type: integer
+          description: "Execution duration in nanoseconds."
+        timestamp:
+          type: string
+          format: date-time
+    EnrollmentItem:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "enr-2OVxgJl5Mn3yB8R4TqK1v6ZN9wP"
+        peel_id:
+          type: string
+          example: "web-01"
+        hostname:
+          type: string
+        state:
+          type: string
+          enum:
+            - pending
+            - approved
+            - rejected
+            - issued
+            - active
+            - revoked
+        created_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+    EnrollmentDecisionRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: "Optional human-readable justification recorded on the enrollment record."
+          example: "host decommissioned"
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: "Human-readable error message."
+          example: "target is required"

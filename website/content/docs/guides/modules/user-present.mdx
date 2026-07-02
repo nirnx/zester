@@ -1,0 +1,121 @@
+---
+title: "user.present"
+description: "Ensures a user account exists with the specified attributes."
+---
+
+**Source**: `pkg/state/modules/user.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Username for the account. If omitted, the state ID is used as the username. |
+| `uid` | `int` | No | *(auto)* | Numeric user ID. Only compared/set when non-zero. |
+| `gid` | `int` or `string` | No | *(auto)* | Primary group ID when given as an integer (only compared/set when non-zero). When given as a string, treated as a group name and stored as `primary_group` (Salt compatibility). |
+| `primary_group` | `string` | No | `""` | Primary group name (used during creation only). |
+| `home` | `string` | No | *(system default)* | Home directory path. |
+| `shell` | `string` | No | *(system default)* | Login shell path. |
+| `createhome` | `bool` | No | `false` | If `true`, create the home directory when creating the user. |
+| `system` | `bool` | No | `false` | If `true`, create a system account (low UID range). |
+| `password` | `string` | No | `""` | Hashed password string. Always applied on modify if non-empty (not compared). |
+| `fullname` | `string` | No | `""` | GECOS full name field. |
+| `groups` | `list` | No | `[]` | Desired supplementary group list. |
+| `optional_groups` | `list` | No | `[]` | Supplementary groups included in the desired group list only if the user is already a member of the group (i.e., the group is already in the user's current supplementary groups). Groups listed here that the user is not already a member of are silently skipped. |
+| `remove_groups` | `bool` | No | `false` | If `true`, remove supplementary groups not in the `groups` list. If `false`, existing groups are preserved. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+The check phase performs these comparisons in order:
+
+1. **User existence** — if the user does not exist, the state needs changes.
+2. **UID** — if `uid` is specified (non-zero) and differs from the current value, the state needs changes.
+3. **GID** — if `gid` is specified (non-zero) and differs from the current value, the state needs changes.
+4. **Home directory** — if `home` is specified and differs from the current value, the state needs changes.
+5. **Shell** — if `shell` is specified and differs from the current value, the state needs changes.
+6. **Full name** — if `fullname` is specified and differs from the current value, the state needs changes.
+7. **Groups** — if `groups` is specified, computes the desired group list (merging `groups`, `optional_groups`, and optionally preserving existing groups based on `remove_groups`) and compares with the current group membership. If they differ, the state needs changes.
+
+If all checks pass, the state reports no changes needed.
+
+---
+
+## Apply Behavior
+
+1. Looks up the user. If the user does not exist:
+   - Creates the user via `useradd` with all specified attributes (`uid`, `gid`, `primary_group`, `groups`, `home`, `shell`, `createhome`, `system`, `password`, `fullname`).
+   - Records that the user was created (for revert).
+2. If the user already exists:
+   - Stores the original user info as a backup (for revert).
+   - Compares each attribute and builds a modification set for any that differ.
+   - Applies modifications via `usermod` if any changes are needed.
+
+---
+
+## Revert Behavior
+
+- If the user was created by Apply, deletes the user (with home directory removal).
+- If the user was modified by Apply, restores the original attributes (uid, gid, home, shell, fullname, groups) via `usermod`.
+- If no changes were made, no-op.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Create a user with defaults
+zester 'web-01' user.present appuser
+
+# Create a user with specific attributes
+zester 'web*' user.present deploy uid=1500 home=/opt/deploy shell=/bin/bash createhome=true
+```
+
+### State File
+
+**Basic user creation:**
+
+```yaml
+appuser:
+  user.present:
+    - shell: /bin/bash
+    - createhome: true
+    - home: /home/appuser
+```
+
+**Full user specification with groups:**
+
+```yaml
+deploy:
+  user.present:
+    - uid: 1500
+    - gid: 1500
+    - home: /opt/deploy
+    - shell: /bin/bash
+    - createhome: true
+    - fullname: Deploy User
+    - groups:
+      - docker
+      - wheel
+    - optional_groups:
+      - sudo
+    - require:
+      - "group.present:docker"
+```
+
+**System account:**
+
+```yaml
+prometheus:
+  user.present:
+    - system: true
+    - shell: /usr/sbin/nologin
+    - home: /var/lib/prometheus
+    - createhome: true
+```

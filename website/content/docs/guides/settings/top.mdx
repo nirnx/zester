@@ -1,0 +1,219 @@
+---
+title: "Top File"
+description: "The top.zy file is the entry point for the settings system. It maps targeting patterns to settings file references, controlling which peels receive which configuration."
+---
+
+## Location
+
+```
+/srv/zester/settings/top.zy
+```
+
+The top file is always named `top.zy` and lives at the root of the settings directory.
+
+## Syntax
+
+The top file is structured YAML with three levels:
+
+```yaml
+<environment>:
+  '<pattern>':
+    - <settings.ref>
+    - <settings.ref>
+```
+
+1. **Environment** -- A grouping label (e.g., `base`, `production`). All environments are evaluated; the name is organizational.
+2. **Pattern** -- A targeting expression that matches peels by ID or facts.
+3. **Settings refs** -- Dot-notation references to `.zy` files under the settings directory.
+
+### Minimal Example
+
+```yaml
+base:
+  '*':
+    - common.base
+```
+
+This matches all peels (`*`) and loads `/srv/zester/settings/common/base.zy` for each.
+
+## Targeting Patterns
+
+The `SimpleTargetMatcher` in `pkg/settings/top.go` supports three pattern types:
+
+### Wildcard: Match All Peels
+
+```yaml
+base:
+  '*':
+    - common.base
+    - common.monitoring
+```
+
+The `*` pattern matches every peel unconditionally.
+
+### Glob: Match by Peel ID
+
+Standard filesystem glob syntax matches against the peel ID:
+
+```yaml
+base:
+  'web-*':
+    - webservers.nginx
+  'db-*':
+    - databases.postgres
+  'cache-0?':
+    - caching.redis
+```
+
+| Pattern     | Matches |
+|-------------|---------|
+| `web-*`     | `web-01`, `web-02`, `web-prod` |
+| `db-*`      | `db-01`, `db-replica-03` |
+| `cache-0?`  | `cache-01`, `cache-02` (but not `cache-10`) |
+
+### Fact Matching: Match by Key:Value
+
+Patterns in the form `key:value` match peels whose facts contain the given key-value pair:
+
+```yaml
+base:
+  'role:webserver':
+    - webservers.nginx
+    - webservers.certs
+  'role:database':
+    - databases.postgres
+    - databases.credentials
+```
+
+The matcher checks `facts[key]` (a top-level map lookup) and compares its string representation to `value`. This means fact-based targeting works with top-level keys in the facts map.
+
+<Callout type="info" title="Fact key depth">
+The `SimpleTargetMatcher` performs a top-level map lookup on the key portion. For example, `role:webserver` matches if `facts["role"] == "webserver"`. Nested keys like `os.family` would look up `facts["os.family"]`, which does not exist since the actual value is at `facts["os"]["family"]`. To target on nested values, inject them as top-level facts via `Manager.SetFact()` or use top-level custom fact keys.
+</Callout>
+
+## Multi-Environment Example
+
+Environments are a way to organize targeting rules. All environments are evaluated -- the labels are for human readability:
+
+```yaml
+base:
+  '*':
+    - common.base
+    - common.users
+    - common.monitoring
+
+roles:
+  'role:webserver':
+    - webservers.nginx
+    - webservers.certs
+    - webservers.firewall
+  'role:database':
+    - databases.postgres
+    - databases.backup
+    - databases.credentials
+  'role:worker':
+    - workers.celery
+    - workers.queues
+
+environments:
+  'environment:production':
+    - environments.production
+  'environment:staging':
+    - environments.staging
+```
+
+### Resolution Order
+
+When the master compiles settings for a peel, it:
+
+1. Iterates through **all** environments in the top file
+2. For each environment, checks each pattern against the peel
+3. Collects all matching settings refs (deduplicated, first-seen order preserved)
+4. Loads and merges the settings files in that order
+
+For a peel `web-01` with facts `{role: "webserver", environment: "production"}`, the resolution would be:
+
+```
+1. common.base           (matched by '*')
+2. common.users           (matched by '*')
+3. common.monitoring      (matched by '*')
+4. webservers.nginx       (matched by 'role:webserver')
+5. webservers.certs       (matched by 'role:webserver')
+6. webservers.firewall    (matched by 'role:webserver')
+7. environments.production (matched by 'environment:production')
+```
+
+Each file is loaded, rendered with the peel's facts, and deep-merged in order.
+
+## Complete Top File Example
+
+```yaml
+# /srv/zester/settings/top.zy
+#
+# Base settings applied to all peels
+base:
+  '*':
+    - common.base
+    - common.ssh
+    - common.ntp
+    - common.monitoring
+    - common.firewall
+
+# Role-specific settings
+roles:
+  'role:webserver':
+    - webservers.nginx
+    - webservers.certs
+    - webservers.varnish
+  'role:database':
+    - databases.postgres
+    - databases.pgbouncer
+    - databases.credentials
+    - databases.backup
+  'role:loadbalancer':
+    - loadbalancers.haproxy
+    - loadbalancers.certs
+  'role:worker':
+    - workers.celery
+    - workers.redis
+
+# OS-specific settings (requires os_family as a top-level fact)
+os:
+  'os_family:debian':
+    - os.debian
+  'os_family:rhel':
+    - os.rhel
+
+# Datacenter-specific settings
+datacenters:
+  'datacenter:us-east-1':
+    - datacenters.us_east
+  'datacenter:eu-west-1':
+    - datacenters.eu_west
+
+# Environment overrides (loaded last to take precedence)
+environments:
+  'environment:production':
+    - environments.production
+  'environment:staging':
+    - environments.staging
+  'environment:development':
+    - environments.development
+```
+
+## Debugging Targeting
+
+To see which settings files match a specific peel, compile settings and inspect the result:
+
+```bash
+# View the compiled settings for a peel
+zester kv fact get web-01
+# Examine facts to understand which patterns would match
+
+# The master logs matched refs at debug level:
+# "no settings matched for peel" or details of each loaded ref
+```
+
+<Callout type="success" title="Order matters">
+Settings files are merged in the order they appear. Place environment-specific overrides last so they take precedence over base and role settings.
+</Callout>

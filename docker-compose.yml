@@ -1,0 +1,128 @@
+services:
+  init:
+    build: .
+    command: ["playground-init"]
+    volumes:
+      - auth-data:/data/auth
+      - state-data:/data/states
+      - settings-data:/data/settings
+      - nats-config:/data/nats
+
+  nats:
+    image: nats:2-alpine
+    command: ["-c", "/data/nats/nats-server.conf"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    ports:
+      - "4222:4222"
+    volumes:
+      - auth-data:/data/auth:ro
+      - nats-config:/data/nats:ro
+      - jetstream-data:/data/jetstream
+
+  master:
+    build: .
+    command: ["zester-master", "--config", "/data/nats/master.yaml"]
+    depends_on:
+      nats:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth:ro
+      - state-data:/data/states
+      - settings-data:/data/settings:ro
+      - nats-config:/data/nats:ro
+
+  web-01:
+    build:
+      context: .
+      dockerfile: Dockerfile.peel
+      args:
+        PEEL_ROLE: webserver
+        PEEL_CLUSTER: cluster-a
+    privileged: true
+    command: ["--id", "web-01", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt"]
+    depends_on:
+      master:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth
+
+  web-02:
+    build:
+      context: .
+      dockerfile: Dockerfile.peel
+      args:
+        PEEL_ROLE: webserver
+        PEEL_CLUSTER: cluster-a
+    privileged: true
+    command: ["--id", "web-02", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt"]
+    depends_on:
+      master:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth
+
+  web-03:
+    build:
+      context: .
+      dockerfile: Dockerfile.peel
+      args:
+        PEEL_ROLE: webserver
+        PEEL_CLUSTER: cluster-b
+    privileged: true
+    command: ["--id", "web-03", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt"]
+    depends_on:
+      master:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth
+
+  db-01:
+    build:
+      context: .
+      dockerfile: Dockerfile.peel
+      args:
+        PEEL_ROLE: database
+        PEEL_CLUSTER: cluster-a
+    privileged: true
+    command: ["--id", "db-01", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt"]
+    depends_on:
+      master:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth
+
+  db-02:
+    build:
+      context: .
+      dockerfile: Dockerfile.peel
+      args:
+        PEEL_ROLE: database
+        PEEL_CLUSTER: cluster-b
+    privileged: true
+    command: ["--id", "db-02", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt"]
+    depends_on:
+      master:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth
+
+  admin:
+    build: .
+    depends_on:
+      nats:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /etc/zester && cp /data/nats/zester.yaml /etc/zester/master.yaml && sleep infinity"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - auth-data:/data/auth:ro
+      - nats-config:/data/nats:ro
+
+volumes:
+  auth-data:
+  state-data:
+  settings-data:
+  jetstream-data:
+  nats-config:

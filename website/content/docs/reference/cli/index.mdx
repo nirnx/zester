@@ -1,0 +1,326 @@
+---
+title: "Overview"
+description: "The Zester CLI provides two interaction modes:"
+---
+
+1. **Module execution** (Salt-style) — Run modules against targeted peels with `zester '<target>' <module.function> [args]`. By default, commands are dispatched through the master's job system. Use `--direct` to bypass the master and send directly to peels.
+2. **Management subcommands** — Manage peels, query KV data, track jobs, etc. with `zester <command> <subcommand>`.
+
+---
+
+## Module Execution (Salt-Style)
+
+The primary way to interact with peels. This mirrors SaltStack's execution syntax:
+
+```
+zester '<target>' <module.function> [id] [key=value ...]
+```
+
+Just like Salt's `salt '<target>' <module.function> [args]`, Zester dispatches the module to all peels matching the target and returns results. By default, execution goes through the master's job system for tracking and coordination. Use `--direct` to send requests directly to peels via NATS request/reply (bypassing the job system).
+
+### Module Execution Examples
+
+```bash
+# Run a command on a single peel
+zester 'web-01' cmd.run 'uptime'
+
+# Run a command on all peels
+zester '*' cmd.run 'hostname'
+
+# Target peels with a glob
+zester 'web*' cmd.run 'whoami'
+
+# Apply a state file
+zester 'web-01' state.apply webserver
+
+# Create a file directly (no state file needed)
+zester 'db-01' file.managed /tmp/config.txt content="key=value" mode=0644
+
+# Install a package directly
+zester 'web*' pkg.installed nginx
+
+# Direct mode: bypass the master, send straight to peels
+zester 'web-01' cmd.run 'uptime' --direct
+
+# Query facts directly from the peel
+zester 'web-01' facts.get os.family --direct
+```
+
+### Target Patterns
+
+Target patterns select which peels receive the command:
+
+| Pattern | Type | Example |
+|---------|------|---------|
+| `web-01` | Exact match | Single peel |
+| `*` | Glob | All peels |
+| `web*` | Glob | All peels starting with "web" |
+| `web-0?` | Glob | web-01, web-02, etc. |
+| `[wd]*` | Glob | Peels starting with "w" or "d" |
+
+Target resolution goes through the masters' target-resolution service: the CLI sends the expression as a request/reply on `zester.target.resolve` and a master answers it from an in-memory fact index. When no master serves the subject (master outage), the CLI logs a one-line warning and falls back to listing peel IDs from the NATS KV facts bucket and matching locally (`filepath.Match` for glob patterns).
+
+### Built-in Modules
+
+These modules can be executed directly against peels:
+
+| Module | Description | Required Args |
+|--------|-------------|---------------|
+| `cmd.run` | Execute a shell command | `<command>` |
+| `file.managed` | Create or manage a file | `<path>` `[content=... mode=...]` |
+| `pkg.installed` | Install a system package | `<package-name>` |
+| `state.apply` | Apply a state file (.zy) | `<state-name>` |
+| `state.highstate` | Apply all states from top.zy | *(none)* |
+| `test.ping` | Liveness check (returns `true`) | *(none)* |
+| `facts.items` | Return all peel facts (like Salt `grains.items`) | *(none)* |
+| `facts.get` | Get a specific fact by dot-path (like Salt `grains.get`) | `<key>` `[default=...]` |
+| `facts.keys` | List top-level fact names (like Salt `grains.ls`) | *(none)* |
+| `facts.set` | Set a persistent custom fact (like Salt `grains.set`) | `<key>` `<value>` |
+| `settings.items` | Return all resolved settings (like Salt `pillar.items`) | *(none)* |
+| `settings.get` | Get a specific setting by dot-path (like Salt `pillar.get`) | `<key>` `[default=...]` |
+| `settings.keys` | List top-level settings keys (like Salt `pillar.keys`) | *(none)* |
+
+Beyond this list, **any registered state module** can be invoked ad-hoc. The
+first positional argument becomes the state ID, which module builders use as
+the primary-parameter default (usually `name` or `path`); remaining arguments
+are `key=value` pairs:
+
+```bash
+zester 'web-01' service.running nginx
+zester 'web-01' file.absent /tmp/stale.lock
+zester 'web-01' pkg.latest curl
+```
+
+Generic state attributes are honored on ad-hoc single-module runs as well —
+for example `onlyif='test -f /etc/nginx/nginx.conf'` or `unless='which curl'`
+guard the run (guard not met = no-op).
+
+### Remote Execution Modules (Salt-Style Ad-Hoc)
+
+In addition to idempotent state modules, peels dispatch a set of imperative
+**remote-execution functions** (like Salt execution modules). These have no
+Check/Apply lifecycle — they run a query or action and return a plain string
+result. A bare positional argument is passed as the conventional `name`
+argument:
+
+```bash
+zester '*' pkg.version nginx
+zester 'web-01' service.status nginx
+zester 'web-01' disk.usage /var
+zester '*' sys.list_functions
+```
+
+The built-in set (from `pkg/execmod`):
+
+| Function | Description | Args |
+|----------|-------------|------|
+| `test.echo` | Echo back the given text | `<text>` (also accepts `text=...`) |
+| `test.version` | Return the peel's Zester version | *(none)* |
+| `test.true` | Return the string `true` | *(none)* |
+| `test.false` | Return the string `false` | *(none)* |
+| `pkg.version` | Installed version of a package (dpkg/rpm/brew, per detected provider) | `<name>` (also `package=`/`pkg=`) |
+| `pkg.list_pkgs` | List all installed packages with versions | *(none)* |
+| `service.status` | Report `running`/`stopped` for a service | `<name>` (also `service=`) |
+| `service.start` | Start a service | `<name>` |
+| `service.stop` | Stop a service | `<name>` |
+| `service.restart` | Restart a service | `<name>` |
+| `disk.usage` | Disk usage (`df -P`), optionally for one path | `[path]` (also `path=`) |
+| `cmd.run` | Run a shell command, return stdout | `<cmd>` (also `cwd=` working dir) |
+| `grains.item` | Look up one fact by dotted key | `<key>` |
+| `grains.items` | All facts as YAML | *(none)* |
+| `sys.list_functions` | List all registered exec-module functions | *(none)* |
+
+<Callout type="info" title="State modules take precedence on name collisions">
+When a name exists both as a state module and an exec-module function
+(e.g. `cmd.run`, `test.ping`), the ad-hoc CLI dispatch runs the **state
+module** version, so existing ad-hoc behavior is unchanged. The
+exec-module `cmd.run` is still reachable from templates via the
+[salt accessor](/docs/guides/templating/salt-compatibility#the-salt-accessor).
+</Callout>
+
+The peel resolves an incoming module name in this order:
+`state.apply`/`state.highstate` → `facts.*` → `settings.*` → exec-module
+function (if registered and not shadowed by a state module) → state module.
+
+### Module Argument Syntax
+
+Each module has a specific argument format:
+
+**cmd.run** — first argument is the command to execute:
+
+```bash
+zester 'web-01' cmd.run 'ls -la /tmp'
+```
+
+**file.managed** — first argument is the file path, followed by `key=value` pairs:
+
+```bash
+zester 'web-01' file.managed /etc/motd content="Welcome" mode=0644
+```
+
+**pkg.installed** — first argument is the package name:
+
+```bash
+zester 'web-01' pkg.installed curl
+```
+
+**state.apply** — first argument is the state name (loads `/data/states/<name>/init.zy`):
+
+```bash
+zester 'web-01' state.apply hello
+```
+
+### Output Format
+
+Results are displayed in a Salt-style format, one section per targeted peel. The peel name is colored green (success) or red (failure) when output is a TTY.
+
+**Streamlined modules** (`cmd.run`, `test.ping`, `facts.*`, `settings.*`) show only the relevant output:
+
+```
+web-01:
+    16:35:51 up 6 days, ...
+```
+
+**Detailed modules** (`file.managed`, `pkg.installed`, `state.apply`) show all fields:
+
+```
+web-01:
+    file.managed:
+        name: file.managed:/etc/motd
+        path: /etc/motd
+        bytes: 25
+        mode: 0644
+        changed: true
+        duration: 156.08us
+```
+
+**JSON and YAML output** (`--format json`, `--format yaml`) provides structured output suitable for scripting:
+
+```bash
+zester '*' facts.keys --format json
+```
+
+### Dry Run (`--test` / `test=True`)
+
+State execution supports Salt-style dry runs. Either pass the `--test` flag or
+append the `test=True` argument (they are equivalent — the flag simply sets
+`test=true` in the module args):
+
+```bash
+zester 'web*' state.apply nginx --test
+zester 'web*' state.apply nginx test=True
+zester '*' state.highstate --test
+zester 'web-01' pkg.installed curl --test
+```
+
+In test mode the peel runs each state's Check phase only: nothing is applied.
+`changed: true` in the output means the state *would* change, and `diff` shows
+the pending change. Accepted truthy values for the `test=` argument are
+`true`, `yes`, `1`, and `on` (case-insensitive). Retry policies are not
+evaluated during a dry run.
+
+### Flags
+
+All flags below are persistent — they apply to module execution and to every
+subcommand.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config` | `string` | `/etc/zester/master.yaml` or `~/.zester/config.yaml` | Path to config file |
+| `--master` | `string[]` | `$NATS_URL` or config file or `nats://localhost:4222` | NATS server URL(s) (priority: flag > `NATS_URL` env > config > default) |
+| `--timeout` | `duration` | `60s` (state.apply: `5m`, state.highstate: `10m`) | Request timeout |
+| `--creds` | `string` | `""` (from config file if set) | NATS credentials file for authentication |
+| `--format` | `string` | `text` | Output format: `text`, `json`, or `yaml` |
+| `--no-color` | `bool` | `false` | Disable colored output (auto-disabled when piped) |
+| `--direct` | `bool` | `false` | Bypass master job system; send directly to peels via NATS request/reply |
+| `--test` | `bool` | `false` | Dry run: report what would change without applying (Salt `test=True`) |
+
+---
+
+## Management Subcommands
+
+For administrative tasks, Zester provides structured subcommands:
+
+```
+zester [command] [subcommand] [flags]
+```
+
+### Global Flags
+
+All [persistent flags](#flags) listed above are available on every subcommand.
+The most commonly used are:
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config` | `string` | *(see below)* | Path to config file |
+| `--master` | `string[]` | `nats://localhost:4222` | Master NATS URL(s), overrides config |
+| `--creds` | `string` | *(from config)* | Path to NATS credentials file, overrides config |
+
+### Config File Locations
+
+When `--config` is not specified, Zester searches for configuration in this
+order:
+
+1. `/etc/zester/master.yaml` -- system-wide configuration
+2. `~/.zester/config.yaml` -- user-level configuration
+
+If neither file exists and no `--config` flag is provided, Zester falls back to
+default values (localhost NATS on port 4222).
+
+<Callout type="success" title="Overriding the master URL">
+The `--master` flag takes precedence over any config file. You can specify
+multiple URLs by repeating the flag or using a comma-separated list:
+
+```bash
+zester --master nats://master1:4222,nats://master2:4222 peel list
+```
+</Callout>
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| [`peel`](/docs/reference/cli/peel) | Manage peels (managed nodes); `peel list` shows liveness (`ONLINE`/`LAST-SEEN`) from the peel heartbeat bucket — fleets without it show `-` |
+| [`kv fact`](/docs/reference/cli/fact) | Read peel facts from KV cache |
+| [`job`](/docs/reference/cli/job) | Manage jobs; `job show` reads the per-peel returns, `job active` enumerates the active-jobs index instead of scanning the bucket |
+| [`basket`](/docs/reference/cli/basket) | Query basket (peel-to-peel shared data) |
+| [`enroll`](/docs/operations/enrollment) | Manage peel enrollment (list, approve, reject, revoke) — approve/reject/revoke are request/reply admin calls answered by a running master; `--direct-kv` is the break-glass fallback that writes the enrollment KV directly (suggested in the error when no master responds) |
+| [`update`](/docs/reference/cli/update) | Self-update: publish, rollout, status, abort, rollback, versions; `update status` includes `DEGRADED` and `PROTO` columns (`-` = pre-protocol watchdog) |
+| `version` | Print the Zester CLI version |
+
+### Standalone Tools
+
+| Tool | Description |
+|-|-|
+| [`zester-migrate`](/docs/reference/cli/migrate) | Convert Salt `.sls` files to Zester `.zy` format |
+
+### Version
+
+```bash
+zester version
+```
+
+```
+zester v0.1.0 (commit: abc1234, built: 2026-01-15T10:00:00Z)
+```
+
+The version command does not require a NATS connection or config file.
+
+## Connection Behavior
+
+The CLI connects to NATS with the following defaults:
+
+- **Client name**: `zester`
+- **Max reconnects**: 1
+- **Reconnect wait**: 1 second
+- **Authentication**: The CLI authenticates to NATS using a credentials file (`--creds`). The NATS server enforces JWT-based authorization, so a valid `.creds` file is required for all operations.
+
+If the NATS server is unreachable, commands fail immediately after one
+reconnect attempt rather than retrying indefinitely.
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Error (connection failure, invalid arguments, command error) |

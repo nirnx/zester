@@ -1,0 +1,144 @@
+---
+title: "pkg.installed"
+description: "Ensures that a system package is installed using the auto-detected package manager. Supports apt, yum, dnf, and brew."
+---
+
+**Source**: `pkg/state/modules/pkg.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Package name. If omitted, the state ID is used as the package name. |
+| `version` | `string` | No | *(latest)* | Version constraint. Format depends on the package manager (see version pinning below). |
+| `refresh` | `bool` | No | `false` | Force a package cache refresh before installation (`apt-get update`, `yum makecache`, etc.). |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Package Manager Detection
+
+The module detects the package manager in two phases:
+
+**Phase 1 — `os.family` from facts:**
+
+| OS Family | Package Manager | Notes |
+|---|---|---|
+| `debian` | `apt` | Debian, Ubuntu |
+| `redhat`, `rhel`, `fedora`, `suse` | `dnf` if available, else `yum` | Red Hat family |
+| `darwin` | `brew` | macOS, only if `brew` is in PATH |
+
+**Phase 2 — PATH probing (unknown OS families):**
+
+If `os.family` does not match any of the above, the module probes PATH for common package managers in this order: `apt-get`, `dnf`, `yum`, `brew`.
+
+If no supported package manager is found, the state returns an error.
+
+---
+
+## Version Pinning
+
+Version constraints are formatted according to the detected package manager:
+
+| Manager | Format | Example |
+|---|---|---|
+| apt | `<name>=<version>` | `nginx=1.24.0-1ubuntu1` |
+| yum/dnf | `<name>-<version>` | `nginx-1.24.0` |
+| brew | `<name>@<version>` | `nginx@1.24` |
+
+---
+
+## Check Behavior
+
+Checks whether the package is installed using the manager-specific query command:
+
+| Manager | Check Command |
+|---|---|
+| apt | `dpkg -s <package>` |
+| yum/dnf | `rpm -q <package>` |
+| brew | `brew list --formula <package>` |
+
+---
+
+## Apply Behavior
+
+1. If `refresh` is `true`, refreshes the package cache first.
+2. Runs the install command with automatic confirmation (`-y` on apt/yum/dnf).
+
+| Manager | Install Command |
+|---|---|
+| apt | `apt-get install -y <package>` |
+| yum | `yum install -y <package>` |
+| dnf | `dnf install -y <package>` |
+| brew | `brew install <package>` |
+
+---
+
+## Revert Behavior
+
+Removes the package using the manager-specific remove command:
+
+| Manager | Remove Command |
+|---|---|
+| apt | `apt-get remove -y <package>` |
+| yum | `yum remove -y <package>` |
+| dnf | `dnf remove -y <package>` |
+| brew | `brew uninstall <package>` |
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Install a package on a single peel
+zester 'web-01' pkg.installed nginx
+
+# Install on all web peels
+zester 'web*' pkg.installed curl
+```
+
+### State File
+
+**Install with cache refresh:**
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - refresh: true
+```
+
+**Version-pinned installation:**
+
+```yaml
+install_specific_version:
+  pkg.installed:
+    - name: nginx
+    - version: "1.24.0-1ubuntu1"
+```
+
+**Multiple packages with dependencies:**
+
+```yaml
+install_build_tools:
+  pkg.installed:
+    - name: build-essential
+    - refresh: true
+
+install_git:
+  pkg.installed:
+    - name: git
+    - require:
+      - pkg.installed:install_build_tools
+
+install_curl:
+  pkg.installed:
+    - name: curl
+    - require:
+      - pkg.installed:install_build_tools
+```

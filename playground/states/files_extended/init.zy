@@ -1,0 +1,21 @@
+/tmp/zester-symlink-test:
+  file.symlink:
+    - target: /etc/hostname
+
+/tmp/zester-blockreplace-test:
+  file.managed:
+    - content: |
+        line one
+        line two
+    - mode: "0644"
+    - makedirs: true
+
+blockreplace_test:
+  file.blockreplace:
+    - name: /tmp/zester-blockreplace-test
+    - content: "managed by zester"
+    - marker_start: "# BEGIN ZESTER"
+    - marker_end: "# END ZESTER"
+    - append_if_not_found: true
+    - require:
+      - "file.managed:/tmp/zester-blockreplace-test"

@@ -1,0 +1,24 @@
+[Unit]
+Description=Zester Master
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/zester-watchdog \
+  --child-bin /usr/local/bin/zester-master \
+  --child-args '--config /etc/zester/master.yaml' \
+  --id %H \
+  --component master \
+  --nats-url tls://localhost:4222 \
+  --nats-ca /var/lib/zester/auth/nats-ca.crt \
+  --nats-creds /var/lib/zester/auth/master.creds \
+  --health-url http://127.0.0.1:9091/healthz \
+  --ready-url http://127.0.0.1:9091/readyz \
+  --soak-time 60s
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

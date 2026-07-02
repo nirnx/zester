@@ -1,0 +1,167 @@
+---
+title: "Overview"
+---
+
+Basket is Zester's peel-to-peel data sharing system -- the equivalent of SaltStack's **Mine**. It allows peels to publish selected fact data or custom values to a shared NATS KV bucket, where other peels and the master can query it on demand.
+
+The core use case is **service discovery**: a load balancer peel queries basket to find the IP addresses of all web server peels, a firewall peel queries basket to build allow lists, or an application peel discovers its database endpoints -- all without manual configuration.
+
+---
+
+## How Basket Works
+
+```
+┌──────────────────────────────────────────────────────┐
+│                    Peel (web-01)                     │
+│                                                      │
+│   Basket Config:                                     │
+│     network.ip_addrs   interval: 5m                  │
+│     custom.app_version interval: 1h                  │
+│                                                      │
+│   ┌──────────────┐     ┌──────────────────┐          │
+│   │ Execute func │ ──▶ │ Publish to KV    │          │
+│   └──────────────┘     └────────┬─────────┘          │
+└─────────────────────────────────┼────────────────────┘
+                                  │  NATS KV
+                                  ▼  (bucket: "basket")
+┌──────────────────────────────────────────────────────┐
+│               NATS JetStream KV                      │
+│                                                      │
+│  web-01.network.ip_addrs   = "10.0.1.50"             │
+│  web-01.custom.app_version = "2.1.0"                 │
+│  db-01.network.ip_addrs    = "10.0.2.10"             │
+│  db-01.disk.usage          = {"root": "45%"}         │
+│                                                      │
+└───────────────┬──────────────────┬───────────────────┘
+                │                  │
+                ▼                  ▼
+┌──────────────────────┐  ┌───────────────────────┐
+│  Master / Templates  │  │   Other Peels (CLI)   │
+│                      │  │                       │
+│  basket("role:web",  │  │  zester basket get    │
+│    "network.ip_addrs")│  │    web-01             │
+│    → build configs   │  │    network.ip_addrs   │
+└──────────────────────┘  └───────────────────────┘
+```
+
+1. A peel executes a configured function (e.g., `network.ip_addrs`) and publishes the result to the NATS KV `basket` bucket.
+2. The data is stored with a key of `<peel-id>.<function>` (e.g., `web-01.network.ip_addrs`).
+3. Other peels -- or templates running on the master -- query this data by target pattern and function name.
+4. Basket data is refreshed on a configurable interval, keeping it current as peels change.
+
+<Callout type="info" title="Immediate availability via KV watch">
+Unlike polling-based systems, NATS KV supports **watch** operations. The master (or any consumer) can subscribe to basket key changes and react instantly when a peel publishes new data. There is no polling delay.
+</Callout>
+
+---
+
+## Key Concepts
+
+| Concept | Description |
+|---|---|
+| **Basket function** | A function that a peel executes to produce shareable data (e.g., `network.ip_addrs`) |
+| **Basket key** | The KV key format: `<peel-id>.<function>` |
+| **Basket bucket** | The NATS KV bucket (`basket`, defined as `bus.BucketBasket`) that stores all basket data |
+| **Basket scope** | An optional targeting expression (`basket_scope` setting) that auto-filters every `basket()` query to a subset of peels (e.g., same cluster) |
+| **Cross-peel query** | Querying basket data from peels other than the one that produced it |
+
+---
+
+## NATS KV Infrastructure
+
+Basket data lives in the `basket` KV bucket managed by `bus.BucketBasket`:
+
+| Property | Value |
+|---|---|
+| Bucket name | `basket` |
+| Key format | `<peel-id>.<function>` |
+| Encoding | MessagePack |
+| History | 1 revision (only the latest value is retained) |
+| TTL | None (persistent until overwritten or deleted) |
+| Description | Peel-to-peel data sharing |
+
+Because the bucket uses `history=1`, each function key stores only the most recent value. This keeps storage bounded regardless of how frequently peels update their basket data.
+
+<Callout type="success" title="Persistent without an external database">
+NATS JetStream KV provides durable, replicated storage out of the box. Basket data survives master restarts and NATS server restarts without requiring an external database, Redis, or filesystem state.
+</Callout>
+
+<Callout type="info" title="Cluster scoping with `basket_scope`">
+In multi-cluster deployments, set `basket_scope` in your settings to automatically filter `basket()` queries to the peel's own cluster. For example, `basket_scope: "G@cluster_name:{{ facts.cluster_name }}"` ensures that `basket("*", "default_ipv4")` only returns peels in the same cluster. See [Configuration — Basket Scope](/docs/guides/basket/configuration#basket-scope) for details.
+</Callout>
+
+---
+
+## Salt Mine Comparison
+
+| Feature | Salt Mine | Zester Basket |
+|---|---|---|
+| Storage | Master memory | NATS KV (persistent, distributed) |
+| Configuration | `mine_functions` in minion config | `basket` block in peel config |
+| Refresh | `mine.update` / `mine_interval` | Configurable per-function interval |
+| Query | `mine.get()` | `basket()` template function, `zester basket get` CLI |
+| Availability | Lost on master restart | Durable in NATS KV, survives restarts |
+| Latency | Polling-based, delayed | Instant via NATS KV watch -- no polling needed |
+| Cross-minion access | Via master API only | Direct KV lookup from any connected peel |
+
+---
+
+## Use Cases
+
+### Service Discovery
+
+Peels publish their IP addresses, and load balancer configs are built from that data:
+
+```yaml title="HAProxy backend template"
+haproxy_config:
+  file.managed:
+    - path: /etc/haproxy/haproxy.cfg
+    - content: |
+        backend webservers
+        {% for entry in basket("role:webserver", "network.ip_addrs") %}
+          server {{ entry.peel_id }} {{ entry.value }}:8080 check
+        {% endfor %}
+```
+
+### Distributed Configuration
+
+Application peels discover database endpoints published by database peels:
+
+```yaml title="App config template"
+app_config:
+  file.managed:
+    - path: /opt/app/config.yml
+    - content: |
+        databases:
+        {% for entry in basket("role:database", "network.ip_addrs") %}
+          - host: {{ entry.value }}
+            port: 5432
+        {% endfor %}
+```
+
+### Firewall Rules
+
+Build allow lists dynamically from peer addresses:
+
+```yaml title="Firewall allow-list template"
+firewall_rules:
+  file.managed:
+    - path: /etc/iptables/allow.conf
+    - content: |
+        {% for entry in basket("role:app", "network.ip_addrs") %}
+        -A INPUT -s {{ entry.value }} -j ACCEPT
+        {% endfor %}
+```
+
+---
+
+## Section Contents
+
+<Cards>
+<Card title="Configuration" href="/docs/guides/basket/configuration">
+How to configure basket functions, refresh intervals, and NATS KV storage on each peel.
+</Card>
+<Card title="Querying Basket Data" href="/docs/guides/basket/querying">
+How to query basket data from templates, the CLI, and programmatically across peels.
+</Card>
+</Cards>

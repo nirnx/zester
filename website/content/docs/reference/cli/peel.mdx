@@ -1,0 +1,135 @@
+---
+title: "zester peel"
+description: "Manage peels (managed nodes). Peels are the remote agents that Zester controls."
+---
+
+## Synopsis
+
+```
+zester peel <subcommand> [flags]
+```
+
+## Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| [`list`](#peel-list) | List connected peels |
+| [`init`](#peel-init) | Generate nkey seed for a new peel |
+
+---
+
+## peel list
+
+List all currently connected peels. This reads from the NATS KV facts bucket
+and displays each peel's ID, operating system, architecture, and connection
+status.
+
+### Synopsis
+
+```
+zester peel list
+```
+
+### Description
+
+Queries the NATS JetStream facts bucket for all known peel IDs and displays
+them in a table. Each row shows the peel ID along with the `os` and `arch`
+facts extracted from the peel's fact data.
+
+### Flags
+
+This command has no subcommand-specific flags. See [global flags](/docs/reference/cli#global-flags).
+
+### Output Columns
+
+| Column | Description |
+|--------|-------------|
+| `PEEL ID` | Unique identifier for the peel |
+| `OS` | Operating system reported by the peel |
+| `ARCH` | CPU architecture reported by the peel |
+| `LAST SEEN` | Connection status |
+
+### Examples
+
+```bash
+zester peel list
+```
+
+```
+PEEL ID    OS       ARCH    LAST SEEN
+web-01     ubuntu   amd64   connected
+web-02     ubuntu   amd64   connected
+db-01      debian   amd64   connected
+cache-01   alpine   arm64   connected
+```
+
+When no peels are connected:
+
+```bash
+zester peel list
+```
+
+```
+No peels found.
+```
+
+---
+
+## peel init
+
+Generate an nkey seed for provisioning a new peel. The seed is the
+cryptographic identity that a peel uses to authenticate with the NATS server.
+
+### Synopsis
+
+```
+zester peel init [flags]
+```
+
+### Description
+
+Generates a new nkey keypair (public key + seed). The seed must be installed on
+the target peel at `/etc/zester/peel.key` with permissions `0600`. The public
+key must be added to the NATS server's authorization configuration.
+
+### Flags
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--output` | `-o` | `string` | *(stdout)* | Output file path for the seed |
+
+### Examples
+
+#### Print to stdout
+
+```bash
+zester peel init
+```
+
+```
+Public key: UABC123DEF456GHI789JKL012MNO345PQR678STU901VWX234YZ
+Seed:       SUABC123DEF456GHI789JKL012MNO345PQR678STU901VWX234YZ
+
+Save the seed to /etc/zester/peel.key and set permissions to 0600.
+```
+
+#### Save to file
+
+```bash
+zester peel init -o /etc/zester/peel.key
+```
+
+```
+Peel nkey seed saved to: /etc/zester/peel.key
+Public key: UABC123DEF456GHI789JKL012MNO345PQR678STU901VWX234YZ
+```
+
+<Callout type="success" title="Secure the seed file">
+The seed file is the peel's private key. Always set file permissions to
+`0600` and ensure only the zester service user can read it:
+
+```bash
+chmod 0600 /etc/zester/peel.key
+chown zester:zester /etc/zester/peel.key
+```
+</Callout>

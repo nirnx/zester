@@ -1,0 +1,114 @@
+---
+title: "pkgrepo.managed"
+---
+
+Manages an apt or yum/dnf package repository definition. On Debian it writes `/etc/apt/sources.list.d/<name>.list` (optionally importing a signing key and refreshing the cache); on the RedHat family it writes `/etc/yum.repos.d/<name>.repo`. PPAs are handled via `add-apt-repository`.
+
+**Source**: `pkg/state/modules/pkgrepo.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Repository identifier — used for the default filename and the yum section header. |
+| `humanname` | `string` | No | `name` | Descriptive display name (yum `name=` field / apt comment line). |
+| `baseurl` | `string` | No | `""` | **On apt: the full `deb ...` source line. On yum: the `baseurl=` value.** |
+| `ppa` | `string` | No | `""` | An apt PPA reference (e.g. `ppa:user/name`). When set and `baseurl` is empty, the repo is added via `add-apt-repository -y`. Setting `ppa` also forces the Debian code path when the OS family cannot be detected. |
+| `file` | `string` | No | *(family default)* | Override the repository definition file path. |
+| `key_url` | `string` | No | `""` | Signing-key URL. On apt the key is fetched with `curl` and imported via `apt-key add`; on yum it becomes the `gpgkey=` field. |
+| `enabled` | `bool` | No | `true` | The yum `enabled=` field (`1`/`0`). Ignored on apt. |
+| `gpgcheck` | `bool` | No | `true` | The yum `gpgcheck=` field (`1`/`0`). Ignored on apt. |
+| `refresh` | `bool` | No | `true` | Refresh the package cache after writing the repo (`apt-get update` / `<mgr> makecache`). |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+- If the OS family cannot be determined, Check errors.
+- **PPA repos** always report changes needed — a PPA cannot be verified from a single file, so `add-apt-repository` (which is idempotent) is always re-run on Apply.
+- Otherwise the desired file content is rendered and compared byte-for-byte with the current repo file; a missing or differing file means changes are needed.
+
+### Rendered file content
+
+<Tabs items={["Debian (.list)", "RedHat (.repo)"]}>
+<Tab value="Debian (.list)">
+
+```
+# Managed by Zester: <humanname>
+<baseurl>
+```
+</Tab>
+<Tab value="RedHat (.repo)">
+
+```ini
+[<name>]
+name=<humanname>
+baseurl=<baseurl>
+enabled=1
+gpgcheck=1
+gpgkey=<key_url>          # only when key_url is set
+```
+</Tab>
+</Tabs>
+
+---
+
+## Apply Behavior
+
+**Debian:** imports the signing key when `key_url` is set (`curl` + `apt-key add`), then either runs `add-apt-repository -y <ppa>` or writes the `.list` file (creating the parent directory), then runs `apt-get update` when `refresh` is true.
+
+**RedHat:** writes the `.repo` file, then runs `<mgr> makecache` when `refresh` is true.
+
+---
+
+## Revert Behavior
+
+- PPA repos are removed via `add-apt-repository -r -y <ppa>`.
+- File-based repos: the repo definition file is deleted.
+
+---
+
+## Examples
+
+### State File
+
+**Apt repository (note: `baseurl` is the full deb line):**
+
+```yaml
+docker:
+  pkgrepo.managed:
+    - humanname: Docker CE
+    - baseurl: "deb [arch=amd64] https://download.docker.com/linux/ubuntu jammy stable"
+    - key_url: https://download.docker.com/linux/ubuntu/gpg
+```
+
+**Yum repository:**
+
+```yaml
+epel:
+  pkgrepo.managed:
+    - humanname: Extra Packages for Enterprise Linux
+    - baseurl: "https://download.fedoraproject.org/pub/epel/9/Everything/x86_64/"
+    - gpgcheck: false
+```
+
+**PPA:**
+
+```yaml
+deadsnakes:
+  pkgrepo.managed:
+    - ppa: "ppa:deadsnakes/ppa"
+```
+
+---
+
+## Divergences from Salt
+
+- **On apt, `baseurl` holds the entire `deb ...` source line.** In Salt the deb line goes in `name:`; Zester keeps `name` as the repo identifier and reuses `baseurl` for both families.
+- Apt keys are imported with the deprecated `apt-key add` (Salt supports `signed-by`/keyring files).
+- Salt's `disabled`, `mirrorlist`, `gpgautoimport`, `comps`, and `architectures` parameters are not supported.
+- Reverting removes the whole repo file rather than restoring prior content.

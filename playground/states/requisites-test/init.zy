@@ -1,0 +1,43 @@
+# Requisites integration test state
+# Tests: requires, watch, onchanges, onfail
+
+# Step 1: Write a config file (will change on first run)
+/tmp/requisites-test-config.txt:
+  file.managed:
+    - content: "requisites test config v1"
+    - mode: "0644"
+
+# Step 2: Watch the config file — forces Apply even if check says no change
+watch-config-change:
+  cmd.run:
+    - command: echo "config changed, reacting via watch"
+    - watch:
+      - "file.managed:/tmp/requisites-test-config.txt"
+
+# Step 3: OnChanges — only runs if the config file was changed
+log-config-change:
+  cmd.run:
+    - command: echo "onchanges triggered — config was updated"
+    - onchanges:
+      - "file.managed:/tmp/requisites-test-config.txt"
+
+# Step 4: A command that always fails (for onfail testing)
+deliberate-failure:
+  cmd.run:
+    - command: "false"
+    - require:
+      - "file.managed:/tmp/requisites-test-config.txt"
+
+# Step 5: OnFail — runs when deliberate-failure fails
+handle-failure:
+  cmd.run:
+    - command: echo "onfail triggered — handling failure gracefully"
+    - onfail:
+      - "cmd.run:deliberate-failure"
+
+# Step 6: OnFail that should be SKIPPED — depends on a succeeding state
+onfail-should-skip:
+  cmd.run:
+    - command: echo "THIS SHOULD NOT RUN"
+    - onfail:
+      - "file.managed:/tmp/requisites-test-config.txt"

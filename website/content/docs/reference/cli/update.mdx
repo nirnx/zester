@@ -1,0 +1,94 @@
+---
+title: "zester update"
+description: "Manage binary publishing and fleet rollout operations."
+---
+
+## Synopsis
+
+```bash
+zester update <subcommand> [flags]
+```
+
+## Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `publish <binary-path>` | Upload a binary artifact and publish its manifest |
+| `rollout` | Start a rollout to target nodes |
+| `status` | Show rollout progress or node update status |
+| `abort <rollout-id>` | Abort an in-progress rollout |
+| `rollback` | Roll back selected targets to their previous version |
+| `versions` | List published versions for a component |
+
+## update publish
+
+```bash
+zester update publish <binary-path> --component <peel|master> --version <version> [--goos <os>] [--goarch <arch>]
+```
+
+| Flag | Default | Required | Description |
+|---|---|---|---|
+| `--component` | `""` | yes | Component type (`peel` or `master`) |
+| `--version` | `""` | yes | Version string (for example `v0.5.0`) |
+| `--goos` | runtime GOOS | no | Target OS |
+| `--goarch` | runtime GOARCH | no | Target architecture |
+
+## update rollout
+
+```bash
+zester update rollout --component <peel|master> --version <version> [--target <expr>] [--batch-size <n>] [--soak-time <dur>] [--batch-pause <dur>] [--max-failed <n>] [--dry-run]
+```
+
+| Flag | Default | Required | Description |
+|---|---|---|---|
+| `--component` | `""` | yes | Component type (`peel` or `master`) |
+| `--version` | `""` | yes | Target version |
+| `--target` | `*` | no | Target expression |
+| `--batch-size` | `1` | no | Nodes per batch |
+| `--soak-time` | `60s` | no | Per-node soak period |
+| `--batch-pause` | `30s` | no | Pause between batches |
+| `--max-failed` | `1` | no | Abort after N failures |
+| `--dry-run` | `false` | no | Preview without executing |
+
+Current behavior notes:
+
+- Rollout target expressions are resolved by the standard targeting engine (`glob`, `E@` PCRE, `L@` list, `G@` fact, and `compound`).
+- Resolution scope is nodes currently reporting in `update-status` for the selected component.
+
+## update status
+
+```bash
+zester update status --component <peel|master> [--rollout <rollout-id>]
+```
+
+| Flag | Default | Required | Description |
+|---|---|---|---|
+| `--component` | `""` | yes | Component type (`peel` or `master`) |
+| `--rollout` | `""` | no | Show a specific rollout |
+
+## update abort
+
+```bash
+zester update abort <rollout-id>
+```
+
+## update rollback
+
+```bash
+zester update rollback --component <peel|master> [--target <expr>]
+```
+
+| Flag | Default | Required | Description |
+|---|---|---|---|
+| `--component` | `""` | yes | Component type (`peel` or `master`) |
+| `--target` | `*` | no | Target expression |
+
+## update versions
+
+```bash
+zester update versions [--component <peel|master>]
+```
+
+| Flag | Default | Required | Description |
+|---|---|---|---|
+| `--component` | `peel` | no | Component to list versions for |

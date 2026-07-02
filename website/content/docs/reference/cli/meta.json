@@ -1,0 +1,13 @@
+{
+  "title": "CLI",
+  "pages": [
+    "peel",
+    "fact",
+    "state",
+    "highstate",
+    "job",
+    "basket",
+    "update",
+    "migrate"
+  ]
+}

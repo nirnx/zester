@@ -1,0 +1,14 @@
+{
+  "title": "Architecture",
+  "pages": [
+    "overview",
+    "nats",
+    "security",
+    "ha",
+    "enrollment",
+    "enrollment-design",
+    "enrollment-security",
+    "review-2025",
+    "docs-coverage-map"
+  ]
+}

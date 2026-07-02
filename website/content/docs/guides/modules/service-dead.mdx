@@ -1,0 +1,92 @@
+---
+title: "service.dead"
+description: "Ensures a service is stopped on the target system. Optionally also disables the service at boot when enable: false is set."
+---
+
+**Source**: `pkg/state/modules/service.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | The service name. If omitted, the state ID is used. |
+| `enable` | `bool` | No | `true` | When set to `false`, also disables the service at boot during Apply. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+- Calls `systemctl is-active --quiet <service>` (via the injected ServiceExec).
+- Reports no changes needed if the service is already stopped.
+- Reports `NeedsChange: true` if the service is running.
+
+---
+
+## Apply Behavior
+
+1. Calls `Stop` on the service.
+2. If `enable: false` and the service is currently enabled: calls `Disable` and records the action (for Revert).
+3. Returns `Changed: true`.
+
+---
+
+## Revert Behavior
+
+- If Apply disabled the service: calls `Enable`.
+- Calls `Start` to restore the service to a running state.
+- Returns `Changed: true`.
+
+---
+
+## Details Returned
+
+| Key | Description |
+|---|---|
+| `service` | The service name |
+| `manager` | The service manager name (e.g., `"systemd"`) |
+
+---
+
+## Examples
+
+### Stop a service (leave boot configuration unchanged)
+
+```yaml
+apache2:
+  service.dead: []
+```
+
+### Stop and disable a service at boot
+
+```yaml
+apache2:
+  service.dead:
+    - enable: false
+```
+
+### Stop a conflicting service before starting another
+
+```yaml
+apache2:
+  service.dead:
+    - enable: false
+
+nginx:
+  service.running:
+    - enable: true
+    - require:
+      - service.dead:apache2
+```
+
+### Explicit name
+
+```yaml
+disable-telnet:
+  service.dead:
+    - name: telnet
+    - enable: false
+```

@@ -1,0 +1,398 @@
+---
+title: "Querying Basket Data"
+description: "Basket data can be queried from the CLI, inside templates, or directly from the NATS KV bucket. This page covers every method."
+---
+
+---
+
+## CLI Queries
+
+The `zester basket` command provides two subcommands for querying basket data from the terminal.
+
+### List All Basket Keys for a Peel
+
+```bash
+$ zester basket list web-01
+```
+
+```
+FUNCTION
+network.ip_addrs
+network.fqdn
+custom.app_version
+```
+
+This scans the basket KV bucket for all keys prefixed with the given peel ID and displays the function portion of each key.
+
+### Get Basket Data with Targeting
+
+The `get` subcommand accepts the same target expressions used everywhere in Zester -- glob, regex, fact-based, list, and compound:
+
+```bash
+# Glob: all web servers
+$ zester basket get 'web*' network.ip_addrs
+```
+
+```
+PEEL      VALUE
+web-01    10.0.1.50
+web-02    10.0.1.51
+web-03    10.0.1.52
+```
+
+```bash
+# Fact-based: all peels with role "database"
+$ zester basket get 'G@role:database' network.ip_addrs
+```
+
+```
+PEEL      VALUE
+db-01     10.0.2.10
+db-02     10.0.2.11
+```
+
+```bash
+# Explicit list
+$ zester basket get 'L@db-01,db-02' disk.usage
+```
+
+```
+PEEL    VALUE
+db-01   {"root": "45%", "data": "72%"}
+db-02   {"root": "38%", "data": "65%"}
+```
+
+```bash
+# Get a specific peel's basket value
+$ zester basket get 'L@app-01' custom.app_version
+```
+
+```
+PEEL    VALUE
+app-01  2.1.0
+```
+
+### Missing Data
+
+When a peel has not published data for the requested function, the output shows `(no data)`:
+
+```bash
+$ zester basket get 'web*' nonexistent.function
+```
+
+```
+PEEL      VALUE
+web-01    (no data)
+web-02    (no data)
+web-03    (no data)
+```
+
+When no peels match the target expression:
+
+```bash
+$ zester basket get 'nonexistent*' any.function
+```
+
+```
+No peels matched the target expression.
+```
+
+---
+
+## Template Queries
+
+The `basket()` function is available inside `.zy` template files and is the primary way to use basket data in state files and configuration templates.
+
+### Syntax
+
+```
+basket("<target>", "<function>")
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `<target>` | `string` | A targeting pattern (glob, fact, compound, etc.) |
+| `<function>` | `string` | The basket function/key name to retrieve |
+
+**Returns:** A list of maps, where each map contains:
+
+| Key | Type | Description |
+|---|---|---|
+| `peel_id` | `string` | The peel ID that published the data |
+| `value` | `any` | The basket value for that peel |
+
+### Basic Usage
+
+```yaml title="Nginx upstream template"
+upstream_config:
+  file.managed:
+    - path: /etc/nginx/upstream.conf
+    - content: |
+        upstream backend {
+        {% for entry in basket("role:webserver", "network.ip_addrs") %}
+          server {{ entry.value }}:8080;
+        {% endfor %}
+        }
+```
+
+The first argument is a targeting pattern -- in this case `role:webserver` which is shorthand for `G@role:webserver` in template context. The second argument is the function name to query.
+
+### Glob Targeting in Templates
+
+```yaml title="All web peels by name"
+{% for entry in basket("web*", "network.ip_addrs") %}
+  server {{ entry.peel_id }} {{ entry.value }}:8080;
+{% endfor %}
+```
+
+### Fact-Based Targeting in Templates
+
+```yaml title="Peels matching a fact"
+{% for entry in basket("G@os:linux", "network.ip_addrs") %}
+  - host: {{ entry.value }}
+{% endfor %}
+```
+
+### Compound Targeting in Templates
+
+```yaml title="Compound expression"
+{% for entry in basket("role:webserver and G@os:linux", "network.ip_addrs") %}
+  server {{ entry.peel_id }} {{ entry.value }}:8080;
+{% endfor %}
+```
+
+### Using basket() with Conditionals
+
+```yaml title="Conditional logic with basket"
+{% set db_hosts = basket("role:database", "network.ip_addrs") %}
+{% if db_hosts %}
+database:
+  hosts:
+  {% for entry in db_hosts %}
+    - {{ entry.value }}
+  {% endfor %}
+{% else %}
+database:
+  hosts:
+    - localhost
+{% endif %}
+```
+
+<Callout type="warn" title="Empty results">
+If no peels match the target or none have published the requested function, `basket()` returns an empty list. Always handle the empty case in templates to avoid generating broken configuration.
+</Callout>
+
+### Scoped Queries
+
+When a peel has `basket_scope` configured in its settings, every `basket()` call is automatically filtered. The scope expression is compound-ANDed with the target you provide:
+
+```
+# Template writes:
+basket("*", "default_ipv4")
+
+# With basket_scope = "G@cluster_name:cluster-a", executes as:
+basket("* and G@cluster_name:cluster-a", "default_ipv4")
+```
+
+This means templates do not need to be cluster-aware -- they can use broad targets like `"*"` or `"role:webserver"`, and the scope narrows the results automatically. The same template produces cluster-specific output on each peel:
+
+```yaml title="Cluster-scoped /etc/hosts-internal"
+/etc/hosts-internal:
+  file.managed:
+    - content: |
+        # Auto-generated by Zester basket
+        # All peels in the cluster
+        {% for entry in basket("*", "default_ipv4") %}
+        {{ entry.value }}  {{ entry.peel_id }}
+        {% endfor %}
+```
+
+On `web-01` (cluster-a), this produces entries for web-01, web-02, and db-01. On `web-03` (cluster-b), it produces entries for web-03 and db-02.
+
+---
+
+## Use Cases
+
+### Load Balancer Configuration
+
+Discover backend server IPs and generate HAProxy or Nginx configs:
+
+```yaml title="HAProxy backend discovery"
+haproxy_backends:
+  file.managed:
+    - path: /etc/haproxy/haproxy.cfg
+    - content: |
+        frontend http
+          bind *:80
+          default_backend webservers
+
+        backend webservers
+          balance roundrobin
+        {% for entry in basket("role:webserver", "network.ip_addrs") %}
+          server {{ entry.peel_id }} {{ entry.value }}:8080 check
+        {% endfor %}
+```
+
+### Firewall Rules
+
+Build allow lists from peer addresses:
+
+```yaml title="iptables allow list"
+firewall_allow:
+  file.managed:
+    - path: /etc/iptables/peers.rules
+    - content: |
+        # Auto-generated peer allow list
+        {% for entry in basket("role:app", "network.ip_addrs") %}
+        -A INPUT -s {{ entry.value }}/32 -p tcp --dport 5432 -j ACCEPT
+        {% endfor %}
+        -A INPUT -p tcp --dport 5432 -j DROP
+```
+
+### Monitoring and Metrics Discovery
+
+Auto-discover scrape targets for Prometheus:
+
+```yaml title="Prometheus target discovery"
+prometheus_targets:
+  file.managed:
+    - path: /etc/prometheus/targets.json
+    - content: |
+        [
+        {% for entry in basket("*", "monitoring.endpoint") %}
+          {
+            "targets": ["{{ entry.value }}"],
+            "labels": {"peel": "{{ entry.peel_id }}"}
+          }{{ "," if not loop.last }}
+        {% endfor %}
+        ]
+```
+
+### DNS Record Generation
+
+Auto-generate DNS zone entries from peer data:
+
+```yaml title="DNS zone file"
+dns_zone:
+  file.managed:
+    - path: /etc/bind/db.internal
+    - content: |
+        $TTL 300
+        {% for entry in basket("*", "network.ip_addrs") %}
+        {{ entry.peel_id }}    IN A    {{ entry.value }}
+        {% endfor %}
+```
+
+---
+
+## NATS KV Direct Access
+
+For advanced use cases, basket data can be read directly from the NATS KV bucket.
+
+### Bucket Details
+
+| Property | Value |
+|---|---|
+| Bucket name | `basket` |
+| Encoding | MessagePack |
+| History | 1 revision per key |
+| TTL | None (persistent) |
+| Key format | `<peel-id>.<function>` |
+
+### Reading with NATS CLI
+
+```bash
+# List all basket keys
+$ nats kv ls basket
+
+# Get raw value (MessagePack binary)
+$ nats kv get basket web-01.network.ip_addrs
+```
+
+### Reading with Go
+
+```go
+kv, err := bus.GetBucket(ctx, js, bus.BucketBasket)
+if err != nil {
+    log.Fatal(err)
+}
+
+var value string
+if err := bus.KVGet(ctx, kv, "web-01.network.ip_addrs", &value); err != nil {
+    log.Fatal(err)
+}
+
+fmt.Println(value)
+// Output: 10.0.1.50
+```
+
+### Watching for Changes
+
+The master or any consumer can watch for basket updates in real time:
+
+```go
+watcher, err := kv.WatchAll(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+for entry := range watcher.Updates() {
+    if entry == nil {
+        continue // initial values loaded
+    }
+    fmt.Printf("Basket updated: %s\n", entry.Key())
+}
+```
+
+<Callout type="info" title="No polling required">
+NATS KV watch delivers updates as they happen. Unlike Salt Mine where the master must poll for changes, basket consumers are notified immediately when a peel publishes new data.
+</Callout>
+
+---
+
+## Staleness and Freshness
+
+Basket data is only as fresh as the last refresh interval. Consider these factors:
+
+| Factor | Impact |
+|---|---|
+| Peel is down | Basket data goes stale; last-known value persists in KV |
+| Peel restarts | Basket data refreshes immediately on startup |
+| Network partition | Peel cannot update KV; stale data persists until reconnection |
+| Function error | Failed function execution does not update KV; previous value persists |
+
+<Callout type="success" title="Staleness detection">
+Since the `basket` KV bucket has no TTL, stale data from disconnected peels persists indefinitely. Monitor peel connectivity to identify stale basket data, or include a timestamp in custom basket values for application-level freshness checks.
+</Callout>
+
+---
+
+## Comparison with Salt Mine
+
+| Feature | Salt `mine.get()` | Zester `basket()` |
+|---|---|---|
+| Template function | `salt['mine.get']('target', 'function')` | `basket("target", "function")` |
+| Return format | Dict of `{minion_id: value}` | List of `{peel_id, value}` maps |
+| Targeting | Glob only (with `tgt_type` for others) | Glob, regex, fact, compound, list -- auto-detected |
+| Storage backend | Master process memory | NATS JetStream KV (persistent) |
+| Availability | Lost on master restart | Survives restarts -- durable in NATS |
+| Update latency | Polling interval (default 60m) | Configurable per-function, instant via KV watch |
+| CLI access | `salt-run mine.get` | `zester basket get` |
+
+<Callout type="success" title="Migrating from Salt Mine">
+Replace `salt['mine.get']('target', 'function')` calls in your Jinja templates with `basket("target", "function")`. The return format differs -- Salt returns a dictionary keyed by minion ID, while Zester returns a list of maps with `peel_id` and `value` keys. Update your loop syntax accordingly:
+
+**Salt:**
+```jinja
+{% for minion, ip in salt['mine.get']('role:webserver', 'network.ip_addrs', tgt_type='grain').items() %}
+  server {{ minion }} {{ ip }}:8080;
+{% endfor %}
+```
+
+**Zester:**
+```jinja
+{% for entry in basket("role:webserver", "network.ip_addrs") %}
+  server {{ entry.peel_id }} {{ entry.value }}:8080;
+{% endfor %}
+```
+</Callout>

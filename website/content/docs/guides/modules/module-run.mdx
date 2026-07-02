@@ -1,0 +1,81 @@
+---
+title: "module.run"
+---
+
+A Salt-compatibility escape hatch that invokes another **registered state module** by name. The target module is built at compile time with the supplied arguments, and Check/Apply/Revert are delegated to it — so idempotency is preserved.
+
+**Source**: `pkg/state/modules/module_run.go`
+
+---
+
+## Parameters
+
+Two forms are supported.
+
+### Classic `name:` form
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | **Yes*** | — | The target module (e.g. `file.touch`). Every other non-`name` key is forwarded as the target module's config. |
+
+```yaml
+run_it:
+  module.run:
+    - name: file.touch
+    - path: /var/run/flag
+```
+
+### Dotted-key form (newer Salt style)
+
+*Alternative to `name:`* — a single dotted key (e.g. `file.touch:`) names the target; its map value is the argument set. Requisites and generic attributes declared next to the dotted key are carried through.
+
+```yaml
+run_it:
+  module.run:
+    - file.touch:
+        path: /var/run/flag
+```
+
+If neither `name:` nor a dotted key is present, the builder fails with `no target module`.
+
+The state ID of the `module.run` state is passed to the target module as its state ID, so the target's primary-parameter-defaults-to-ID convention applies to the `module.run` ID.
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies). Requisite and attribute keys (`require`, `watch`, `onlyif`, `order`, ...) are recognized and never mistaken for a dotted module key.
+
+---
+
+## Check / Apply / Revert Behavior
+
+All three methods delegate directly to the target module instance. The state's `Name()` is `module.run:<id>` (requisites from other states must reference it as such).
+
+---
+
+## Examples
+
+**Wrap a state module under a descriptive ID:**
+
+```yaml
+mark-provisioned:
+  module.run:
+    - name: file.touch
+    - path: /var/lib/myapp/.provisioned
+    - makedirs: true
+```
+
+**Dotted-key form with a requisite:**
+
+```yaml
+refresh-cache:
+  module.run:
+    - cmd.run:
+        command: apt-get update
+    - onchanges:
+      - "pkgrepo.managed:docker"
+```
+
+---
+
+## Divergences from Salt
+
+- The target must be a module registered in the **state registry** (built-in state modules or Starlark custom modules). Salt's `module.run` invokes *execution* modules; Zester's remote-execution functions (`pkg.version`, `service.restart`, ...) cannot be targeted here — call them directly from the CLI instead.
+- Because the full Check/Apply/Revert lifecycle is delegated, `module.run` is as idempotent as its target — unlike Salt, where `module.run` always reports changes.

@@ -1,0 +1,329 @@
+---
+title: "Master Configuration"
+---
+
+The master connects to an external NATS server as a client using credentials-based authentication. Configuration is provided via a YAML config file and/or command-line flags. The underlying `ClientConfig` struct controls connection behavior.
+
+## Configuration File
+
+The master loads configuration from a YAML file. The default search path is `/etc/zester/master.yaml`. Use `--config` to specify a custom path.
+
+**Precedence** (lowest to highest):
+
+1. Built-in defaults
+2. Config file values
+3. Command-line flags
+
+Flags always override config file values. Only flags explicitly passed on the command line take effect as overrides — default flag values do not override config file settings.
+
+Flags and YAML fields are generated from the same tagged config struct (`MasterDaemonConfig` in `internal/config/master_daemon.go`), so every flag has a matching YAML field with a shared default. The precedence above is unchanged by this binding — including `--gitfs-remotes ""` explicitly disabling GitFS over a YAML-provided remote list.
+
+### Example Config File
+
+```yaml
+# Only tls:// URLs are accepted — plaintext nats:// is rejected at startup.
+nats_url: tls://nats-1.example.com:4222
+nats_ca: /data/auth/nats-ca.crt
+states_dir: /srv/zester/states
+settings_dir: /srv/zester/settings
+health_addr: "127.0.0.1:9091"
+
+enroll:
+  addr: ":8443"
+  tls_cert: /data/auth/enroll.crt
+  tls_key: /data/auth/enroll.key
+
+api:
+  docs_enabled: false
+  tokens:
+    - username: ci-system
+      token_file: /data/auth/api-tokens/ci-system.token
+
+gitfs:
+  remotes:
+    - git@github.com:org/base-states.git
+    - git@github.com:org/app-states.git
+  interval: 2m
+  ssh_key: /data/auth/deploy.key
+```
+
+The packaged config installed by the `.deb`/`.rpm` (`packaging/config/master.yaml`) uses `nats_url: "tls://localhost:4222"` with paths under `/var/lib/zester/`.
+
+### Config File Reference
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nats_url` | string | `tls://nats:4222` | NATS server URL. Must use the `tls://` scheme — plaintext `nats://` URLs are rejected at startup. |
+| `nats_ca` | string | `""` | CA certificate file for NATS TLS server verification. See [CA resolution order](#nats-tls-and-ca-resolution). |
+| `auth_dir` | string | `/data/auth` | Directory containing auth files (master.creds, account.seed) |
+| `states_dir` | string | `/data/states` | Root directory for state files |
+| `settings_dir` | string | `/data/settings` | Root directory for settings files |
+| `jetstream_replicas` | int | `0` | JetStream replication factor applied to all buckets, streams, and object stores (`0` = auto: `min(3, detected cluster size)` — see [Replication](#replication)) |
+| `health_addr` | string | `127.0.0.1:9091` | Listen address for the local observability endpoints — `/healthz`, `/readyz`, `/metrics` (polled by zester-watchdog `--health-url` / `--ready-url`) |
+| `log_level` | string | `info` | Log level: `debug`, `info`, `warn`, or `error`. Invalid values abort startup. |
+| `log_format` | string | `json` | Log format: `json` or `text`. See [Logging](#logging). |
+| `enroll.addr` | string | `:8443` | Enrollment HTTPS API listen address |
+| `enroll.tls_cert` | string | `/data/auth/enroll.crt` | TLS certificate for enrollment API |
+| `enroll.tls_key` | string | `/data/auth/enroll.key` | TLS private key for enrollment API |
+| `api.docs_enabled` | bool | `false` | Serve Swagger UI + OpenAPI spec (`/api/v1/docs`, `/api/v1/openapi.*`). These routes are served **without authentication** on the peel-facing enrollment listener, so this is an explicit opt-in. |
+| `api.tokens[].username` | string | `""` | API client username used in request context/logging |
+| `api.tokens[].token_file` | string | `""` | Path to bearer token file; file is read on every request. The master logs a startup warning unless permissions are `0600` (no group/other access). |
+| `gitfs.remotes` | list | `[]` | Git remote URLs for state file sync |
+| `gitfs.interval` | duration | `5m` | GitFS pull interval |
+| `gitfs.ssh_key` | string | `""` | Path to SSH private key for GitFS |
+
+<Callout type="info" title="REST API exposure and rate limiting">
+REST API routes are only registered when `api.docs_enabled` is true or at least one `api.tokens` entry exists. The unauthenticated peel-facing enrollment endpoints (`/api/v1/enroll` and subpaths) get a strict per-IP rate limit (burst 10, 1 req/10s); all other routes — the token-authenticated REST API — get a much higher budget (burst 120, 20 req/s per IP).
+</Callout>
+
+## Command-Line Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | `/etc/zester/master.yaml` | Path to YAML config file |
+| `--nats-url` | `tls://nats:4222` | NATS server URL (must be `tls://`) |
+| `--nats-ca` | `""` | CA certificate for NATS TLS server verification |
+| `--auth-dir` | `/data/auth` | Directory containing auth files (master.creds, account.seed) |
+| `--enroll-addr` | `:8443` | Enrollment HTTP API listen address |
+| `--enroll-tls-cert` | `/data/auth/enroll.crt` | TLS certificate for enrollment API (required) |
+| `--enroll-tls-key` | `/data/auth/enroll.key` | TLS private key for enrollment API (required) |
+| `--states-dir` | `/data/states` | Root directory for state files |
+| `--settings-dir` | `/data/settings` | Root directory for settings files |
+| `--jetstream-replicas` | `0` | JetStream replication factor (0 = auto: `min(3, detected cluster size)`; explicit count overrides). See [Replication](#replication). |
+| `--health-addr` | `127.0.0.1:9091` | Listen address for `/healthz`, `/readyz`, and `/metrics` |
+| `--log-level` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
+| `--log-format` | `json` | Log format (`json`, `text`) |
+| `--api-docs` | `false` | Serve Swagger UI and OpenAPI spec (unauthenticated) on the enrollment listener |
+| `--gitfs-remotes` | `""` | Comma-separated Git remote URLs for state file sync. Passing an explicitly empty value (`--gitfs-remotes ""`) disables GitFS even when the config file sets `gitfs.remotes`. |
+| `--gitfs-interval` | `5m` | GitFS pull interval |
+| `--gitfs-ssh-key` | `""` | Path to SSH private key for GitFS authentication |
+
+The master credentials file is loaded from `<auth-dir>/master.creds` and the account seed from `<auth-dir>/account.seed`. The default auth directory is `/data/auth`; override with `--auth-dir` or `auth_dir` in the config file.
+
+## Logging
+
+The master emits structured `slog` logs with a configurable level and format:
+
+- `log_level` / `--log-level` — `debug`, `info`, `warn`, or `error` (default `info`)
+- `log_format` / `--log-format` — `json` or `text` (default `json`)
+
+Invalid values abort startup with an error listing the valid options. Every log line carries the base attributes `component=master` and `version=<build version>`, plus `master_id=<KSUID>` once the instance ID is generated.
+
+<Callout type="warn" title="JSON is now the default log format">
+Earlier releases logged human-readable text by default. The default is now structured JSON, so a watchdog and its wrapped child emit uniformly parseable lines on the same stream. Set `log_format: text` (or `--log-format text`) to restore the previous behavior.
+</Callout>
+
+## Health and Metrics Endpoints
+
+The local listener on `health_addr` (default `127.0.0.1:9091`) serves three endpoints:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /healthz` | Pure liveness — `200` whenever the process is up. Body: `{"status":"ok","component":"master","version":"<build>"}`. The watchdog's restart monitoring polls this; it never depends on NATS or any other subsystem. |
+| `GET /readyz` | Readiness — runs the subsystem checks below in parallel with a 2s per-check timeout. Returns `503` only when at least one check is `down`; `degraded` means working-but-impaired and stays `200`. The JSON body carries per-check status, message, and latency. |
+| `GET /metrics` | Prometheus scrape endpoint (see [Monitoring](/docs/operations/monitoring)). |
+
+Readiness checks:
+
+| Check | `down` when | `degraded` when |
+|-------|-------------|-----------------|
+| `nats` | NATS client not yet connected, or the connection is unhealthy | — |
+| `enroll-server` | The enrollment TLS listener failed to start or exited with an error | — |
+| `sched-consumer` | The `schedule-results` consumer is not running. A boot failure is retried every 60s in the background; the check flips to OK once a retry succeeds (log line: `scheduled-result consumer started after retry`). | — |
+| `target-service` | The target-resolution service failed to start. Non-fatal: CLI and peel targeting fall back to facts-KV scans. | — |
+| `gitfs` (registered only when GitFS is enabled) | The GitFS syncer exited | No successful sync yet — normal on a standby master that does not hold the [publisher lease](#multi-master-coordination) — or the last fully successful sync is older than 3× the pull interval |
+
+`/readyz` reports `503` from process start until the NATS connection is established, so it is suitable for systemd/Kubernetes readiness gating and is what the watchdog polls during the update soak phase (`--ready-url`).
+
+## Multi-Master Coordination
+
+Any number of masters can run against the same NATS server. Most subsystems run on **every** master and coordinate through NATS:
+
+- **Job dispatch and tracking** — dispatch requests arrive via a queue group, job ownership is CAS-protected in KV, and the orphan scanner reclaims jobs from dead masters.
+- **`schedule-results` consumer** — all masters share the durable consumer; whichever master receives a peel scheduler result persists it.
+- **Enrollment** — every master serves the enrollment HTTPS API, the REST API, and the admin request/reply service (queue group `zester-masters-admin`).
+- **Target resolution** — every master serves `zester.target.resolve` from an in-memory facts index via the shared queue group `zester-target-resolvers`, so requests are load-balanced across masters. When no master serves the subject, CLI and peel targeting automatically fall back to facts-KV scans.
+- **Rollout resume** — every master scans the `update-rollouts` bucket every 60s and CAS-adopts rollouts whose driver heartbeat is stale (older than 60s), resuming them from the persisted batch. An in-flight rollout survives the death of the master driving it.
+
+Two pieces of work are gated behind **advisory leader leases** — TTL'd entries in the `leases` KV bucket (15s TTL, renewed every 5s):
+
+| Lease key | Leader-only work |
+|-----------|------------------|
+| `publisher` | Settings-files publish, state-files publish, and the GitFS sync loop |
+| `facts-secrets` | Per-peel encrypted-secrets publication from the facts watcher |
+
+In a single-master deployment the leases are acquired immediately after storage initialization, so startup behavior is unchanged. Standby masters log `publisher lease candidate started; standing by until acquired` and still load the settings files locally — `settings files loaded for peel-side rendering` appears on every master, because every master must be able to encrypt secrets — but only the lease holder logs `published raw settings files for peel-side rendering` and `published state files`. When a standby acquires the lease (the previous holder died or lost connectivity), it republishes the settings and state files and takes over the GitFS sync loop.
+
+The leases are advisory: a brief (sub-TTL) window of dual ownership is tolerated by design — file publishes are idempotent KV puts and secrets publication is hash-gated, so double-publishing is harmless.
+
+## NATS TLS and CA Resolution
+
+The master refuses to start with a plaintext NATS URL: `bus.ValidateTLSNATSURLs` rejects anything that is not `tls://` before connecting. The same enforcement applies to peels and the watchdog.
+
+The CA certificate used to verify the NATS server is resolved in this order:
+
+1. Explicit `--nats-ca` flag / `nats_ca` YAML field
+2. `NATS_CA_FILE` environment variable
+3. `/data/auth/nats-ca.crt`, if the file exists
+4. The host's system trust store
+
+If your NATS server certificate is signed by a public or OS-trusted CA, no configuration is needed. For a private CA, either drop the CA cert at `/data/auth/nats-ca.crt` or point `nats_ca` at it.
+
+## ClientConfig Reference
+
+The `ClientConfig` struct in `pkg/bus/client.go` controls the NATS connection:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `URLs` | `[]string` | (required) | NATS server URL(s). Multiple URLs for cluster failover. |
+| `Name` | `string` | `"zester-peel"` | Client name used in NATS connection identification and logging. |
+| `CredsFile` | `string` | `""` | Path to NATS credentials file (`.creds`) containing JWT and nkey seed. |
+| `NKeySeedFile` | `string` | `""` | Path to an nkey seed file for authentication. |
+| `MaxReconnects` | `int` | `-1` (unlimited) | Maximum reconnection attempts. Use `-1` for unlimited. |
+| `ReconnectWait` | `duration` | `2s` | Base wait between reconnection attempts. NATS adds jitter automatically. |
+| `ReconnectBufSize` | `int` (bytes) | `8388608` (8 MB) | Buffer size for messages published during reconnection. |
+| `PingInterval` | `duration` | `20s` | Interval for NATS ping/pong health checks. |
+| `MaxPingsOut` | `int` | `3` | Outstanding pings before declaring unhealthy. |
+| `DrainTimeout` | `duration` | `30s` | Time allowed for draining subscriptions during graceful shutdown. |
+
+## Full Example
+
+```yaml
+nats_url: tls://nats-1.example.com:4222
+nats_ca: /data/auth/nats-ca.crt
+states_dir: /srv/zester/states
+settings_dir: /srv/zester/settings
+jetstream_replicas: 3
+health_addr: "127.0.0.1:9091"
+log_level: info
+log_format: json
+
+enroll:
+  addr: ":8443"
+  tls_cert: /data/auth/enroll.crt
+  tls_key: /data/auth/enroll.key
+
+api:
+  docs_enabled: false
+  tokens:
+    - username: ci-system
+      token_file: /data/auth/api-tokens/ci-system.token
+
+gitfs:
+  remotes:
+    - git@github.com:org/base-states.git
+    - git@github.com:org/app-states.git
+  interval: 2m
+  ssh_key: /data/auth/deploy.key
+```
+
+## NATS Server Configuration
+
+The NATS server is managed independently. For operator-mode JWT authentication with JetStream, a typical `nats-server.conf` looks like:
+
+```
+port: 4222
+tls {
+  cert_file: /etc/nats/tls/server.crt
+  key_file: /etc/nats/tls/server.key
+}
+jetstream {
+  store_dir: /var/lib/nats/jetstream
+  max_mem: 2GB
+  max_file: 50GB
+}
+operator: /etc/nats/operator.jwt
+system_account: <system-account-public-key>
+resolver: MEMORY
+resolver_preload: {
+  <account-public-key>: <account-jwt>
+  <system-account-public-key>: <system-account-jwt>
+}
+```
+
+<Callout type="error" title="TLS is required">
+Without TLS, NATS traffic (including JWTs and credentials) is transmitted in plaintext. Zester clients only accept `tls://` URLs, so the NATS server must serve TLS. If the server certificate is signed by a private CA, distribute the CA cert to every node (see [CA resolution order](#nats-tls-and-ca-resolution)).
+</Callout>
+
+<Callout type="warn" title="Runtime enforcement">
+The master rejects non-TLS NATS URLs at startup. Any `nats://` URL will fail fast — use `tls://...`. The same enforcement applies on peels and the watchdog. Set `nats_ca` (or `--nats-ca`) only if your NATS CA is not resolvable via the [CA resolution order](#nats-tls-and-ca-resolution).
+</Callout>
+
+## JetStream Storage
+
+JetStream storage is managed by the NATS server, not the master. The master initializes KV buckets and streams on startup via `InitializeStorage()`.
+
+JetStream is used for:
+
+- **Streams**: Job event log for audit and replay (also carries peel scheduler results, consumed by the durable `schedule-results` consumer)
+- **Key-Value stores**: Facts, settings, jobs, job returns, basket data, peel heartbeats, leader leases
+- **Object stores**: Update binary distribution (`update-binaries`)
+
+### Replication
+
+`jetstream_replicas` / `--jetstream-replicas` sets the replication factor the master applies to every KV bucket, the `job-events` stream, and the `update-binaries` Object Store when it initializes them. The default `0` means **auto**: the master detects the NATS cluster size from the connection's known servers and applies `min(3, cluster size)` — a single NATS server gets single-replica assets, while a 3+ node cluster automatically gets 3 replicas so job history, settings, enrollment records, and published binaries survive a node loss. An explicit count overrides auto-detection for all assets (counts above 3 buy little for KV workloads — 3 is the JetStream RAFT sweet spot); forcing a count below `min(3, cluster size)` logs a per-asset warning for the critical buckets, since a single node's disk loss would then permanently destroy them despite the cluster.
+
+Raising the factor on an existing deployment is attempted in place. If the replica change on an existing asset fails — an older NATS server, or a cluster without the capacity — startup does **not** abort: the asset is kept at 1 replica and a warning is logged with a manual migration hint, e.g.:
+
+```
+bucket kept 1 replica: replica change failed; migrate manually
+  wanted_replicas=3 hint="nats stream edit KV_jobs --replicas=3"
+```
+
+Follow the hint with the `nats` CLI to migrate the named asset by hand (KV buckets are backed by streams named `KV_<bucket>`; object stores by `OBJ_<bucket>`).
+
+### Storage Sizing
+
+| Deployment Size | Recommended NATS Memory | Recommended NATS Disk |
+|-----------------|------------------------|----------------------|
+| Small (< 100 peels) | 512 MB | 5 GB |
+| Medium (100-1000 peels) | 2 GB | 20 GB |
+| Large (1000+ peels) | 8 GB+ | 100 GB+ |
+
+<Callout type="success" title="Use SSDs for NATS store_dir">
+JetStream storage benefits significantly from SSD/NVMe storage. Mechanical disks will work but may bottleneck fact collection and job dispatch under heavy load.
+</Callout>
+
+## Startup Sequence
+
+1. Load config file (`--config` or `/etc/zester/master.yaml`), then apply CLI flag overrides.
+2. Start the local observability server on `health_addr` (default `127.0.0.1:9091`), serving `/healthz`, `/readyz`, and `/metrics`.
+3. Validate NATS URLs — non-`tls://` URLs abort startup — and build the client TLS config (CA resolution order above).
+4. Connect to the external NATS server using credentials (`<auth-dir>/master.creds`), retrying with backoff (up to 20 attempts).
+5. Initialize KV buckets and streams (`InitializeStorage`) and the update Object Store (`InitializeObjectStores`), each with short per-attempt timeouts and retries.
+6. Load account key for settings encryption (`<auth-dir>/account.seed`), initialize the peel-side rendering publisher, publish the master curve public key, and load + sanitize the raw settings files (`settings files loaded for peel-side rendering` — this runs on every master).
+7. Initialize the state-files publisher and construct the GitFS syncer if `gitfs.remotes` is configured.
+8. Start the `publisher` leader lease — the holder publishes the settings files and state files to KV and runs the GitFS sync loop (see [Multi-Master Coordination](#multi-master-coordination)).
+9. Generate unique master instance ID (KSUID-based) and start the job manager.
+10. Start the shared durable `schedule-results` consumer on the `job-events` stream (persists peel scheduler `return_job` results as synthetic jobs); a boot failure is retried every 60s in the background.
+11. Subscribe to job dispatch requests via queue group (`zester.masters`).
+12. Subscribe to cancel wildcard (`zester.job.*.cancel`).
+13. Start master heartbeat (5s interval, 15s bucket TTL).
+14. Start orphan scanner to reclaim jobs from dead masters.
+15. Create the enrollment store (before the facts watcher, which uses it to mark peels active).
+16. Start the `facts-secrets` leader lease (its holder publishes per-peel encrypted secrets), then the facts watcher (enrollment `issued → active` transitions run on every master).
+17. Initialize the rest of the enrollment system (challenge store, credential issuer, HTTP handler).
+18. Register master REST API routes on the enrollment mux (only when `api.docs_enabled` or at least one `api.tokens` entry is set).
+19. Start the HTTPS server on `enroll.addr`.
+20. Start the enrollment admin request/reply service (queue group `zester-masters-admin`).
+21. Initialize the rollout controller, subscribe to rollout start/abort requests, and start the rollout resume loop (adopts rollouts orphaned by dead masters, 60s scan).
+22. Start the target-resolution service (queue group `zester-target-resolvers`) backed by an in-memory facts index.
+23. Start the connected-peels gauge (recounts the `peel-heartbeat` bucket every 15s into `zester_master_connected_peels`).
+
+## Shutdown
+
+The master performs a graceful shutdown:
+
+1. Drains the NATS client connection (finishes pending messages).
+2. Closes the connection to NATS.
+
+## Message Encoding
+
+All Zester messages over NATS use **MessagePack** encoding (not JSON). This applies to:
+
+- Fact reports from peels
+- Job dispatch and return values
+- Settings distribution
+- Event payloads
+
+The `bus.Encode` and `bus.Decode` functions handle serialization transparently.

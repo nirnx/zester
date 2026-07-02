@@ -1,0 +1,55 @@
+---
+title: "file.blockreplace"
+description: "Manages content between two marker lines in a file. Content between the start and end markers is replaced with the desired content value. Lines outside the block are preserved."
+---
+
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Path to the file to manage |
+| `content` | string | (required) | Desired content to place between the markers |
+| `marker_start` | string | `# START managed zone` | Line that begins the managed block |
+| `marker_end` | string | `# END managed zone` | Line that ends the managed block |
+| `append_if_not_found` | bool | `false` | Append markers + content to the file if the block is not found |
+| `append_newline` | bool | `false` | Add a trailing newline after the end marker when appending |
+
+## Example
+
+```yaml
+# Replace content in an existing managed block.
+/etc/nginx/nginx.conf:
+  file.blockreplace:
+    - content: |
+        worker_processes auto;
+        worker_connections 1024;
+    - marker_start: "# BEGIN zester managed"
+    - marker_end: "# END zester managed"
+    - append_if_not_found: true
+    - require:
+      - "pkg.installed:nginx"
+
+# Use default markers.
+/etc/hosts:
+  file.blockreplace:
+    - content: "192.168.1.10 myserver.local"
+    - append_if_not_found: true
+```
+
+## Behavior
+
+| Phase | Action |
+|-|-|
+| Check | Read file. Find start/end markers. Compare content between them with desired `content`. Returns `NeedsChange: true` if content differs, markers are missing (and `append_if_not_found: true`), or the file is absent (and `append_if_not_found: true`). |
+| Apply | Replace content between existing markers. If markers not found and `append_if_not_found: true`, append the full block (markers + content) to the file. Creates the file if absent and `append_if_not_found: true`. |
+| Revert | Restore the file to its content before Apply was called. If the file was created by Apply, removes it. |
+
+## Notes
+
+- Marker matching trims trailing carriage returns (`\r`) for cross-platform compatibility.
+- Content between markers always ends with a trailing newline in the stored format. The `content` parameter value does not need a trailing newline.
+- Lines before the start marker and after the end marker are never modified.
+- If `append_if_not_found: false` (the default) and the markers are not present, the module is a no-op (Check returns `NeedsChange: false`).
+- Backup for revert is stored in-process. If the peel restarts between Apply and Revert, the backup is lost and Revert will remove the file (if it was created by Apply) or return no change.

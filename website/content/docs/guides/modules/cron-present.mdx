@@ -1,0 +1,37 @@
+---
+title: "cron.present"
+description: "Ensures a crontab entry exists for a user with the specified schedule and command."
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Label / comment for the cron entry |
+| `user` | string | `root` | User whose crontab is managed |
+| `command` | string | — | **Required.** Command to run |
+| `minute` | string | `*` | Minute field (0-59 or `*`) |
+| `hour` | string | `*` | Hour field (0-23 or `*`) |
+| `daymonth` | string | `*` | Day-of-month field (1-31 or `*`) |
+| `month` | string | `*` | Month field (1-12 or `*`) |
+| `dayweek` | string | `*` | Day-of-week field (0-7 or `*`) |
+| `require` | list | — | Requisite states |
+
+## Example
+
+```yaml
+backup-db:
+  cron.present:
+    - user: postgres
+    - command: /usr/local/bin/pg_backup.sh
+    - minute: "0"
+    - hour: "3"
+    - require:
+      - pkg.installed:postgresql
+```
+
+## Behaviour
+
+- Check: finds entry by command string, compares schedule fields.
+- Apply: adds or replaces the entry via `crontab -u <user> -`.
+- Revert: removes the entry.

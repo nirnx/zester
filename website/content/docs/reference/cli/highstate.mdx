@@ -1,0 +1,150 @@
+---
+title: "state.highstate"
+---
+
+Apply all states from `top.zy` to targeted peels. This evaluates the
+[state top file](/docs/guides/states/topfile), resolves all matching state references,
+and executes them as a single DAG.
+
+---
+
+## Synopsis
+
+```
+zester '<target>' state.highstate [flags]
+```
+
+## Description
+
+Resolves the target expression to a set of peel IDs, creates a job, and
+dispatches it through the master's job manager. Each targeted peel evaluates
+`/data/states/top.zy` against its own facts, loads all matching states
+(expanding includes and applying extends), builds a DAG, and executes it.
+
+Results are streamed back as each peel completes.
+
+Target type auto-detection:
+
+| Expression | Detected Type |
+|------------|---------------|
+| `web*` | Glob |
+| `E@web-\d+` | Regex |
+| `G@os:ubuntu` | Fact |
+| `L@web-01,web-02` | List |
+| `web* and G@os:ubuntu` | Compound |
+
+See the [Targeting](/docs/guides/targeting) section for full details on each
+target type.
+
+## Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--timeout` | `duration` | `10m` | Maximum time to wait for the job to complete |
+| `--direct` | `bool` | `false` | Bypass master job system; send directly to peels |
+| `--test` | `bool` | `false` | Dry run: compile and check all states without applying (Salt `test=True`) |
+
+This command also accepts [global flags](/docs/reference/cli#global-flags).
+
+## Examples
+
+### Apply highstate to all peels
+
+```bash
+zester '*' state.highstate
+```
+
+```
+Targeting 5 peel(s): [api-01 db-01 web-01 web-02 web-03]
+Job 2hPx4RmTXpU8AnYsVb6SMuEhPlC dispatched
+web-01:
+    pkg.installed:install_nginx:
+        changed: false
+        duration: 120ms
+    file.managed:nginx_config:
+        changed: true
+        duration: 4.2ms
+    cmd.run:reload_nginx:
+        changed: true
+        duration: 52ms
+web-02:
+    ...
+```
+
+### Apply highstate to web servers only
+
+```bash
+zester 'web*' state.highstate
+```
+
+### Apply highstate with fact-based targeting
+
+```bash
+zester 'G@role:webserver' state.highstate
+```
+
+### Apply highstate with extended timeout
+
+```bash
+zester '*' state.highstate --timeout 30m
+```
+
+### Dry run (test mode)
+
+Compile and check all states without applying. `--test` and `test=True` are
+equivalent:
+
+```bash
+zester '*' state.highstate --test
+zester '*' state.highstate test=True
+```
+
+In test mode each state's Check phase runs but nothing is applied:
+`changed: true` in the output means the state *would* change, and `diff`
+shows the pending change.
+
+### Direct mode (bypass master)
+
+```bash
+zester 'web-01' state.highstate --direct
+```
+
+### No states matched
+
+```bash
+zester 'monitoring-01' state.highstate
+```
+
+```
+Targeting 1 peel(s): [monitoring-01]
+Job 2hPx5SnUYqV9BoZtWc7TNvFiQmD dispatched
+monitoring-01:
+    ERROR: highstate: no states matched in top.zy
+```
+
+<Callout type="info" title="No states is an error">
+When the top file resolves to zero states for a peel, the peel returns this as an error via `respondError`. The peel does NOT silently succeed.
+</Callout>
+
+### No peels matched
+
+```bash
+zester 'nonexistent*' state.highstate
+```
+
+In job mode (default), the CLI prints to stderr:
+```
+No peels matched the target expression.
+```
+
+In direct mode (`--direct`), the CLI returns an error:
+```
+Error: no peels matched target "nonexistent*"
+```
+
+---
+
+## See Also
+
+- [Highstate concept](/docs/guides/states/highstate) — How highstate works
+- [State Top File](/docs/guides/states/topfile) — Top file format and targeting

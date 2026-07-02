@@ -1,0 +1,230 @@
+---
+title: "State Top File"
+---
+
+The state top file automatically assigns states to peels based on targeting patterns. It is the state-side equivalent of the [settings top.zy](/docs/guides/settings/top) — same structure, but referencing state names instead of settings files.
+
+---
+
+## Location
+
+```
+/data/states/top.zy
+```
+
+The state top file lives at the root of the states directory. It is required for [highstate](/docs/guides/states/highstate) execution.
+
+---
+
+## Format
+
+The top file is structured YAML with three levels:
+
+```yaml
+<environment>:
+  '<pattern>':
+    - <state.ref>
+    - <state.ref>
+```
+
+1. **Environment** — An organizational label (e.g., `base`, `roles`). All environments are evaluated; the label is for human readability only.
+2. **Pattern** — A targeting expression that selects peels. Supports glob, fact-based, and compound patterns.
+3. **State refs** — Dot-notation references to state files. These follow the same [naming convention](/docs/guides/states/composition#naming-convention) used by `include` and `state.apply`.
+
+---
+
+## Targeting Patterns
+
+### Wildcard: All Peels
+
+```yaml
+base:
+  '*':
+    - common
+    - common.packages
+```
+
+The `*` pattern matches every peel unconditionally.
+
+### Glob: Match by Peel ID
+
+Standard glob syntax matches against the peel ID:
+
+```yaml
+base:
+  'web*':
+    - webserver
+  'db-*':
+    - database
+  'cache-0?':
+    - caching
+```
+
+| Pattern | Matches |
+|---------|---------|
+| `web*` | `web-01`, `web-02`, `web-prod` |
+| `db-*` | `db-01`, `db-replica-03` |
+| `cache-0?` | `cache-01`, `cache-02` (not `cache-10`) |
+
+### Fact-based: Match by Fact Value
+
+Use `key:value` syntax to match peels based on their collected facts:
+
+```yaml
+roles:
+  'role:webserver':
+    - webserver
+    - webserver.config
+  'role:database':
+    - database
+    - database.tuning
+  'os_family:debian':
+    - common.apt
+```
+
+The `key:value` syntax checks whether the peel's fact `key` equals `value`. Note that the top file uses `SimpleTargetMatcher` which does **not** support the `G@` prefix used in CLI compound targeting. Use `key:value` directly (not `G@key:value`).
+
+### Compound: Boolean Expressions
+
+Combine multiple matchers with boolean operators for precise targeting:
+
+```yaml
+production:
+  'web* and environment:production':
+    - webserver.hardening
+  'role:database and not environment:staging':
+    - database.production
+```
+
+See [Compound Targeting](/docs/guides/targeting/compound) for full syntax details.
+
+---
+
+## Environments
+
+Environments are top-level labels that group targeting rules. All environments are evaluated during highstate — the label serves as documentation, not isolation.
+
+```yaml
+base:
+  '*':
+    - common
+
+roles:
+  'role:webserver':
+    - webserver
+  'role:database':
+    - database
+
+site:
+  'datacenter:us-east-1':
+    - site.us_east
+  'datacenter:eu-west-1':
+    - site.eu_west
+```
+
+<Callout type="success" title="Environment ordering">
+Environments are processed in the order they appear in the file. Place base states first, role-specific states next, and environment/site overrides last. When the same state is referenced by multiple patterns, it is only loaded once (deduplicated).
+</Callout>
+
+---
+
+## Template Rendering
+
+The state top file is rendered as a Jinja2 template before YAML parsing. This means you can use facts, settings, and control flow in the top file itself.
+
+### Conditional State Assignment
+
+```yaml
+base:
+  '*':
+    - common
+    {% if facts.environment == "production" %}
+    - common.hardening
+    {% endif %}
+```
+
+### Dynamic Targeting
+
+```yaml
+base:
+  '*':
+    - common
+
+roles:
+  'cluster_name:{{ facts.cluster_name }}':
+    - cluster.local
+```
+
+<Callout type="warn" title="Template evaluation context">
+The top file is rendered with the peel's local facts and resolved settings. Each peel evaluates the top file independently, so conditional branches can produce different state lists for different peels.
+</Callout>
+
+---
+
+## Complete Example
+
+```yaml
+# /data/states/top.zy
+
+base:
+  '*':
+    - common
+    - common.packages
+    - common.users
+    - common.monitoring
+
+roles:
+  'role:webserver':
+    - webserver
+    - webserver.config
+    - webserver.certs
+  'role:database':
+    - database
+    - database.tuning
+    - database.backup
+  'role:loadbalancer':
+    - loadbalancer
+    - loadbalancer.certs
+  'role:worker':
+    - worker
+    - worker.queues
+
+os:
+  'os_family:debian':
+    - os.debian
+  'os_family:redhat':
+    - os.redhat
+
+environments:
+  'environment:production':
+    - env.production
+  'environment:staging':
+    - env.staging
+```
+
+### Resolution for a Specific Peel
+
+For a peel `web-01` with facts `{role: "webserver", os_family: "debian", environment: "production"}`, the state top file resolves to:
+
+```
+1. common              (matched by '*')
+2. common.packages     (matched by '*')
+3. common.users        (matched by '*')
+4. common.monitoring   (matched by '*')
+5. webserver           (matched by 'role:webserver')
+6. webserver.config    (matched by 'role:webserver')
+7. webserver.certs     (matched by 'role:webserver')
+8. os.debian           (matched by 'os_family:debian')
+9. env.production      (matched by 'environment:production')
+```
+
+Each referenced state file is loaded, its `include` directives are expanded, and all states are merged into a single DAG for execution.
+
+---
+
+## See Also
+
+- [Settings Top File](/docs/guides/settings/top) — Same structure for settings assignment
+- [Highstate](/docs/guides/states/highstate) — Applying all states from the top file
+- [State Composition](/docs/guides/states/composition) — Include and extend directives
+- [Targeting](/docs/guides/targeting) — Full targeting reference

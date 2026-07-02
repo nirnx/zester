@@ -1,0 +1,56 @@
+---
+title: "Code-to-Docs Coverage Map"
+description: "This map treats code as source of truth and lists documentation coverage for key runtime packages."
+---
+
+## Scope
+
+- `pkg/auth`
+- `pkg/enroll`
+- `pkg/update`
+
+## pkg/auth
+
+| Code Surface | Primary Docs | Coverage |
+|---|---|---|
+| `keys.go` (`GenerateKeyBundle`, `LoadKeyBundle*`, `ValidatePublicKey`, `PublicKeyFromSeed`) | `docs/authentication/nkeys.md` | Full |
+| `jwt.go` (`Create*JWT`, `Decode*JWT`, `ValidateJWTChain`, `PeelUserJWTOptions`, `MasterUserJWTOptions`, `AdminUserJWTOptions`) | `docs/authentication/jwt.md`, `docs/architecture/security.md` | Full |
+| `creds.go` (`GenerateCredsFile`, `WriteCredsFile`, `LoadCredsFile`, NATS options, bootstrap) | `docs/authentication/credentials.md` | Full |
+| `accept.go` (`KeyStore`, accept policies, key lifecycle) | `docs/authentication/key-management.md` | Full |
+| `encrypt.go` (NaCl box settings encryption helpers) | `docs/settings/encryption.md`, `docs/architecture/security.md` | Full |
+
+## pkg/enroll
+
+| Code Surface | Primary Docs | Coverage |
+|---|---|---|
+| `enrollment.go` (state machine and transitions) | `docs/enrollment-architecture.md`, `docs/enrollment-design.md` | Full |
+| `verify.go` (signature verification, input validation) | `docs/enrollment-api.md`, `docs/enrollment-security.md` | Full |
+| `challenge.go` (challenge issuance/consume, TTL) | `docs/enrollment-api.md`, `docs/enrollment-security.md` | Full |
+| `store.go` (KV schema, CAS transitions, list/filter) | `docs/enrollment-architecture.md`, `docs/enrollment-design.md`, `docs/enrollment-security.md` | Full |
+| `handler.go` (HTTP endpoints, SSE, rate limit/security headers) | `docs/enrollment-api.md`, `docs/enrollment-operations.md`, `docs/enrollment-security.md` | Full |
+| `server.go` (TLS-only server, min TLS version) | `docs/enrollment-operations.md`, `docs/enrollment-security.md` | Full |
+| `credential.go` (JWT issuance and transport encoding) | `docs/enrollment-api.md`, `docs/enrollment-security.md` | Full |
+| `client.go` + `persist.go` (auto-enroll flow, credential/seed persistence) | `docs/enrollment-operations.md`, `docs/enrollment-architecture.md` | Full |
+
+## pkg/update
+
+| Code Surface | Primary Docs | Coverage |
+|---|---|---|
+| CLI command surface (`cmd/zester/cmd/update*.go`) | `docs/cli/update.md` | Full (CLI only) |
+| KV buckets/object store names and retention (`BucketUpdate*`, `ObjectBucketUpdateBinaries`) | `docs/update/storage.md`, `docs/architecture/nats.md` | Full |
+| `manifest.go` (manifest schema/keying, binary object keys, upload/download verification) | `docs/update/storage.md`, `docs/update/architecture.md` | Full |
+| `rollout.go` (rollout state model, batching, abort semantics, persisted rollout state) | `docs/update/architecture.md`, `docs/cli/update.md` | Full |
+| `status.go` (watchdog reporter, `update-status` heartbeat schema) | `docs/update/watchdog.md`, `docs/update/storage.md`, `docs/cli/update.md` | Full |
+| `handler.go` (watchdog update state machine + command protocol) | `docs/update/watchdog.md` | Full |
+| `slots.go` (atomic slot swap/rollback/recovery: `.staging`/`.prev`) | `docs/update/watchdog.md` | Full |
+| `supervisor.go` (child lifecycle + health check policy + degraded mode) | `docs/update/watchdog.md` | Full |
+| NATS update subjects (`zester.update.cmd.*`, rollout start/abort subjects) | `docs/update/architecture.md`, `docs/architecture/nats.md` | Full |
+
+## Remaining Undocumented Areas (highest impact)
+
+No high-impact gaps found for `pkg/update` at the package-surface level.
+
+## Notes
+
+- This map is intentionally package-surface oriented; it does not duplicate detailed module docs.
+- When this file says `Partial`, there is at least one user-visible behavior in code that is not described in docs.

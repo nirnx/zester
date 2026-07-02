@@ -1,0 +1,65 @@
+---
+title: "git.cloned"
+description: "Ensures a Git repository is cloned at a target path. Optionally pins to a specific branch or commit revision."
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Filesystem path where the repo should be cloned |
+| `url` | string | required | Remote repository URL |
+| `branch` | string | — | Branch or tag to checkout after cloning |
+| `rev` | string | — | Specific commit SHA to checkout (takes precedence over `branch` for comparison) |
+| `depth` | int | 0 | Shallow clone depth; 0 means full clone |
+| `force` | bool | false | Reset local changes before checkout (`git reset --hard HEAD`) |
+
+## Behavior
+
+**Check**
+
+1. If the target directory does not exist → `NeedsChange: true`.
+2. If it exists, runs `git -C <path> remote get-url origin` and compares to `url`. If they differ → `NeedsChange: true`.
+3. If `rev` or `branch` is specified, runs `git -C <path> rev-parse HEAD` and compares. If HEAD does not match → `NeedsChange: true`.
+4. Otherwise → `NeedsChange: false`.
+
+**Apply**
+
+- If directory is missing: `git clone [--depth N] [--branch B] <url> <path>`.
+- If directory exists with wrong remote URL: `git remote set-url origin <url>`.
+- If `rev` or `branch` specified: `git fetch origin` then `git checkout <target>`.
+- If `force` is set: `git reset --hard HEAD` before checkout.
+
+**Revert**
+
+Removes the directory with `RemoveAll` only if the directory was created during the most recent `Apply`. If the directory existed before Apply (e.g. only the remote URL was fixed), Revert is a no-op.
+
+## Examples
+
+```yaml
+# Clone a public repo with no pinned version
+/opt/myapp:
+  git.cloned:
+    - url: https://github.com/example/myapp
+
+# Clone a specific branch with shallow depth
+/srv/deploy/myapp:
+  git.cloned:
+    - url: git@github.com:example/myapp.git
+    - branch: production
+    - depth: 1
+
+# Pin to a specific commit, require git to be installed first
+/opt/tools/mylib:
+  git.cloned:
+    - url: https://github.com/example/mylib
+    - rev: a1b2c3d4e5f6
+    - require:
+      - pkg.installed:git
+```
+
+## Notes
+
+- `rev` and `branch` can be used together in config, but `rev` takes precedence when checking whether HEAD matches.
+- The state shells out to the `git` binary via `CommandExec`; `git` must be installed on the target node.
+- TLS verification and SSH key configuration are handled by the system Git config, not by this module.

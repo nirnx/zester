@@ -1,0 +1,346 @@
+---
+title: "State Composition"
+description: "Zester supports composing states across multiple files using the include and extend directives. This allows you to build modular, reusable state trees that are easier to maintain and reason about."
+---
+
+---
+
+## Include Directive
+
+The `include` directive loads states from other files into the current state run. It appears as a top-level key with a list of dot-notation state references.
+
+### Syntax
+
+```yaml
+include:
+  - <state.ref>
+  - <state.ref>
+
+my_state:
+  pkg.installed:
+    - name: nginx
+```
+
+Each entry in the `include` list is a dot-notation reference that maps to a `.zy` file under the states directory:
+
+| Reference | File Path |
+|-----------|-----------|
+| `common.packages` | `common/packages.zy` |
+| `webserver` | `webserver/init.zy` |
+| `webserver.config` | `webserver/config.zy` |
+| `database.tuning` | `database/tuning.zy` |
+
+### Resolution
+
+Included files are resolved using **depth-first traversal**. If an included file itself contains an `include` directive, its includes are resolved before continuing with the next entry in the parent's include list.
+
+Key behaviors:
+
+- **Each file is loaded once.** If two includes reference the same file (directly or transitively), the second reference is a no-op. The states from that file are already part of the current run.
+- **Cycle detection.** If file A includes file B which includes file A, Zester detects the cycle and returns an error rather than entering an infinite loop.
+- **Include ordering matters.** The including file is recorded first in load order, then its includes are resolved depth-first. This means states from all files — whether included or including — participate in the same DAG and are available as dependency targets for each other.
+
+### Example
+
+Consider the following directory layout:
+
+```
+/data/states/
+  common/
+    packages.zy
+  webserver/
+    init.zy
+    config.zy
+```
+
+**`common/packages.zy`** — shared base packages:
+
+```yaml
+install_curl:
+  pkg.installed:
+    - name: curl
+
+install_wget:
+  pkg.installed:
+    - name: wget
+```
+
+**`webserver/config.zy`** — nginx configuration:
+
+```yaml
+nginx_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx/nginx.conf
+    - mode: "0644"
+    - require:
+      - pkg.installed:install_nginx
+```
+
+**`webserver/init.zy`** — includes both files and adds its own states:
+
+```yaml
+include:
+  - common.packages
+  - webserver.config
+
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - refresh: true
+    - require:
+      - pkg.installed:install_curl
+
+enable_nginx:
+  cmd.run:
+    - command: systemctl enable --now nginx
+    - creates: /run/nginx.pid
+    - require:
+      - file.managed:nginx_config
+```
+
+When `webserver` is applied, Zester loads files in this order:
+
+1. `webserver/init.zy` (the entry file, recorded first)
+2. `common/packages.zy` (first include, resolved depth-first)
+3. `webserver/config.zy` (second include, resolved depth-first)
+
+All states from all three files are merged into a single DAG and executed together. The `install_nginx` state in `init.zy` can reference `install_curl` from `common/packages.zy` because includes are resolved first.
+
+<Callout type="success" title="Includes are not inheritance">
+Including a file does not create a parent-child relationship. It simply adds that file's states into the same execution run. All states — whether defined locally or included — participate in the same DAG and follow the same dependency rules.
+</Callout>
+
+---
+
+## Extend Directive
+
+The `extend` directive modifies states defined in included files. This is useful for adding requisites or overriding configuration without editing the original file.
+
+### Syntax
+
+```yaml
+include:
+  - <state.ref>
+
+extend:
+  <existing_state_id>:
+    <module.function>:
+      - <param>: <value>
+```
+
+### Rules
+
+1. **Can only target loaded states.** The `extend` directive can target any state ID that has already been loaded into the current compilation run — whether through a direct include, a transitive include, or any other loaded file. Attempting to extend a state ID that has not been loaded produces an error.
+
+2. **Requisite lists are appended.** When extending a state, the requisite parameters (`require`, `watch`, `onchanges`, `onfail`) are merged by appending the new entries to the existing list. This preserves the original dependencies while adding new ones.
+
+3. **All other config keys are replaced.** Non-requisite parameters follow a last-writer-wins policy. If the original state sets `mode: "0644"` and the extend sets `mode: "0600"`, the final value is `"0600"`.
+
+### Example
+
+Suppose `common/packages.zy` defines:
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - refresh: true
+```
+
+A downstream state file can extend it to add a `watch` requisite:
+
+```yaml
+include:
+  - common.packages
+
+extend:
+  install_nginx:
+    pkg.installed:
+      - watch:
+          - file.managed:nginx_repo_config
+
+nginx_repo_config:
+  file.managed:
+    - path: /etc/apt/sources.list.d/nginx.list
+    - content: "deb http://nginx.org/packages/ubuntu/ jammy nginx"
+    - mode: "0644"
+```
+
+After extension, `install_nginx` effectively becomes:
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx        # original (preserved)
+    - refresh: true      # original (preserved)
+    - watch:             # appended by extend
+        - file.managed:nginx_repo_config
+```
+
+<Callout type="warn" title="Extend and requisite merging">
+Only the four core requisite lists (`require`, `watch`, `onchanges`, `onfail`) are appended. All other keys — including `prereq`, `listen`, and the inverse `_in` forms, which are rewritten into the core requisites only *after* merging and extending complete — follow the replace rule. If you set `name: nginx-full` in the extend block, it **replaces** the original `name: nginx` value. Be intentional about which keys you include in an extend block.
+</Callout>
+
+### Multiple Extensions
+
+If multiple files extend the same state (through a chain of includes), the extensions are applied in include-resolution order. Requisites accumulate; other keys use the last value set.
+
+```yaml
+# file_a.zy defines install_nginx
+# file_b.zy includes file_a and extends install_nginx (adds requires)
+# file_c.zy includes file_b and extends install_nginx (adds watch)
+# Result: install_nginx has both the requires and watch entries
+```
+
+---
+
+## State Merging
+
+When multiple files define the same state ID — whether through `include`, the [state top file](/docs/guides/states/topfile), or `CompileMultiple` — Zester **deep-merges** them automatically rather than silently discarding one. This mirrors how the [settings pipeline](/docs/guides/settings) merges values from multiple files.
+
+### Merge Strategy
+
+Files are processed in **load order** (the entry file is recorded first, then its includes are resolved depth-first), so the merge is deterministic.
+
+| Key type | Strategy | Rationale |
+|----------|----------|-----------|
+| `require`, `watch`, `onchanges`, `onfail` | **Append** — entries from both files are concatenated | Dependencies are additive; a later file may introduce constraints the earlier file doesn't know about |
+| All other keys (`name`, `command`, `mode`, `content`, and also `prereq`, `listen`, and the `_in` requisite forms) | **Replace** — later file wins | Config values should have one authoritative answer; the more-specific file takes precedence |
+
+This is the same logic used by the `extend` directive. The difference is that `extend` is explicit and errors if the target state ID has not been loaded, while auto-merge happens implicitly whenever two files define the same state ID.
+
+### Same Module
+
+When both files use the same module for a state ID, args are merged:
+
+```yaml
+# common/packages.zy
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - require:
+      - cmd.run:setup_repo
+
+# webserver/init.zy (also defines install_nginx with pkg.installed)
+install_nginx:
+  pkg.installed:
+    - refresh: true
+    - require:
+      - file.managed:repo_config
+```
+
+**Result after merge:**
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx           # from common (preserved)
+    - refresh: true          # from webserver (added)
+    - require:              # appended from both files
+      - cmd.run:setup_repo
+      - file.managed:repo_config
+```
+
+### Different Modules
+
+When two files use different modules for the same state ID, both modules are kept. Each becomes a separate state in the DAG with a unique name (`module:stateID`):
+
+```yaml
+# common/packages.zy
+nginx:
+  pkg.installed:
+    - name: nginx
+
+# webserver/config.zy
+nginx:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - mode: "0644"
+```
+
+**Result:** Two states in the DAG — `pkg.installed:nginx` and `file.managed:nginx`.
+
+<Callout type="info" title="Merge vs Extend">
+Auto-merge is convenient when two files happen to contribute to the same state. Use `extend` when you want to explicitly modify an included state — it makes the intent clear and errors if the target state doesn't exist. Both use the same underlying merge rules (requisites append, other keys replace).
+</Callout>
+
+---
+
+## Multi-file State Organization
+
+State files use dot-notation references that map to a directory structure under the states root (`/data/states/`).
+
+### Naming Convention
+
+| Reference | Resolved Path |
+|-----------|---------------|
+| `webserver` | `webserver/init.zy` |
+| `webserver.config` | `webserver/config.zy` |
+| `webserver.vhosts` | `webserver/vhosts.zy` |
+| `common.packages` | `common/packages.zy` |
+| `database` | `database/init.zy` |
+| `database.tuning` | `database/tuning.zy` |
+
+A bare name (without dots) always resolves to `init.zy` inside that directory. This is the entry point for that state — analogous to `__init__.py` in Python packages.
+
+### Recommended Directory Structure
+
+```
+/data/states/
+  common/
+    init.zy              # Base configuration for all peels
+    packages.zy          # Shared packages
+    users.zy             # System users and groups
+    firewall.zy          # Base firewall rules
+  webserver/
+    init.zy              # Entry point: includes config, vhosts
+    config.zy            # nginx.conf management
+    vhosts.zy            # Virtual host templates
+  database/
+    init.zy              # Entry point: PostgreSQL setup
+    tuning.zy            # Performance tuning parameters
+    backup.zy            # Backup cron and scripts
+  monitoring/
+    init.zy              # Prometheus node exporter
+    alerts.zy            # Alert rule files
+```
+
+### Best Practices
+
+**Use `init.zy` as the composition root.** The `init.zy` file for each state directory should use `include` to pull in the other files in that directory. This gives callers a single entry point:
+
+```yaml
+# webserver/init.zy
+include:
+  - webserver.config
+  - webserver.vhosts
+
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - refresh: true
+```
+
+Callers can apply the whole stack with `state.apply webserver` or apply a specific sub-file with `state.apply webserver.config`.
+
+**Keep files focused.** Each `.zy` file should manage a single concern. Prefer many small files over one large file — includes make composition easy.
+
+**Avoid deep nesting.** One or two levels of directories is usually sufficient. Deeply nested state references like `infrastructure.networking.firewall.rules.ingress` are harder to work with than `firewall.ingress`.
+
+**Use consistent naming.** Name files after the resource they manage, not the action they perform:
+
+| Preferred | Avoid |
+|-----------|-------|
+| `webserver/config.zy` | `webserver/configure_nginx.zy` |
+| `database/backup.zy` | `database/setup_backup_cron.zy` |
+| `common/packages.zy` | `common/install_base_packages.zy` |
+
+---
+
+## See Also
+
+- [Writing States](/docs/guides/states/writing) — State file syntax and structure
+- [Dependencies](/docs/guides/states/dependencies) — Requisite types and DAG resolution
+- [State Top File](/docs/guides/states/topfile) — Assigning states to peels automatically
+- [Highstate](/docs/guides/states/highstate) — Applying all matched states at once

@@ -1,0 +1,52 @@
+---
+title: "locale.present"
+description: "Ensures a locale is enabled in /etc/locale.gen and generated via locale-gen."
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Locale string to enable (e.g. `"en_US.UTF-8"`, `"de_DE.UTF-8"`) |
+
+## Behavior
+
+**Check**
+
+Runs `locale -a` and checks whether the target locale appears in the output. Comparison is case-insensitive and ignores `-` characters (so `en_US.UTF-8` matches `en_US.utf8` in output).
+
+**Apply**
+
+1. Reads `/etc/locale.gen`. If the locale line is commented out, uncomments it. If the file does not contain the locale at all, appends it. Creates the file if it does not exist.
+2. Runs `locale-gen` to regenerate the locale database.
+
+**Revert**
+
+1. Re-comments the locale line in `/etc/locale.gen`.
+2. Runs `locale-gen` to regenerate without the locale.
+
+## Examples
+
+```yaml
+# Enable US English UTF-8 locale
+en_US.UTF-8:
+  locale.present:
+    - require:
+      - pkg.installed:locales
+
+# Enable multiple locales
+de_DE.UTF-8:
+  locale.present: []
+
+fr_FR.UTF-8:
+  locale.present:
+    - require:
+      - locale.present:de_DE.UTF-8
+```
+
+## Notes
+
+- This module is targeted at Debian/Ubuntu systems that use `/etc/locale.gen` and `locale-gen`.
+- On Red Hat-based systems, locale management uses `localectl` — use `cmd.run` with `localectl set-locale` instead.
+- The `locale` binary and `locale-gen` must be available on the target system (`locales` package on Debian/Ubuntu).
+- Locale names in `/etc/locale.gen` must include the encoding suffix (e.g. `en_US.UTF-8 UTF-8`). The module appends `UTF-8` as a default encoding when adding a new line.

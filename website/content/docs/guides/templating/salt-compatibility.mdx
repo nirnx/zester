@@ -1,0 +1,761 @@
+---
+title: "Salt Compatibility"
+---
+
+Zester includes a compatibility layer that eases migration from SaltStack `.sls` templates to Zester `.zy` templates. This layer provides variable aliases, the `salt['mod.func']` accessor, control structures, functions, dict methods, and filters that match Salt's Jinja2 conventions.
+
+---
+
+## Variable Aliases
+
+Salt templates use `grains` and `pillar` to access system facts and configuration data. Zester uses `facts` and `settings` for the same purpose, and provides aliases so Salt templates work with minimal changes.
+
+| Salt Variable | Zester Variable | Description |
+|---------------|-----------------|-------------|
+| `grains` | `facts` | System facts (OS, CPU, memory, network, etc.) |
+| `pillar` | `settings` | Configuration settings assigned to the peel |
+
+Both names work in templates — `grains` is an alias for `facts`, and `pillar` is an alias for `settings`. The aliases are registered in `pkg/template/engine.go` during context building:
+
+```yaml
+# These are equivalent:
+os_family: {{ grains.os.family }}
+os_family: {{ facts.os.family }}
+
+# These are equivalent:
+app_port: {{ pillar.app.port }}
+app_port: {{ settings.app.port }}
+```
+
+---
+
+## The salt Accessor
+
+Zester supports Salt's canonical template form for calling execution modules:
+
+```yaml
+{% set ver = salt['pkg.version']('nginx') %}
+{% set os = salt['grains.get']('os.family') %}
+{% if salt['service.status']('nginx') == 'running' %}
+nginx_ok: true
+{% endif %}
+```
+
+The subscript form `salt['module.function'](args, kw=...)` works for
+**literal module names** (single or double quotes). Both positional and
+keyword arguments are forwarded to the module.
+
+### Dispatch Routing
+
+Calls are handled by the peel's module dispatcher:
+
+| Module name | Routed to |
+|-------------|-----------|
+| `grains.get`, `grains.item` | Local facts — dot-separated key lookup; second positional argument is the default |
+| `grains.items` | The full local facts map |
+| `pillar.get`, `settings.get` | Resolved settings — dot-separated key lookup; second positional argument is the default |
+| `pillar.items`, `settings.items` | The full resolved settings map |
+| everything else | The [exec-module registry](/docs/reference/cli#remote-execution-modules-salt-style-ad-hoc) (`pkg.version`, `cmd.run`, `service.status`, `disk.usage`, ...) |
+
+For exec-module functions, the first positional argument is mapped to the
+conventional `name` argument (unless `name=` is passed explicitly).
+
+<Callout type="warn" title="Dot paths, not colon paths">
+`salt['pillar.get']` and `salt['grains.get']` via the accessor use
+**dot-separated** key paths (`'nginx.port'`), not Salt's colon notation
+(`'nginx:port'`). For colon-separated paths, use the dedicated
+[`pillar_get()`](#pillar_get) function, which matches Salt's semantics.
+</Callout>
+
+Calling an unregistered module name raises a render error
+(`unknown module "..."`).
+
+### salt_call Fallback (Dynamic Names and Includes)
+
+The template engine seeds the `salt` accessor by **scanning the template
+source** for literal `salt[...]` subscripts (Gonja has no hook for dynamic
+subscript resolution). Two cases are therefore *not* detected:
+
+1. **Dynamic module names** — `salt[var]` where the name is computed at
+   render time
+2. **`salt[...]` inside `{% include %}`d files** — only the top-level
+   template's source is scanned
+
+For both, use the `salt_call()` global function, which takes the module name
+as its first argument:
+
+```yaml
+{% set fn = 'pkg.version' %}
+{{ salt_call(fn, 'nginx') }}
+{{ salt_call('cmd.run', 'hostname -f') }}
+{{ salt_call('pkg.version', 'nginx', refresh=true) }}
+```
+
+<Callout type="info" title="No dispatcher configured">
+The module dispatcher is wired up on the peel (`EngineConfig.ModuleFn`),
+so the accessor works in settings and state templates rendered there. In
+a render context without a dispatcher, any use of `salt[...]` or
+`salt_call()` fails with a render error stating that execution-module
+calls are not available.
+</Callout>
+
+**Source:** `pkg/template/module_accessor.go`
+
+---
+
+## Control Structures
+
+### from ... import
+
+Imports variables (or macros) from another template file. Matches Salt's `{% from "map.jinja" import map with context %}` pattern for sharing configuration across template files.
+
+**Syntax:** `{% from "path" import name1, name2 as alias with context %}`
+
+| Clause | Required | Description |
+|--------|----------|-------------|
+| `"path"` | Yes | Template file to import from (resolved relative to states/settings root) |
+| `import name1, name2` | Yes | Names to import (comma-separated) |
+| `as alias` | No | Rename the imported name |
+| `with context` | No | Pass the current template's variables (facts, settings, etc.) to the imported file |
+
+When `with context` is specified, the imported template sees all variables from the calling template. This is essential for `map.jinja` files that need access to `facts`/`grains` and `settings`/`pillar` to compute OS-specific defaults.
+
+The imported template is fully executed (all `{% set %}` statements run), and the requested names are extracted from its final context. If a name is not found as a variable, it falls back to looking for a macro with that name.
+
+```yaml
+{# Import OS-specific config from map.jinja #}
+{% from "myapp/map.jinja" import myapp with context %}
+
+install_package:
+  pkg.installed:
+    - name: {{ myapp.package_name }}
+
+config_file:
+  file.managed:
+    - name: {{ myapp.config_path }}
+    - mode: "0644"
+```
+
+**Source:** `pkg/template/control_from.go`
+
+### import_yaml
+
+Reads a YAML file and assigns the parsed data to a template variable. Matches Salt's `{% import_yaml %}` tag.
+
+**Syntax:** `{% import_yaml 'path' as variable_name %}`
+
+The path is resolved through the template loader (relative to the settings or states directory). The YAML content is parsed and made available as a dict or list variable.
+
+```yaml
+{% import_yaml 'defaults.yaml' as defaults %}
+{% import_yaml 'map.yaml' as osmap %}
+
+app_port: {{ defaults.port }}
+pkg_name: {{ osmap[facts.os.family].package }}
+```
+
+**Source:** `pkg/template/control_import_yaml.go`
+
+### do
+
+Evaluates an expression for its side effects and discards the result. This enables patterns like `{% do dict.update(other) %}` and `{% do list.Append(item) %}` which Salt templates use extensively for building data structures.
+
+**Syntax:** `{% do expression %}`
+
+```yaml
+{# Dict mutation works natively — dicts are reference types #}
+{% set config = {'port': 8080} %}
+{% do config.update({'host': '0.0.0.0'}) %}
+
+{# List mutation requires mlist() — Go slices are value types #}
+{% set servers = mlist() %}
+{% for peer in basket("role:api", "network.ipv4") %}
+{% do servers.Append(peer.value) %}
+{% endfor %}
+
+upstream_servers: {{ servers.Items() | to_json }}
+```
+
+<Callout type="warn" title="Use `mlist()` for list mutation">
+`{% do plain_list.append(item) %}` silently fails on Go slices. See the [mlist section](#mlist) below.
+</Callout>
+
+**Source:** `pkg/template/control_do.go`
+
+---
+
+## Functions
+
+Salt-compatible functions are registered per-render because they need access to the current render's facts and settings. Defined in `pkg/template/functions_salt.go`.
+
+### pillar_get
+
+Looks up a value in settings using colon-separated key notation, matching Salt's `pillar.get` behavior. Supports nested key traversal and an optional default value.
+
+**Signature:** `pillar_get(key, default?) -> any`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `key` | `string` | Colon-separated key path (e.g., `"users:john:shell"`) |
+| `default` | `any` | *(optional)* Fallback value if the key is not found. Returns `nil` if omitted. |
+
+```yaml
+# Nested lookup with default
+user_shell: {{ pillar_get('users:deploy:shell', '/bin/bash') }}
+db_host: {{ pillar_get('database:host', 'localhost') }}
+
+# Without default (returns nil if missing)
+optional_flag: {{ pillar_get('feature_flags:beta') }}
+```
+
+### grains_filter_by
+
+Selects a configuration dictionary from a lookup table based on a fact value, with optional base and merge dictionaries. Matches Salt's `grains.filter_by`.
+
+**Signature:** `grains_filter_by(lookup_dict, grain?, merge?, base?) -> dict`
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `lookup_dict` | `dict` | *(required)* | Dictionary mapping fact values to configuration dicts |
+| `grain` | `string` | `"os.family"` | Dot-separated fact key to use for lookup |
+| `merge` | `dict` | `nil` | Dictionary deep-merged into the result (overrides) |
+| `base` | `dict` | `nil` | Base dictionary deep-merged under the selected result |
+
+The function looks up the fact value (using dot-notation key traversal), finds the corresponding entry in `lookup_dict`, and optionally deep-merges with `base` (applied under) and `merge` (applied over). If the fact value is not found in the lookup, a `"default"` key is tried as fallback.
+
+```yaml
+{% set pkg_map = grains_filter_by({
+    'debian': {'pkg': 'nginx', 'svc': 'nginx'},
+    'redhat': {'pkg': 'nginx', 'svc': 'nginx'},
+    'default': {'pkg': 'nginx', 'svc': 'nginx'}
+}) %}
+
+install_nginx:
+  pkg.installed:
+    - name: {{ pkg_map.pkg }}
+```
+
+### user_info
+
+Looks up a system user by name and returns a dictionary with their account information. Matches Salt's `user.info`.
+
+**Signature:** `user_info(name) -> dict`
+
+**Returns:** A dictionary with keys: `name`, `uid`, `gid`, `home`, `shell`, `groups` (list of group names). Returns an empty dict if the user is not found.
+
+<Callout type="info" title="`shell` field is always empty">
+The `shell` field is always an empty string. Go's `os/user` package does not provide shell information. To determine a user's configured shell, read `/etc/passwd` via a `cmd.run` state or store the shell value in settings.
+</Callout>
+
+```yaml
+{% set deploy = user_info('deploy') %}
+{% if deploy.uid %}
+deploy_home: {{ deploy.home }}
+deploy_groups: {{ deploy.groups | to_json }}
+{% endif %}
+```
+
+### cmd_has_exec
+
+Checks if a command is available in the system PATH. Matches Salt's `cmd.has_exec`.
+
+**Signature:** `cmd_has_exec(name) -> bool`
+
+```yaml
+{% if cmd_has_exec('docker') %}
+container_runtime: docker
+{% elif cmd_has_exec('podman') %}
+container_runtime: podman
+{% endif %}
+```
+
+### file_dirname
+
+Returns the directory component of a file path. Matches Salt's `file.dirname`.
+
+**Signature:** `file_dirname(path) -> string`
+
+```yaml
+config_dir: {{ file_dirname('/etc/nginx/nginx.conf') }}
+# Output: /etc/nginx
+```
+
+### mlist
+
+Creates a mutable list that supports in-place mutation via `{% do %}`. Required because Go slices are value types — `{% do plain_list.append(item) %}` silently fails. This has no Salt equivalent (Python lists are mutable by default); it exists to bridge the Go/Python gap.
+
+**Signature:** `mlist(items...) -> MutableList`
+
+| Method | Description |
+|--------|-------------|
+| `.Append(item)` | Add a single item |
+| `.Extend(list)` | Append all items from a list |
+| `.Len()` | Return the number of items |
+| `.Items()` | Return the underlying list for iteration and serialization |
+| `.Get(index)` | Return the item at index, or `nil` if out of bounds |
+
+```yaml
+{% set servers = mlist() %}
+{% for peer in basket("role:api", "network.ipv4") %}
+{% do servers.Append(peer.value) %}
+{% endfor %}
+
+upstream_servers: {{ servers.Items() | to_json }}
+```
+
+For full documentation including more examples, see [Functions: mlist](/docs/guides/templating/functions#mlist).
+
+**Source:** `pkg/template/mutable_list.go`
+
+---
+
+## Dict Methods
+
+Zester enhances dict objects with methods that match Python/Salt dict behavior. These are defined in `pkg/template/methods.go`.
+
+### .get(key, default?)
+
+Returns the value for `key` if present, otherwise returns `default` (or `nil`).
+
+```yaml
+port: {{ settings.get('port', 8080) }}
+```
+
+### .items()
+
+Returns a list of `[key, value]` pairs, sorted by key.
+
+```yaml
+{% for key, value in settings.items() %}
+{{ key }}: {{ value }}
+{% endfor %}
+```
+
+### .update(other)
+
+Merges another dictionary into the current one (in-place). Keys from `other` overwrite existing keys.
+
+```yaml
+{% set config = {'port': 8080} %}
+{% do config.update({'host': '0.0.0.0'}) %}
+# config is now {'host': '0.0.0.0', 'port': 8080}
+```
+
+### .keys()
+
+Returns a sorted list of all keys in the dictionary.
+
+```yaml
+{% for key in settings.keys() %}
+- {{ key }}
+{% endfor %}
+```
+
+### .values()
+
+Returns a list of all values, sorted by their corresponding keys.
+
+```yaml
+all_ports:
+  {% for val in settings.ports.values() %}
+  - {{ val }}
+  {% endfor %}
+```
+
+---
+
+## Filters
+
+### |json
+
+Alias for `|to_json`. Salt templates use `|json` while Zester's native filter is `|to_json`. Both produce identical output — a JSON-encoded string of the value.
+
+```yaml
+# These are equivalent:
+config_json: {{ settings.app | json }}
+config_json: {{ settings.app | to_json }}
+```
+
+**Source:** `pkg/template/filters.go` (line 16)
+
+---
+
+## Porting Guide: .sls to .zy
+
+Follow these steps to convert Salt `.sls` templates to Zester `.zy` templates:
+
+1. **Rename the file** — change `.sls` to `.zy`.
+
+2. **Variable references work as-is** — `grains` and `pillar` are aliased to `facts` and `settings`, so `{{ grains['os_family'] }}` continues to work. Optionally update to `{{ facts.os.family }}` for clarity.
+
+3. **Most `salt['...']` calls work as-is** — the [salt accessor](#the-salt-accessor) dispatches literal `salt['mod.func'](...)` calls to facts, settings, or the exec-module registry (`grains.get`, `pkg.version`, `cmd.run`, `service.status`, ...). Dynamic names and calls inside `{% include %}`d files need the `salt_call()` fallback.
+
+4. **Update `pillar.get` calls with colon paths** — Salt's `salt['pillar.get']('key:path', default)` becomes `pillar_get('key:path', default)`. The accessor form only supports dot-separated paths, so colon-notation lookups silently return the default. The [`zester-migrate`](/docs/reference/cli/migrate) tool rewrites this automatically.
+
+5. **Update `grains.filter_by` calls** — Salt's `salt['grains.filter_by']({...})` becomes `grains_filter_by({...})`. Arguments are positional: `grains_filter_by(lookup, grain, merge, base)`. This function is not in the exec-module registry, so the accessor form does not work — the rewrite is required (`zester-migrate` does it automatically).
+
+6. **`import_yaml` works as-is** — `{% import_yaml 'file.yaml' as var %}` uses the same syntax.
+
+7. **`do` tag works, but use `mlist()` for lists** — `{% do dict.update(other) %}` works as-is. For list mutation, replace `{% set mylist = [] %}` with `{% set mylist = mlist() %}` and use `{% do mylist.Append(item) %}`. See [Key Differences](#key-differences-from-salt) for details.
+
+8. **Dict methods work as-is** — `.get()`, `.items()`, `.update()`, `.keys()`, `.values()` are available on all dicts.
+
+9. **Update `|json` filter** — `|json` is aliased to `|to_json`, so both work. No changes needed.
+
+10. **Update `salt['user.info']`, `salt['cmd.has_exec']`, `salt['file.dirname']`** — become `user_info('name')`, `cmd_has_exec('name')`, `file_dirname('path')`. These modules are not in the exec registry, so the accessor form does not dispatch them; `zester-migrate` rewrites them automatically.
+
+11. **Update targeting syntax** — Salt's `top.sls` becomes `top.zy`. Targeting patterns use the same glob and compound syntax.
+
+12. **Update state references** — Salt's `include` and `extend` use the same syntax in `.zy` files. Module names are identical (`file.managed`, `pkg.installed`, etc.).
+
+### Quick Reference
+
+| Salt | Zester | Notes |
+|------|--------|-------|
+| `grains['os_family']` | `facts.os.family` | Alias works, but dot notation preferred |
+| `pillar['key']` | `settings.key` | Alias works, but native name preferred |
+| `salt['pkg.version']('nginx')` | `salt['pkg.version']('nginx')` | Works as-is via the [salt accessor](#the-salt-accessor) (literal names) |
+| `salt[dynamic_name](...)` | `salt_call(dynamic_name, ...)` | Accessor requires literal names; use `salt_call` for dynamic names and inside includes |
+| `salt['pillar.get']('a:b', 'c')` | `pillar_get('a:b', 'c')` | Dedicated function — accessor form only supports dot paths |
+| `salt['grains.filter_by']({...})` | `grains_filter_by({...})` | Dedicated function — not dispatchable via accessor |
+| `salt['user.info']('name')` | `user_info('name')` | Dedicated function — not dispatchable via accessor |
+| `salt['cmd.has_exec']('cmd')` | `cmd_has_exec('cmd')` | Dedicated function — not dispatchable via accessor |
+| `salt['file.dirname'](path)` | `file_dirname(path)` | Dedicated function — not dispatchable via accessor |
+| `{{ value \| json }}` | `{{ value \| json }}` | Works as-is (aliased to `\| to_json`) |
+| `{% import_yaml ... %}` | `{% import_yaml ... %}` | Works as-is |
+| `{% from "f" import x with context %}` | `{% from "f" import x with context %}` | Works as-is |
+| `{% do dict.update(x) %}` | `{% do dict.update(x) %}` | Works as-is (dicts are reference types) |
+| `{% do list.append(x) %}` | `{% do mlist.Append(x) %}` | Use `mlist()` — Go slices are value types |
+| `mylist = []` | `mylist = mlist()` | Required for in-place list mutation |
+| `.sls` file extension | `.zy` file extension | Only change needed for filenames |
+| `mode: 0644` | `mode: "0644"` | Quote octal modes — YAML parses bare `0644` as int 420 |
+
+---
+
+## Key Differences from Salt
+
+While the compatibility layer covers most common patterns, some fundamental differences between Zester and Salt affect how templates and states behave. Understanding these prevents subtle bugs during migration.
+
+### Concurrent State Execution
+
+Salt applies states sequentially within each state file (respecting requisite ordering). Zester builds a full DAG (directed acyclic graph) from all states and **executes independent states concurrently**. States at the same DAG level run as parallel goroutines.
+
+This matters when multiple template-generated states target the same system resource. For example, if your template generates two `group.present` states for the same group (one from a per-user supplementary groups loop and one from an explicit groups pillar), they will race.
+
+**Mitigation:** Use template logic to avoid duplicate states for the same resource. Track which resources are already managed and skip redundant states:
+
+```yaml
+{# Track pillar-managed groups to avoid duplicates #}
+{%- set managed_groups = pillar_get('groups', {}) -%}
+
+{% for group in user.get('groups', []) %}
+{% if group not in managed_groups %}
+users_{{ name }}_{{ group }}_group:
+  group.present:
+    - name: {{ group }}
+{% endif %}
+{% endfor %}
+```
+
+### YAML Octal Mode Values
+
+Salt's Python YAML parser preserves leading-zero integers as octal. Zester uses Go's YAML parser, which converts bare `0644` to the decimal integer `420`. State modules handle this transparently (both `"0644"` and `420` produce the correct mode), but always **quote mode values** in your templates for clarity:
+
+```yaml
+# Preferred — unambiguous:
+- mode: "0644"
+
+# Also works — Zester converts integer 420 back to "0644":
+- mode: 0644
+```
+
+### Go Slice Immutability (mlist)
+
+In Salt/Python, `list.append()` mutates the list in place. In Zester, Go slices are value types — `{% do mylist.append(item) %}` on a plain `[]` creates a new slice that the template context never sees. The original list stays empty.
+
+Use `mlist()` for any list that needs in-place mutation across loop iterations:
+
+```yaml
+{# WRONG — silently fails, used_sudo stays empty: #}
+{% set used_sudo = [] %}
+{% do used_sudo.append(1) %}
+
+{# CORRECT — mlist wraps a pointer-receiver struct: #}
+{% set used_sudo = mlist() %}
+{% do used_sudo.Append(1) %}
+```
+
+Dict mutation works natively because Go maps are reference types — `{% do dict.update(other) %}` behaves identically to Python.
+
+### Requisite Syntax
+
+Salt uses a list-of-dicts format for requisites:
+
+```yaml
+# Salt requisite format:
+- require:
+  - pkg: nginx
+  - file: /etc/nginx/nginx.conf
+```
+
+Zester uses string references in `"module.function:state_id"` format:
+
+```yaml
+# Zester requisite format:
+- require:
+  - "pkg.installed:nginx"
+  - "file.managed:/etc/nginx/nginx.conf"
+```
+
+Note: Zester uses `require` matching Salt's naming. Both string format (`"pkg.installed:nginx"`) and Salt-style dict format (`- pkg: nginx`) are accepted.
+
+### Execution Module Calls
+
+Salt uses `salt['module.function']()` for execution module calls within templates. Zester supports this form natively via [the salt accessor](#the-salt-accessor) for literal module names, dispatching to facts, settings, or the exec-module registry:
+
+```yaml
+{# Works as-is in Zester: #}
+{% set ver = salt['pkg.version']('nginx') %}
+{% set os = salt['grains.get']('os.family') %}
+```
+
+Five common calls also have dedicated top-level template functions with Salt-matching semantics — prefer these where the accessor's behavior differs (notably `pillar_get`, which supports colon-separated key paths):
+
+```yaml
+{# Salt: #}
+{% set info = salt['user.info']('deploy') %}
+{% if salt['cmd.has_exec']('docker') %}
+
+{# Zester dedicated functions: #}
+{% set info = user_info('deploy') %}
+{% if cmd_has_exec('docker') %}
+```
+
+Two accessor limitations to keep in mind: dynamic module names and calls inside `{% include %}`d files require the `salt_call()` fallback (the accessor is seeded by scanning the top-level template source for literal `salt[...]` subscripts), and `salt['pillar.get']`/`salt['grains.get']` use dot-separated key paths rather than Salt's colon notation.
+
+---
+
+## Formula Walkthrough: Users Formula
+
+This section walks through the real `users` formula (a Zester port of Salt's `users-formula`) to show how the compatibility features compose into a complete formula. The formula manages system groups, user accounts, home directories, SSH keys, and sudoer rules.
+
+### File Structure
+
+```
+states/users/
+├── init.zy          # Main state file (entry point)
+├── map.jinja        # OS-specific defaults (imported by init.zy and sudo.zy)
+├── defaults.yaml    # Base defaults (loaded by map.jinja)
+└── sudo.zy          # Sudoers package and config setup (included by init.zy)
+
+settings/common/
+└── users.zy         # Pillar data — groups and users to manage
+```
+
+### Settings (Pillar Data)
+
+The settings file defines which groups and users to manage. This is the Zester equivalent of Salt pillar data:
+
+```yaml
+{# settings/common/users.zy #}
+groups:
+  developers:
+    gid: 2000
+    system: False
+  ops:
+    gid: 2001
+    system: False
+
+users:
+  deploy:
+    uid: 4000
+    shell: /bin/bash
+    fullname: Deploy User
+    home: /home/deploy
+    createhome: True
+    groups:
+      - developers
+      - ops
+    sudouser: True
+    sudo_rules:
+      - ALL=(ALL) NOPASSWD:ALL
+  testuser:
+    uid: 4001
+    shell: /bin/bash
+    fullname: Test User
+    home: /home/testuser
+    createhome: True
+    groups:
+      - developers
+```
+
+### map.jinja — OS-Specific Defaults
+
+The `map.jinja` pattern is the most common Salt convention ported to Zester. It uses three compatibility features together:
+
+1. **`import_yaml`** to load base defaults from a YAML file
+2. **`grains_filter_by`** to select OS-family-specific overrides
+3. **`dict.update()`** to merge overrides on top of defaults
+
+```yaml
+{# states/users/map.jinja #}
+{% import_yaml 'users/defaults.yaml' as defaults %}
+{% set users = defaults.get('users', {}) %}
+
+{% set os_overrides = grains_filter_by({
+  'debian': {
+    'sudoers_dir': '/etc/sudoers.d',
+    'shell': '/bin/bash',
+    'sudo_package': 'sudo'
+  },
+  'rhel': {
+    'sudoers_dir': '/etc/sudoers.d',
+    'shell': '/bin/bash',
+    'sudo_package': 'sudo'
+  },
+  'default': {
+    'sudoers_dir': '/etc/sudoers.d',
+    'shell': '/bin/bash',
+    'sudo_package': 'sudo'
+  }
+}) %}
+{% do users.update(os_overrides) %}
+
+{# Apply pillar overrides on top if configured #}
+{% set lookup = pillar_get('users-formula:lookup') %}
+{% if lookup %}
+{% do users.update(lookup) %}
+{% endif %}
+```
+
+The calling template imports this with `{% from "users/map.jinja" import users with context %}`. The `with context` clause passes `facts` and `settings` so `grains_filter_by` and `pillar_get` can access them.
+
+### sudo.zy — Included State File
+
+The `sudo.zy` file is included when any user has `sudouser: True`. It uses `from...import`, `pkg.installed`, `file.directory`, and `file.append`:
+
+```yaml
+{# states/users/sudo.zy #}
+{% from "users/map.jinja" import users with context %}
+
+users_bash_package:
+  pkg.installed:
+    - name: {{ users.bash_package }}
+
+users_sudo_package:
+  pkg.installed:
+    - name: {{ users.sudo_package }}
+    - require:
+      - "file.directory:users_sudoers_dir"
+
+users_sudoers_dir:
+  file.directory:
+    - name: {{ users.sudoers_dir }}
+
+users_sudoer_defaults:
+  file.append:
+    - name: {{ users.sudoers_file }}
+    - require:
+      - "pkg.installed:users_sudo_package"
+    - text:
+      - Defaults   env_reset
+      - Defaults   secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      - '#includedir {{ users.sudoers_dir }}'
+```
+
+### init.zy — Main Formula (Annotated)
+
+The main formula demonstrates the key compatibility features working together. Key patterns annotated below:
+
+```yaml
+{# (1) from...import with context — loads OS-specific config #}
+{% from "users/map.jinja" import users with context %}
+
+{# (2) mlist() — mutable list for tracking state across iterations #}
+{% set used_sudo = mlist() %}
+
+{# (3) pillar_get — colon-separated nested settings lookup #}
+{# (4) dict.items() — Python-style iteration over settings #}
+{% for group, setting in pillar_get('groups', {}).items() %}
+{%   if setting.get('state', 'present') == 'absent' %}
+users_group_absent_{{ group }}:
+  group.absent:
+    - name: {{ group }}
+{% else %}
+users_group_present_{{ group }}:
+  group.present:
+    - name: {{ group }}
+    - gid: {{ setting.get('gid', 'null') }}
+{# (5) |json filter alias — serializes list to JSON #}
+    - members: {{ setting.get('members', []) | json }}
+{% endif %}
+{% endfor %}
+
+{# (6) do + mlist.Append — accumulate state across iterations #}
+{%- for name, user in pillar.get('users', {}).items()
+        if user.get('absent') is not defined or not user.get('absent') %}
+{%- if user.get('sudouser') %}
+{%- do used_sudo.Append(1) %}
+{%- endif %}
+{%- endfor %}
+
+{# (7) Conditional include based on accumulated mlist state #}
+{%- if used_sudo | length %}
+include:
+  - users.sudo
+{%- endif %}
+
+{# (8) user_info — look up existing user to get current defaults #}
+{%- set current = user_info(name) -%}
+{%- set home = user.get('home', current.get('home', '/home/' ~ name)) -%}
+
+{# (9) file_dirname — get parent directory for home creation #}
+users_{{ name }}_user_prereq:
+  file.directory:
+    - name: {{ file_dirname(home) }}
+    - makedirs: True
+
+{# (10) Requisites — string references to other states #}
+users_{{ name }}_user:
+  user.present:
+    - name: {{ name }}
+    - home: {{ home }}
+    - shell: {{ user.get('shell', users.get('shell', '/bin/bash')) }}
+    - require:
+      - "group.present:users_{{ name }}_primary_group"
+```
+
+### What Changed from Salt
+
+For this specific formula, the changes from the Salt `.sls` original were:
+
+1. **File extension**: `.sls` → `.zy`
+2. **`salt['pillar.get']`** → `pillar_get()`
+3. **`salt['grains.filter_by']`** → `grains_filter_by()`
+4. **`salt['user.info']`** → `user_info()`
+5. **`salt['file.dirname']`** → `file_dirname()`
+6. **`set used_sudo = []`** → `set used_sudo = mlist()` (Go slice immutability)
+7. **`used_sudo.append(1)`** → `used_sudo.Append(1)` (MutableList method)
+8. **Duplicate state prevention**: Added `managed_groups` tracking to prevent concurrent DAG races on shared group resources
+9. **Requisite format**: `require: [{group: name}]` → `require: ["group.present:name"]`
+
+Everything else — `{% from %}`, `{% import_yaml %}`, `{% do %}`, `grains`/`pillar` aliases, `.get()`, `.items()`, `.update()`, `|json` — worked without changes.
+
+---
+
+## Automated Migration Tool
+
+The [`zester-migrate`](/docs/reference/cli/migrate) CLI tool automates the mechanical parts of Salt-to-Zester conversion. It rewrites the five `salt['...']()` calls that have dedicated Zester functions (other `salt[...]` calls are left as-is — the [salt accessor](#the-salt-accessor) runs them natively), converts `mlist()` usage, quotes octal modes, and warns on requisite format. Run it as a dry run first to preview changes, then with `--write` to apply them:
+
+```bash
+# Preview changes
+zester-migrate /srv/salt/states/
+
+# Apply changes
+zester-migrate --write /srv/salt/states/
+
+# Also rename grains→facts, pillar→settings (optional since aliases exist)
+zester-migrate --write --rename-vars /srv/salt/states/
+```
+
+See [`zester-migrate` reference](/docs/reference/cli/migrate) for the full list of transformation rules.

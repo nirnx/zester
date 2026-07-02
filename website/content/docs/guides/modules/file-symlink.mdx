@@ -1,0 +1,47 @@
+---
+title: "file.symlink"
+description: "Ensures a symbolic link exists at a given path pointing to a specified target."
+---
+
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `name` | string | state ID | Path where the symlink should be created |
+| `target` | string | (required) | The destination the symlink should point to |
+| `force` | bool | `false` | Replace an existing file or wrong-target symlink at `name` |
+| `makedirs` | bool | `false` | Create parent directories if they do not exist |
+
+## Example
+
+```yaml
+# Create a symlink using the state ID as the link path.
+/usr/local/bin/python:
+  file.symlink:
+    - target: /usr/bin/python3
+
+# Create a symlink with makedirs and force.
+/opt/app/config:
+  file.symlink:
+    - target: /etc/app/config
+    - force: true
+    - makedirs: true
+    - require:
+      - "file.directory:/opt/app"
+```
+
+## Behavior
+
+| Phase | Action |
+|-|-|
+| Check | `Readlink` — returns `NeedsChange: true` if symlink is absent or points to the wrong target |
+| Apply | Remove existing (if `force: true`) then `Symlink`. Creates parent dirs if `makedirs: true`. |
+| Revert | `Remove` the symlink |
+
+## Notes
+
+- If `force: false` (the default) and a file or symlink already exists at `name` with a different target, Apply returns an error.
+- `makedirs` creates the full parent directory path with mode `0755`. Use `file.directory` if you need a specific mode.
+- Revert removes the symlink but does not restore any file that was replaced when `force: true` was used.

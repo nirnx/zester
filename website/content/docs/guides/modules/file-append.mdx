@@ -1,0 +1,92 @@
+---
+title: "file.append"
+description: "Ensures specific lines are present in a file, appending any that are missing."
+---
+
+**Source**: `pkg/state/modules/file_append.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Absolute path to the target file. If omitted, the state ID is used as the path. |
+| `text` | `list` | No | `[]` | List of lines that must be present in the file. Each line is checked independently; only missing lines are appended. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+The check phase performs these comparisons:
+
+1. **File existence** — if the file does not exist, the state needs changes (file will be created on apply).
+2. **Line presence** — reads the file content and checks if each line in `text` is present (substring match). If any lines are missing, the state needs changes.
+
+If the file exists and all lines are already present, the state reports no changes needed.
+
+---
+
+## Apply Behavior
+
+1. Reads the current file content (if the file exists, stores it as a backup for revert).
+2. For each line in `text`, checks if it is already present in the content.
+3. Appends any missing lines, each followed by a newline. Ensures a newline separator before appending if the file does not end with one.
+4. Writes the updated content back to the file with mode `0644`.
+
+---
+
+## Revert Behavior
+
+- If the file did not exist before Apply (was newly created), removes the file.
+- If the file existed before Apply, restores the original content from the backup.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Ensure a line is present in a file
+zester 'web-01' file.append /etc/hosts text='["192.168.1.10 db-master"]'
+
+# Add multiple lines
+zester 'web*' file.append /etc/environment text='["JAVA_HOME=/usr/lib/jvm/java-17", "LANG=en_US.UTF-8"]'
+```
+
+### State File
+
+**Add entries to /etc/hosts:**
+
+```yaml
+/etc/hosts:
+  file.append:
+    - text:
+      - "192.168.1.10 db-master"
+      - "192.168.1.11 db-replica"
+```
+
+**Ensure environment variables are set:**
+
+```yaml
+/etc/environment:
+  file.append:
+    - text:
+      - "JAVA_HOME=/usr/lib/jvm/java-17"
+      - "LANG=en_US.UTF-8"
+```
+
+**Append configuration after package install:**
+
+```yaml
+/etc/security/limits.conf:
+  file.append:
+    - text:
+      - "* soft nofile 65535"
+      - "* hard nofile 65535"
+    - require:
+      - "pkg.installed:base-packages"
+```

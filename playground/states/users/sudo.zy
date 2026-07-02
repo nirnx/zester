@@ -1,0 +1,28 @@
+{# Sudo setup — Zester port of Salt users-formula sudo.sls #}
+{% from "users/map.jinja" import users with context %}
+
+users_bash_package:
+  pkg.installed:
+    - name: {{ users.bash_package }}
+    - refresh: True
+
+users_sudo_package:
+  pkg.installed:
+    - name: {{ users.sudo_package }}
+    - refresh: True
+    - require:
+      - "file.directory:users_sudoers_dir"
+
+users_sudoers_dir:
+  file.directory:
+    - name: {{ users.sudoers_dir }}
+
+users_sudoer_defaults:
+  file.append:
+    - name: {{ users.sudoers_file }}
+    - require:
+      - "pkg.installed:users_sudo_package"
+    - text:
+      - Defaults   env_reset
+      - Defaults   secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      - '#includedir {{ users.sudoers_dir }}'

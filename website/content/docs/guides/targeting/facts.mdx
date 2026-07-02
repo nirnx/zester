@@ -1,0 +1,179 @@
+---
+title: "Fact-Based Targeting"
+description: "Fact-based targeting matches peels based on their reported facts rather than their peel ID. Expressions use the G@ prefix for grains (facts) or I@ as an alias with identical syntax and matching behavior."
+---
+
+## Syntax
+
+```
+G@<key>:<value>
+G@<key>:<operator><value>
+```
+
+The general form is `G@key:value` for equality matching, or `G@key:<op>value`
+for comparison operators. Nested keys use dot notation.
+
+## Prefixes
+
+| Prefix | Data Source | Example |
+|--------|-------------|---------|
+| `G@` | Peel facts (grains) | `G@os:ubuntu` |
+| `I@` | Alias of fact matching (same source as `G@`) | `I@role:webserver` |
+
+Both prefixes use the same `FactMatcher` implementation and currently resolve
+against the facts dataset.
+
+## Dot Notation
+
+Nested fact values are accessed using dot-separated keys. Zester traverses the
+nested map structure one level per dot segment.
+
+Given a peel with these facts:
+
+```json
+{
+  "os": {
+    "family": "debian",
+    "release": "22.04",
+    "codename": "jammy"
+  },
+  "cpu_count": 8,
+  "memory_gb": 32,
+  "roles": ["web", "api"]
+}
+```
+
+You can target using:
+
+| Expression | Matches? | Reason |
+|------------|----------|--------|
+| `G@os.family:debian` | Yes | Nested lookup: `os` -> `family` -> `"debian"` |
+| `G@os.release:22.04` | Yes | String comparison |
+| `G@cpu_count:8` | Yes | Numeric equality |
+| `G@os:ubuntu` | No | `os` is a map, not a string |
+
+## Comparison Operators
+
+The value portion of a fact expression can begin with a comparison operator.
+If no operator prefix is present, equality is assumed.
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| *(none)* | Equal (case-insensitive) | `G@os:ubuntu` |
+| `!=` | Not equal (case-insensitive) | `G@os:!=windows` |
+| `>` | Greater than | `G@cpu_count:>4` |
+| `>=` | Greater than or equal | `G@cpu_count:>=4` |
+| `<` | Less than | `G@memory_gb:<16` |
+| `<=` | Less than or equal | `G@memory_gb:<=64` |
+
+### Operator parsing order
+
+Operators are parsed in this order to handle multi-character operators
+correctly:
+
+1. `>=` (before `>`)
+2. `<=` (before `<`)
+3. `!=`
+4. `>`
+5. `<`
+6. *(default: equality)*
+
+### Numeric vs string comparison
+
+When both the actual fact value and the expected value can be parsed as
+floating-point numbers, Zester performs **numeric comparison**:
+
+```bash
+# Numeric: 8 >= 4 -> true
+zester 'G@cpu_count:>=4' state.apply performance.tune
+```
+
+When either value cannot be parsed as a number, Zester falls back to
+**lexicographic (string) comparison**:
+
+```bash
+# String comparison: "22.04" > "20.04" -> true (lexicographic)
+zester 'G@os.release:>20.04' state.apply upgrade.check
+```
+
+<Callout type="warn" title="String comparison gotcha">
+Lexicographic comparison works well for zero-padded version strings
+(`20.04` vs `22.04`) but can produce unexpected results with unpadded
+numbers as strings. For example, `"9" > "10"` is true in lexicographic
+order. Always ensure numeric facts are stored as actual numbers, not
+strings.
+</Callout>
+
+### Equality is case-insensitive
+
+Equality and not-equal (`!=`) comparisons use case-insensitive matching
+via `strings.EqualFold`:
+
+```bash
+# All of these match a peel with os="Ubuntu"
+zester 'G@os:ubuntu' state.apply ...
+zester 'G@os:Ubuntu' state.apply ...
+zester 'G@os:UBUNTU' state.apply ...
+```
+
+## Examples
+
+### Match by operating system
+
+```bash
+zester 'G@os:ubuntu' state.apply apt.upgrade
+```
+
+### Match by nested fact
+
+```bash
+zester 'G@os.family:debian' state.apply apt.update
+```
+
+### Match by CPU count with comparison
+
+```bash
+zester 'G@cpu_count:>=4' state.apply performance.tune
+```
+
+### Match by memory with comparison
+
+```bash
+zester 'G@memory_gb:>16' state.apply java.heap_config
+```
+
+### Exclude an OS
+
+```bash
+zester 'G@os:!=windows' state.apply linux.harden
+```
+
+### Match using the `I@` alias
+
+```bash
+zester 'I@role:webserver' state.apply nginx.setup
+```
+
+## Validation
+
+A fact expression must contain a `:` separator and a non-empty key:
+
+```bash
+# Missing separator
+zester 'G@osubuntu' state.apply base.ping
+```
+
+```
+Error: resolve target "G@osubuntu": target: create matcher:
+  target: fact expression must contain ':' separator: "G@osubuntu"
+```
+
+## How It Works
+
+1. The `G@` or `I@` prefix is stripped.
+2. The expression is split at the first `:` into key and value parts.
+3. The value part is checked for a comparison operator prefix.
+4. During matching, the key is resolved via dot-notation traversal of the
+   peel's facts map.
+5. The resolved value is converted to a string and compared using the
+   detected operator.

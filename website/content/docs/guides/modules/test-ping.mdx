@@ -1,0 +1,34 @@
+---
+title: "test.ping"
+description: "A simple liveness check that always succeeds. Returns {\"result\": \"true\"}. This is the Zester equivalent of Salt's test.ping."
+---
+
+**Source**: `pkg/state/modules/test_ping.go`
+
+---
+
+## Parameters
+
+This module takes no parameters of its own.
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Behavior
+
+- **Check**: Always reports changes needed (so the runner calls Apply).
+- **Apply**: Returns `Changed: false` with `Details: {"result": "true"}`.
+- **Revert**: No-op.
+
+---
+
+## Examples
+
+```bash
+# Ping all peels
+zester '*' test.ping
+
+# Ping a specific peel
+zester 'web-01' test.ping
+```

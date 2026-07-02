@@ -1,0 +1,13 @@
+{
+  "title": "Operations",
+  "pages": [
+    "deployment",
+    "monitoring",
+    "backup",
+    "scaling",
+    "troubleshooting",
+    "sre-runbook",
+    "enrollment",
+    "update"
+  ]
+}

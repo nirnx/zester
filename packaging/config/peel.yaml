@@ -1,0 +1,46 @@
+# Zester Peel Agent Configuration
+
+id: ""    # set to hostname by postinstall
+
+# NATS connection. Only tls:// URLs are accepted — plaintext nats:// is
+# rejected at startup. Point nats_ca at the CA that signed the NATS
+# server certificate (falls back to NATS_CA_FILE, then
+# /data/auth/nats-ca.crt when present, then the system trust store).
+nats_url: "tls://localhost:4222"
+nats_ca: "/var/lib/zester/auth/nats-ca.crt"
+
+states_cache: "/var/lib/zester/states-cache"
+
+# Local /healthz, /readyz and /metrics endpoints, polled by zester-watchdog
+# (default 127.0.0.1:9090).
+# health_addr: "127.0.0.1:9090"
+
+# Log level: debug, info, warn or error (default info).
+# log_level: "info"
+
+# Log format: json or text (default json).
+# log_format: "json"
+
+# Enrollment (required for first-time setup)
+# master_url: "https://master.example.com:8443"
+# master_urls tries each URL in order (failover) and takes precedence
+# over master_url when set.
+# master_urls:
+#   - "https://master-1.example.com:8443"
+#   - "https://master-2.example.com:8443"
+# enroll_ca: "/etc/zester/enroll-ca.crt"
+
+# Local scheduler (optional). Entries run modules at intervals or cron
+# times; return_job publishes results as synthetic jobs visible in
+# "zester job list".
+# schedule:
+#   refresh-facts:
+#     module: "facts.items"
+#     interval: "10m"
+#     splay: "1m"
+#     return_job: true
+#   nightly-highstate:
+#     module: "state.highstate"
+#     cron: "0 3 * * *"
+#     maxrunning: 1
+#     return_job: true

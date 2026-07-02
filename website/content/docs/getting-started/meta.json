@@ -1,0 +1,10 @@
+{
+  "title": "Getting Started",
+  "defaultOpen": true,
+  "pages": [
+    "installation",
+    "quickstart",
+    "concepts",
+    "salt-compatibility"
+  ]
+}

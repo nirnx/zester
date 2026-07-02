@@ -1,0 +1,8 @@
+log_level: info
+timezone: UTC
+ntp_server: pool.ntp.org
+basket_functions:
+  default_ipv4: "5m"
+  network.hostname: "5m"
+basket_scope: "G@cluster_name:{{ facts.cluster_name }}"
+api_secret: !encrypted "zester-test-secret"

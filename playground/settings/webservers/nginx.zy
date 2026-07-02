@@ -1,0 +1,3 @@
+listen_port: 80
+worker_processes: auto
+server_name: localhost

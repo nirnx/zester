@@ -1,0 +1,3 @@
+system-report:
+  sysinfo.report:
+    - path: /tmp/starlark-report.txt

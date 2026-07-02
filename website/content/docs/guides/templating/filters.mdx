@@ -1,0 +1,232 @@
+---
+title: "Filters"
+description: "Filters transform template values. They are applied with the pipe (|) operator and can be chained left to right. Zester registers custom filters on top of the full set of built-in Gonja/Jinja2 filters."
+---
+
+```yaml
+{{ value | filter_name }}
+{{ value | filter_name(arg) }}
+{{ value | upper | truncate(10) }}
+```
+
+---
+
+## Zester Filters
+
+These filters are registered in `pkg/template/filters.go` and are specific to Zester.
+
+### settings_decrypt
+
+Placeholder for template-side decryption. During master-side rendering, this filter passes through the value unchanged. Actual decryption happens on the peel side after settings are delivered via NATS KV.
+
+```yaml title="Referencing an encrypted value in a state file"
+database:
+  password: {{ settings.database.password | settings_decrypt }}
+```
+
+<Callout type="info" title="Master-side behavior">
+`settings_decrypt` is a no-op during template rendering on the master. It exists so templates can express decryption intent. The peel decrypts `ENC[nkey,...]` values automatically when it receives settings. See [Settings Encryption](/docs/guides/settings/encryption) for the full flow.
+</Callout>
+
+---
+
+### yaml_encode
+
+Converts a value to a YAML-compatible string representation. Useful when embedding structured data inline in YAML output.
+
+**Conversion rules:**
+
+| Input Type | Output |
+|------------|--------|
+| `nil` | `"null"` |
+| `string` | Passed through unchanged |
+| `bool` | `"true"` or `"false"` |
+| `int`, `int64`, `float64` | String form (e.g., `"42"`, `"3.14"`) |
+| Complex types (maps, lists) | JSON-marshaled string (valid YAML) |
+
+```yaml title="Encoding values for YAML output"
+# String passes through
+region: {{ "us-east-1" | yaml_encode }}
+# Output: region: us-east-1
+
+# Boolean becomes string
+debug: {{ true | yaml_encode }}
+# Output: debug: true
+
+# Number becomes string
+port: {{ 8080 | yaml_encode }}
+# Output: port: 8080
+
+# Complex type becomes JSON (which is valid YAML)
+labels: {{ {"app": "nginx", "env": "prod"} | yaml_encode }}
+# Output: labels: {"app":"nginx","env":"prod"}
+```
+
+<Callout type="success" title="JSON is valid YAML">
+Since JSON is a subset of YAML, the JSON-marshaled output for complex types is always valid YAML. This makes `yaml_encode` safe for embedding maps and lists in YAML configuration.
+</Callout>
+
+---
+
+### to_json
+
+Serializes any value to a JSON string. Returns `"null"` for nil values and an empty string on marshaling errors.
+
+```yaml title="Serializing values to JSON"
+# Simple values
+config_json: {{ settings.app | to_json }}
+
+# Embedding facts as JSON
+metadata: '{{ facts | to_json }}'
+
+# In a file.managed content block
+monitoring_config:
+  file.managed:
+    - name: /etc/monitor/config.json
+    - contents: {{ settings.monitoring | to_json }}
+```
+
+```yaml title="Nil handling"
+# nil values become "null"
+optional: {{ none | to_json }}
+# Output: optional: null
+```
+
+---
+
+### regex_match
+
+Checks if the input string contains a pattern. Returns `true` or `false`.
+
+**Usage:** `{{ value | regex_match("pattern") }}`
+
+```yaml title="Pattern matching on facts"
+{% if facts.os.name | regex_match("ubuntu") %}
+package_manager: apt
+{% endif %}
+
+{% if facts.network.fqdn | regex_match(".prod.") %}
+environment: production
+{% else %}
+environment: development
+{% endif %}
+```
+
+<Callout type="warn" title="Not actual regex">
+Despite the name, `regex_match` currently uses substring matching (`strings.Contains`), not regular expressions. The pattern `"prod"` will match any string containing "prod" -- such as "production", "prod-01", or "reproduce". Plan your patterns accordingly.
+</Callout>
+
+---
+
+### length (extended)
+
+The built-in `length` filter is extended in Zester to support the `MutableList` type returned by `mlist()`. Gonja's default `length` filter does not recognize pointer-to-struct types and returns `0` for them; Zester replaces it with a version that checks for a `Len() int` method first, then falls back to the standard behavior for slices, maps, and strings.
+
+This means `{{ mlist_var | length }}` works as expected alongside `{{ plain_list | length }}` — no special handling is needed in templates.
+
+```yaml title="length works for both plain lists and mutable lists"
+{% set peers = basket("role:api", "network.ipv4") %}
+peer_count: {{ peers | length }}
+
+{% set servers = mlist() %}
+{% do servers.Append("10.0.0.1") %}
+server_count: {{ servers | length }}
+```
+
+**Source:** `pkg/template/filters.go`
+
+---
+
+### dict_merge
+
+Merges a dictionary into the input dictionary. Override values take precedence over base values.
+
+**Usage:** `{{ base_dict | dict_merge(override_dict) }}`
+
+```yaml title="Merging configuration dictionaries"
+{% set defaults = {"port": 8080, "host": "0.0.0.0", "workers": 4} %}
+{% set overrides = {"port": 9090, "workers": 16} %}
+
+app: {{ defaults | dict_merge(overrides) | to_json }}
+# Output: app: {"host":"0.0.0.0","port":9090,"workers":16}
+```
+
+```yaml title="Merging settings with per-environment overrides"
+{% set base_config = settings.app.defaults %}
+{% set env_config = settings.app.environments[facts.environment] %}
+
+app_config: {{ base_config | dict_merge(env_config) | to_json }}
+```
+
+<Callout type="info" title="Shallow merge">
+`dict_merge` performs a shallow merge. Nested dictionaries are replaced entirely, not merged recursively. If you need deep merge behavior, structure your settings files to use Zester's built-in deep merge during settings compilation.
+</Callout>
+
+---
+
+## Built-in Gonja/Jinja2 Filters
+
+All standard Gonja filters are available. These are the most commonly used in Zester templates:
+
+### String Filters
+
+| Filter | Description | Example |
+|--------|-------------|---------|
+| `upper` | Convert to uppercase | `{{ "hello" \| upper }}` -- `HELLO` |
+| `lower` | Convert to lowercase | `{{ "HELLO" \| lower }}` -- `hello` |
+| `title` | Capitalize each word | `{{ "hello world" \| title }}` -- `Hello World` |
+| `capitalize` | Capitalize first character | `{{ "hello" \| capitalize }}` -- `Hello` |
+| `trim` | Strip leading/trailing whitespace | `{{ "  hello  " \| trim }}` -- `hello` |
+| `truncate(n)` | Truncate to n characters | `{{ "hello world" \| truncate(5) }}` -- `he...` |
+| `replace(old, new)` | Replace substring | `{{ "foo-bar" \| replace("-", "_") }}` -- `foo_bar` |
+| `wordcount` | Count words | `{{ "hello world" \| wordcount }}` -- `2` |
+
+### List Filters
+
+| Filter | Description | Example |
+|--------|-------------|---------|
+| `join(sep)` | Join list with separator | `{{ [1, 2, 3] \| join(", ") }}` -- `1, 2, 3` |
+| `first` | First item in list | `{{ [1, 2, 3] \| first }}` -- `1` |
+| `last` | Last item in list | `{{ [1, 2, 3] \| last }}` -- `3` |
+| `length` | Number of items | `{{ [1, 2, 3] \| length }}` -- `3` |
+| `sort` | Sort a list | `{{ [3, 1, 2] \| sort }}` -- `[1, 2, 3]` |
+| `reverse` | Reverse a list | `{{ [1, 2, 3] \| reverse }}` -- `[3, 2, 1]` |
+| `unique` | Remove duplicates | `{{ [1, 1, 2] \| unique }}` -- `[1, 2]` |
+| `reject(test)` | Remove items matching test | `{{ [1, 2, 3] \| reject("odd") }}` |
+| `select(test)` | Keep items matching test | `{{ [1, 2, 3] \| select("odd") }}` |
+| `map(attr)` | Extract attribute from items | `{{ users \| map(attribute="name") }}` |
+| `batch(n)` | Group into batches of n | `{{ [1,2,3,4] \| batch(2) }}` |
+
+### Value Filters
+
+| Filter | Description | Example |
+|--------|-------------|---------|
+| `default(val)` | Fallback for undefined/empty | `{{ x \| default("none") }}` |
+| `int` | Convert to integer | `{{ "42" \| int }}` -- `42` |
+| `float` | Convert to float | `{{ "3.14" \| float }}` -- `3.14` |
+| `string` | Convert to string | `{{ 42 \| string }}` -- `"42"` |
+| `abs` | Absolute value | `{{ -5 \| abs }}` -- `5` |
+| `round` | Round a float | `{{ 3.7 \| round }}` -- `4.0` |
+
+### Practical Examples
+
+```yaml title="Building a comma-separated allow list"
+allowed_ips: {{ facts.network.ipv4 | join(",") }}
+```
+
+```yaml title="Safe hostname normalization"
+normalized_host: {{ facts.network.hostname | lower | replace(".", "-") | truncate(63) }}
+```
+
+```yaml title="Conditional defaults with type conversion"
+worker_count: {{ settings.workers | default(facts.cpu.count) | int }}
+```
+
+```yaml title="Sorting and filtering mount points"
+data_mounts:
+  {% for mount in facts.disk.mounts | sort(attribute="mountpoint") %}
+  {% if mount.mountpoint | regex_match("/data") %}
+  - {{ mount.mountpoint }}
+  {% endif %}
+  {% endfor %}
+```

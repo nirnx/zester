@@ -1,0 +1,250 @@
+---
+title: "Settings Files"
+description: "Settings files use the .zy extension and combine YAML data with Jinja2/Gonja template syntax. They are the primary way to define configuration data that gets delivered to peels."
+---
+
+## The `.zy` File Format
+
+A `.zy` file is plain YAML with embedded template directives. During compilation, the master renders the template first (substituting variables, evaluating loops and conditionals), then parses the result as YAML.
+
+```yaml
+# /srv/zester/settings/common/base.zy
+timezone: UTC
+log_level: info
+hostname: {{ facts.network.hostname }}
+
+monitoring:
+  enabled: true
+  endpoint: https://metrics.example.com
+  interval: 60
+
+ntp:
+  servers:
+    - 0.pool.ntp.org
+    - 1.pool.ntp.org
+```
+
+The rendering pipeline is:
+
+```
+.zy file (YAML + Jinja2)
+    │
+    ▼  Template Engine (with facts + current settings)
+    │
+    ▼  Rendered YAML string
+    │
+    ▼  YAML parser
+    │
+    ▼  map[string]any
+```
+
+## Template Context
+
+When a `.zy` file is rendered, the template engine provides two variables:
+
+| Variable   | Type             | Description |
+|------------|------------------|-------------|
+| `facts`    | `map[string]any` | The target peel's collected system facts |
+| `settings` | `map[string]any` | Settings compiled so far (from previously merged files) |
+
+This means later settings files can reference values from earlier ones:
+
+```yaml
+# /srv/zester/settings/common/base.zy  (loaded first)
+app:
+  name: myservice
+  port: 8080
+```
+
+```yaml
+# /srv/zester/settings/common/monitoring.zy  (loaded second)
+monitoring:
+  service_name: {{ settings.app.name }}
+  health_check: http://localhost:{{ settings.app.port }}/health
+```
+
+## Directory Structure
+
+The settings directory is organized into subdirectories that group related configuration. The default root is `/srv/zester/settings/`.
+
+```
+/srv/zester/settings/
+  top.zy                         # Required: targeting rules
+  common/
+    base.zy                      # Shared across all peels
+    users.zy                     # User accounts
+    monitoring.zy                # Monitoring agents
+  webservers/
+    nginx.zy                     # Nginx config
+    certs.zy                     # TLS certificates
+  databases/
+    postgres.zy                  # PostgreSQL tuning
+    credentials.zy               # Database credentials
+  roles/
+    api.zy                       # API server settings
+    worker.zy                    # Background worker settings
+  environments/
+    production.zy                # Production overrides
+    staging.zy                   # Staging overrides
+```
+
+### Path Resolution
+
+Settings file references in `top.zy` use dots as path separators. The `ResolveSettingsPath` function converts them:
+
+```
+"common.base"         → /srv/zester/settings/common/base.zy
+"webservers.nginx"    → /srv/zester/settings/webservers/nginx.zy
+"databases.postgres"  → /srv/zester/settings/databases/postgres.zy
+```
+
+## Practical Examples
+
+### Conditional Configuration Based on OS
+
+```yaml
+# /srv/zester/settings/common/packages.zy
+packages:
+  {% if facts.os.family == "debian" %}
+  manager: apt
+  update_cmd: apt-get update && apt-get upgrade -y
+  {% elif facts.os.family == "rhel" %}
+  manager: yum
+  update_cmd: yum update -y
+  {% endif %}
+```
+
+### Dynamic Resource Allocation
+
+```yaml
+# /srv/zester/settings/databases/postgres.zy
+postgres:
+  version: "16"
+  data_dir: /var/lib/postgresql/16/main
+
+  # Allocate 25% of total RAM to shared buffers
+  shared_buffers: {{ (facts.memory.total / 1073741824 * 0.25) | int }}GB
+  effective_cache_size: {{ (facts.memory.total / 1073741824 * 0.75) | int }}GB
+
+  # One connection per logical CPU
+  max_connections: {{ facts.cpu.count * 25 }}
+
+  # Use all physical cores for parallel queries
+  max_parallel_workers: {{ facts.cpu.physical_count }}
+```
+
+### Multi-Environment Configuration
+
+```yaml
+# /srv/zester/settings/environments/production.zy
+app:
+  debug: false
+  log_level: warn
+  replicas: {{ facts.cpu.count }}
+
+  database:
+    host: db-primary.prod.internal
+    port: 5432
+    ssl_mode: verify-full
+    password: !encrypted "s3cret-prod-password"
+```
+
+```yaml
+# /srv/zester/settings/environments/staging.zy
+app:
+  debug: true
+  log_level: debug
+  replicas: 1
+
+  database:
+    host: db.staging.internal
+    port: 5432
+    ssl_mode: prefer
+    password: !encrypted "staging-password"
+```
+
+### Iterating Over Network Data
+
+```yaml
+# /srv/zester/settings/webservers/nginx.zy
+nginx:
+  server_name: {{ facts.network.fqdn }}
+  worker_processes: {{ facts.cpu.count }}
+
+  listen_addresses:
+    {% for ip in facts.network.ipv4 %}
+    - {{ ip }}
+    {% endfor %}
+
+  upstream_servers:
+    {% for peel in basket("custom.role:api", "network.ipv4") %}
+    - host: {{ peel.value }}
+      port: 8080
+    {% endfor %}
+```
+
+## Deep Merge Behavior
+
+When multiple settings files match a peel, they are merged in the order they appear in `top.zy`. The merge is **recursive for maps** and **replacement for everything else**:
+
+```yaml
+# File A (loaded first)
+app:
+  name: myservice
+  port: 8080
+  features:
+    logging: true
+    metrics: true
+```
+
+```yaml
+# File B (loaded second)
+app:
+  port: 9090           # Replaces 8080
+  features:
+    tracing: true       # Added alongside logging and metrics
+  extra: value          # New key added
+```
+
+```yaml
+# Merged result
+app:
+  name: myservice       # From A (not in B)
+  port: 9090            # From B (overrides A)
+  features:
+    logging: true       # From A (preserved)
+    metrics: true       # From A (preserved)
+    tracing: true       # From B (added)
+  extra: value          # From B (new)
+```
+
+<Callout type="warn" title="Non-map values are replaced, not merged">
+Lists, strings, numbers, and booleans are fully replaced by later files. If File A defines `ports: [80, 443]` and File B defines `ports: [8080]`, the result is `[8080]` -- not `[80, 443, 8080]`.
+</Callout>
+
+## Loading Internals
+
+### Master-side publishing
+
+The master uses `SanitizeFile` (`pkg/settings/publish.go`) to prepare `.zy` files for shared KV storage:
+
+1. Parse the raw `.zy` YAML using the `yaml.v3` AST (no template rendering at this stage)
+2. Walk the AST and find all nodes tagged `!encrypted`
+3. Replace each `!encrypted` value with a `__ZESTER_SECRET:<key.path>__` placeholder
+4. Re-marshal the modified AST and store it in the `settings-files` KV bucket
+5. Return the extracted secrets (dot-path → plaintext) for per-peel encryption
+
+The sanitized file retains all template directives (`{{ facts.* }}`, `{% if %}`, etc.) intact. Only the `!encrypted` literal values are replaced -- template evaluation happens on the peel.
+
+`LoadFileRaw` (`pkg/settings/settings.go`) is an older utility that scans for `!encrypted` tags first, then renders the template. It is not part of the active publishing pipeline.
+
+### Peel-side rendering
+
+The peel's `Resolver` (`pkg/settings/resolve.go`) handles the render-then-parse pipeline for each matched file:
+
+1. Load the sanitized `.zy` bytes from the `settings-files` KV bucket
+2. Render through the template engine with the peel's own facts and current merged settings
+3. Parse the rendered string as YAML
+4. Deep-merge the result into the accumulated settings map
+
+`LoadFile` (`pkg/settings/settings.go`) performs the same render-then-parse pipeline for one-off file loading from disk.

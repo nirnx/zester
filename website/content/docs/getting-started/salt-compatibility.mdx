@@ -1,0 +1,154 @@
+---
+title: "Salt Compatibility"
+---
+
+Zester is designed so that most SaltStack state files (`.sls`) port to Zester
+state files (`.zy`) with little or no change. This page summarizes the
+Salt features Zester supports natively. Use [`zester-migrate`](/docs/reference/cli/migrate)
+to convert `.sls` files and flag anything that needs manual review.
+
+---
+
+## State language
+
+### Requisites
+
+All Salt requisites are supported, including the inverse (`_in`) forms:
+
+| Requisite | Inverse | Behavior |
+|---|---|---|
+| `require` | `require_in` | Run after the target succeeds |
+| `watch` | `watch_in` | Like require; re-apply when the target changed |
+| `onchanges` | `onchanges_in` | Run only if the target changed |
+| `onfail` | `onfail_in` | Run only if the target failed |
+| `prereq` | `prereq_in` | Run before the target, but only if the target *would* change |
+| `listen` | `listen_in` | React to a change (aliased to `watch`) |
+
+Requisite targets accept both Zester (`pkg.installed:nginx`) and Salt dict
+(`- pkg: nginx`) forms.
+
+### Execution guards
+
+- `onlyif`: run only if **every** command exits `0`.
+- `unless`: skipped if **any** command exits `0` (runs only when all exit non-zero).
+
+A state whose guard is not met is a no-op (reports no change, with the diff
+`skipped: guard condition not met`), not a failure.
+
+```yaml
+run_migration:
+  cmd.run:
+    - command: /opt/app/bin/migrate
+    - unless: /opt/app/bin/is-migrated
+```
+
+### Generic attributes
+
+- `order: N` (also `first` / `last`) — ordering within a DAG level; requisite
+  ordering always takes precedence.
+- `retry: N` or `retry: {attempts: N, interval: S}` — retry on failure.
+  `interval` is in **seconds** (default 10). Retries apply in apply/revert
+  runs, not in test mode.
+- `failhard: true` — a failure aborts the remaining DAG levels (skipped with
+  `SkipReason: "failhard_abort"`).
+- `names: [...]` — expand one declaration into one state per name.
+
+### module.run
+
+Both the classic `name:` form and the newer dotted-key form are supported:
+
+```yaml
+refresh:
+  module.run:
+    - name: cmd.run
+    - command: apt-get update
+
+flag:
+  module.run:
+    - file.touch:
+        path: /var/run/flag
+```
+
+See [Dependencies & Requisites](/docs/guides/states/dependencies) for full details.
+
+---
+
+## Dry run (`test=True`)
+
+Preview changes without applying them:
+
+```bash
+zester 'web-*' state.highstate --test
+zester 'web-01' state.apply webserver test=True
+```
+
+See [Execution Model → Dry Run](/docs/guides/states/execution).
+
+---
+
+## Modules
+
+In addition to the core modules, Zester ships Salt-compatible modules for file
+surgery (`file.line`, `file.replace`, `file.comment`/`uncomment`,
+`file.keyvalue`, `file.copy`, `file.touch`), packages (`pkg.latest`,
+`pkg.purged`, `pkgrepo.managed`), archives (`archive.extracted`), hosts
+(`host.present`/`absent`), SSH keys (`ssh_auth.present`/`absent`),
+`git.latest`, and the `test.*` helpers. See the [module index](/docs/guides/modules).
+
+---
+
+## Templates: the `salt` accessor
+
+Templates can call execution modules during rendering, Salt-style:
+
+```jinja
+{% set os = salt['grains.get']('os') %}
+nginx_version: {{ salt['pkg.version']('nginx') }}
+db_password: {{ salt['pillar.get']('db:password', 'changeme') }}
+```
+
+`grains.get`/`grains.item`/`grains.items` resolve against facts,
+`pillar.get`/`pillar.items` (and their `settings.*` equivalents) against
+resolved settings, and other names dispatch to the
+[execution-module registry](#remote-execution). The accessor is resolved by
+scanning the template source for literal `salt['...']` subscripts, so it only
+works with literal module names in the template being rendered. For dynamic
+module names (a variable subscript) or `salt[...]` uses inside included
+template files, use the `salt_call('mod.func', ...)` fallback. The accessor
+raises a render error if the engine has no module dispatcher configured.
+
+Salt variable aliases are also honored: `grains` → `facts`, `pillar` →
+`settings`. See [Templating](/docs/guides/templating).
+
+---
+
+## Remote execution
+
+Ad-hoc, imperative execution modules (distinct from idempotent states) are
+available for operator commands:
+
+```bash
+zester 'web-*' pkg.version nginx
+zester 'web-01' service.restart nginx
+zester 'db-*' disk.usage
+zester 'web-01' sys.list_functions
+```
+
+The built-in set: `test.echo`, `test.version`, `test.true`, `test.false`,
+`pkg.version`, `pkg.list_pkgs`, `service.status`, `service.start`,
+`service.stop`, `service.restart`, `disk.usage`, `cmd.run`, `grains.item`,
+`grains.items`, and `sys.list_functions`.
+
+Backed by `pkg/execmod`. State modules take precedence when a name exists in
+both, so state execution is unaffected.
+
+---
+
+## What still needs manual review
+
+`zester-migrate` flags constructs that don't map automatically. Known
+divergences: custom Python execution modules must be rewritten as
+[Starlark modules](/docs/guides/modules/starlark); a few module arguments differ from
+Salt (e.g. `pkgrepo.managed` uses `baseurl` rather than a full `deb` line, and
+manages apt keys via `key_url`); and `listen` reacts inline rather than at the
+end of the run.

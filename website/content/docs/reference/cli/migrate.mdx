@@ -1,0 +1,223 @@
+---
+title: "zester-migrate"
+description: "Convert Salt .sls files to Zester .zy format. A standalone CLI tool that automates mechanical transformations and flags patterns requiring manual review."
+---
+
+---
+
+## Usage
+
+```bash
+zester-migrate [flags] <path>
+```
+
+**Arguments:**
+
+| Argument | Description |
+|-|-|
+| `<path>` | File or directory to migrate. Directories are walked recursively, processing all `.sls` and `.jinja` files. |
+
+**Flags:**
+
+| Flag | Default | Description |
+|-|-|-|
+| `--write` | `false` | Write converted `.zy` files to disk. Without this flag, only prints a report (dry run). |
+| `--rename-vars` | `false` | Also rename `grains` to `facts` and `pillar` to `settings` in template expressions. |
+
+---
+
+## Examples
+
+### Dry run (preview changes)
+
+```bash
+zester-migrate /srv/salt/states/
+```
+
+Output shows per-file diffs and warnings:
+
+```
+=== nginx/init.sls → nginx/init.zy ===
+
+  Line 1:  {% set port = salt['pillar.get']('nginx:port', 80) %}
+        →  {% set port = pillar_get('nginx:port', 80) %}
+
+  Line 7:  - mode: 0644
+        →  - mode: "0644"
+
+  ⚠ Line 10: Salt-style requisite block. Suggested Zester format:
+    - require:
+        - "pkg.installed:nginx"
+
+--- Summary ---
+Files:    12 processed, 8 changed, 4 unchanged
+Changes:  23 automated
+Warnings: 5 (require manual review)
+```
+
+### Write converted files
+
+```bash
+zester-migrate --write /srv/salt/states/
+```
+
+Writes `.zy` files alongside originals. `.sls` files become `.zy`; `.jinja` files keep their extension.
+
+### Migrate with variable renaming
+
+```bash
+zester-migrate --write --rename-vars /srv/salt/states/
+```
+
+Also converts `grains.os` to `facts.os` and `pillar.nginx.port` to `settings.nginx.port`. This is opt-in because Zester's [Salt compatibility layer](/docs/guides/templating/salt-compatibility) already provides `grains`/`pillar` aliases, so renaming is not strictly required.
+
+### Migrate a single file
+
+```bash
+zester-migrate nginx/init.sls
+```
+
+---
+
+## Transformation Rules
+
+The tool applies 6 rules in order. Each rule may produce automated **changes** (applied to the output) or **warnings** (flagged for manual review).
+
+### Rule 1: Salt Function Calls
+
+Converts exactly five `salt['module.function']()` calls to their dedicated
+Zester template functions:
+
+| Salt Pattern | Zester Replacement |
+|-|-|
+| `salt['pillar.get']('key', default)` | `pillar_get('key', default)` |
+| `salt['grains.filter_by'](lookup)` | `grains_filter_by(lookup)` |
+| `salt['user.info']('root')` | `user_info('root')` |
+| `salt['cmd.has_exec']('nginx')` | `cmd_has_exec('nginx')` |
+| `salt['file.dirname']('/etc/nginx')` | `file_dirname('/etc/nginx')` |
+
+These are the **only** `salt[...]` calls the tool rewrites. The five have
+dedicated Zester functions with Salt-matching semantics (e.g. `pillar_get`
+supports Salt's colon-separated key paths). They are documented in
+[Salt Compatibility: Functions](/docs/guides/templating/salt-compatibility#functions).
+
+### Rule 2: Remaining Salt Calls
+
+Any other `salt['...']` pattern is **left as-is** and flagged with a warning:
+
+```
+⚠ Line 5: Unknown salt call: salt['mine.get']
+```
+
+Zester now supports the `salt['mod.func'](...)` accessor natively in
+templates (see [the salt accessor](/docs/guides/templating/salt-compatibility#the-salt-accessor)),
+so many of these calls work unchanged — `salt['grains.get']`,
+`salt['pillar.get']` (dot-separated paths), and any registered
+[exec-module function](/docs/reference/cli#remote-execution-modules-salt-style-ad-hoc)
+(`pkg.version`, `cmd.run`, `service.status`, ...) dispatch at render time.
+The warning is a prompt to verify that the referenced module exists in Zester
+(run `zester '<peel>' sys.list_functions` to list them). Calls with no Zester
+equivalent need manual conversion (e.g., `salt['mine.get']` → use
+[basket](/docs/guides/basket/configuration) queries).
+
+### Rule 3: Mutable List Conversion
+
+Jinja2 lists are immutable. Salt works around this with execution module calls, but Zester provides `mlist()` (mutable list) as a template builtin. The tool detects `{% set x = [] %}` followed by `.append()`/`.extend()` and converts:
+
+**Before:**
+```jinja
+{% set pkgs = [] %}
+{% do pkgs.append('nginx') %}
+{% do pkgs.extend(extra_pkgs) %}
+```
+
+**After:**
+```jinja
+{% set pkgs = mlist() %}
+{% do pkgs.Append('nginx') %}
+{% do pkgs.Extend(extra_pkgs) %}
+```
+
+If `.append()`/`.extend()` is called on a variable not declared as `[]`, a warning is emitted instead.
+
+### Rule 4: Octal Mode Quoting
+
+YAML interprets bare `0644` as the integer 420. Salt handles this silently, but Zester follows strict YAML parsing. The tool quotes octal modes:
+
+| Before | After |
+|-|-|
+| `- mode: 0644` | `- mode: "0644"` |
+| `- dir_mode: 0755` | `- dir_mode: "0755"` |
+| `- file_mode: 0600` | `- file_mode: "0600"` |
+
+Already-quoted modes are left unchanged.
+
+### Rule 5: Requisite Format Warnings
+
+Salt uses dict-style requisites (`{pkg: nginx}`). Zester uses string format (`"pkg.installed:nginx"`). The tool recognizes **every requisite type Zester supports** — `require`, `watch`, `onchanges`, `onfail`, `prereq`, `listen`, and all inverse forms (`require_in`, `watch_in`, `onchanges_in`, `onfail_in`, `prereq_in`, `listen_in`) — and emits a warning with the suggested Zester format:
+
+```
+⚠ Line 8: Salt-style requisite block. Suggested Zester format:
+    - require:
+        - "pkg.installed:nginx"
+        - "file.managed:/etc/nginx/nginx.conf"
+```
+
+All of these requisite types are natively supported by Zester: `_in` forms are rewritten into forward requisites at compile time, `listen`/`listen_in` are aliased to `watch`, and `prereq` gates the declaring state on the target's Check while injecting ordering. Only the **entry format** (Salt dict → Zester `"module.function:id"` string) needs updating.
+
+This is a warning (not an automated change) because the Salt shorthand module names map to default Zester modules (`pkg` → `pkg.installed`, `file` → `file.managed`, `service` → `service.running`, `cmd` → `cmd.run`, `user` → `user.present`, `group` → `group.present`; anything else falls back to `<name>.managed`) which may not always be correct.
+
+### Rule 6: Variable Rename (opt-in)
+
+Only applied with `--rename-vars`. Renames template variable access:
+
+| Before | After |
+|-|-|
+| `grains.os.family` | `facts.os.family` |
+| `grains['os']` | `facts['os']` |
+| `pillar.nginx.port` | `settings.nginx.port` |
+| `pillar['key']` | `settings['key']` |
+
+Preserves Salt-compat function names: `pillar_get()`, `grains_filter_by()` are NOT renamed.
+
+---
+
+## What the Tool Does NOT Convert
+
+- **`salt[...]` calls other than the five in Rule 1** — left unchanged (with a
+  warning), because Zester's [salt accessor](/docs/guides/templating/salt-compatibility#the-salt-accessor)
+  runs them natively at render time when the module exists.
+- **Requisite blocks** — Rule 5 only warns with a suggested rewrite; the
+  dict → string conversion is never applied automatically because the
+  shorthand-to-module mapping is a heuristic.
+- **`grains`/`pillar` variable names** — only renamed with the opt-in
+  `--rename-vars` flag; the template aliases make renaming unnecessary.
+- **State structure** — `include:`, `extend:`, state IDs, and module names are
+  never touched.
+
+---
+
+## File Handling
+
+- `.sls` files are renamed to `.zy` in the output path
+- `.jinja` files keep their extension (used as include templates)
+- With `--write`, output files are written to the same directory structure
+- Without `--write`, only a report is printed (safe dry run)
+- Directory mode walks recursively, skipping non-`.sls`/`.jinja` files
+
+---
+
+## Exit Codes
+
+| Code | Meaning |
+|-|-|
+| `0` | Success, no warnings |
+| `1` | Success, but warnings require manual review |
+| `2` | Error (invalid arguments, file I/O failure) |
+
+---
+
+## See Also
+
+- [Salt Compatibility](/docs/guides/templating/salt-compatibility) — Template aliases and functions that ease migration
+- [State Modules](/docs/guides/modules) — Available state modules and their configuration

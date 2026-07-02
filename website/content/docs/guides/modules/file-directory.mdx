@@ -1,0 +1,103 @@
+---
+title: "file.directory"
+description: "Ensures a directory exists with the specified permissions and ownership."
+---
+
+**Source**: `pkg/state/modules/file_directory.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Absolute path to the target directory. If omitted, the state ID is used as the path. |
+| `mode` | `string` | No | `"0755"` | Directory permission mode in octal notation (e.g., `"0755"`, `"0700"`). |
+| `dir_mode` | `string` | No | `"0755"` | Alternative parameter for directory mode. Used as fallback if `mode` is not set. |
+| `user` | `string` | No | *(unchanged)* | Directory owner username. Requires the user to exist on the target system. |
+| `group` | `string` | No | *(unchanged)* | Directory group name. Requires the group to exist on the target system. |
+| `makedirs` | `bool` | No | `false` | Parsed but has no effect. The implementation always calls `MkdirAll`, so parent directories are created unconditionally regardless of this flag's value. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+The check phase performs these comparisons in order:
+
+1. **Path existence** — if the path does not exist, the state needs changes.
+2. **Is directory** — if the path exists but is not a directory (e.g., it is a regular file), the state needs changes.
+3. **Permission mode** — compares the directory's current permission bits against the desired mode. If they differ, the state needs changes.
+
+If all checks pass, the state reports no changes needed.
+
+---
+
+## Apply Behavior
+
+1. Checks if the directory already exists (to track creation for revert).
+2. Creates the directory and any missing parent directories via `MkdirAll` with the desired mode.
+3. Sets the permission mode via `Chmod`.
+4. If `user` or `group` is set, changes directory ownership via `Chown` (looks up user/group by name to resolve numeric UID/GID).
+
+---
+
+## Revert Behavior
+
+- If the directory was created by Apply, removes the directory and its contents via `RemoveAll`.
+- If the directory already existed (only mode/ownership changed), no-op.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Create a directory with default permissions
+zester 'web-01' file.directory /opt/myapp
+
+# Create a directory with specific ownership
+zester 'web*' file.directory /var/log/myapp mode=0750 user=appuser group=appuser
+```
+
+### State File
+
+**Basic directory creation:**
+
+```yaml
+/opt/myapp:
+  file.directory:
+    - mode: "0755"
+    - user: root
+    - group: root
+```
+
+**Application data directory with ownership:**
+
+```yaml
+/var/lib/prometheus/data:
+  file.directory:
+    - mode: "0700"
+    - user: prometheus
+    - group: prometheus
+    - require:
+      - "user.present:prometheus"
+```
+
+**Multiple directories for an application:**
+
+```yaml
+/opt/myapp/config:
+  file.directory:
+    - mode: "0750"
+    - user: myapp
+    - group: myapp
+
+/opt/myapp/logs:
+  file.directory:
+    - mode: "0755"
+    - user: myapp
+    - group: myapp
+```

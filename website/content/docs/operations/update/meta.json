@@ -1,0 +1,8 @@
+{
+  "title": "Self-Update",
+  "pages": [
+    "architecture",
+    "watchdog",
+    "storage"
+  ]
+}

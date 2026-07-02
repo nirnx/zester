@@ -1,0 +1,12 @@
+name: zester-watchdog
+arch: "${GOARCH}"
+platform: linux
+version: "${VERSION}"
+maintainer: "Zester Maintainers"
+description: "Zester watchdog process supervisor for self-updates"
+license: "Proprietary"
+contents:
+  - src: bin/release/zester-watchdog
+    dst: /usr/local/bin/zester-watchdog
+    file_info:
+      mode: 0755

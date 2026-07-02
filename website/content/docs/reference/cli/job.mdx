@@ -1,0 +1,225 @@
+---
+title: "zester job"
+description: "Manage jobs. Every module execution dispatched through the master creates a job that tracks execution progress and results."
+---
+
+## Synopsis
+
+```
+zester job <subcommand> [flags]
+```
+
+## Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| [`list`](#job-list) | List recent jobs |
+| [`show`](#job-show) | Show details for a job |
+| [`active`](#job-active) | List currently running jobs |
+| [`kill`](#job-kill) | Cancel a running job |
+
+---
+
+## job list
+
+List all recent jobs stored in the NATS KV jobs bucket.
+
+### Synopsis
+
+```
+zester job list
+```
+
+### Description
+
+Queries the jobs bucket and displays a summary table of all known jobs,
+including their job ID, function, target expression, and current state.
+
+### Flags
+
+This command has no subcommand-specific flags. See [global flags](/docs/reference/cli#global-flags).
+
+### Output Columns
+
+| Column | Description |
+|--------|-------------|
+| `JID` | Job ID (unique identifier) |
+| `FUNCTION` | Function that was executed (e.g., `state.apply`) |
+| `TARGET` | Target expression used |
+| `STATE` | Current job state (`pending`, `claimed`, `running`, `complete`, `partial`, `timeout`, `failed`, `canceled`) |
+
+### Examples
+
+```bash
+zester job list
+```
+
+```
+JID                   FUNCTION      TARGET    STATE
+20260115-001          state.apply   web*      complete
+20260115-002          state.apply   db*       running
+20260115-003          state.apply   cache*    failed
+```
+
+When no jobs exist:
+
+```bash
+zester job list
+```
+
+```
+No jobs found.
+```
+
+---
+
+## job show
+
+Display full details for a specific job, including its metadata and per-peel
+return results.
+
+### Synopsis
+
+```
+zester job show <jid>
+```
+
+### Description
+
+Fetches the job record from the jobs bucket and displays it as formatted JSON.
+Then queries the job-returns bucket for the return list stored under the job ID
+and displays it in a table.
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<jid>` | Yes | Job ID to display |
+
+### Flags
+
+This command has no subcommand-specific flags. See [global flags](/docs/reference/cli#global-flags).
+
+### Examples
+
+```bash
+zester job show 20260115-001
+```
+
+```json
+{
+  "jid": "2hPx1FNsSgJMqVn5bLSTXeBQMpO",
+  "function": "state.apply",
+  "args": {
+    "state": "nginx.restart"
+  },
+  "targets": ["web-01", "web-02", "web-03"],
+  "timeout": 300000000000,
+  "status": "complete",
+  "owner": "master-2hQ..."
+}
+```
+
+```
+Returns:
+PEEL      SUCCESS  DURATION
+web-01    true     1.2s
+web-02    true     0.8s
+web-03    true     1.1s
+```
+
+---
+
+## job active
+
+List jobs that are currently running or pending.
+
+### Synopsis
+
+```
+zester job active
+```
+
+### Description
+
+Queries all jobs and filters to those with `status` equal to `running` or
+`pending`. Displays a table showing the function, targets, and current status.
+
+### Flags
+
+This command has no subcommand-specific flags. See [global flags](/docs/reference/cli#global-flags).
+
+### Output Columns
+
+| Column | Description |
+|--------|-------------|
+| `JID` | Job ID |
+| `FUNCTION` | Function being executed |
+| `TARGETS` | List of targeted peel IDs |
+| `STATUS` | Current job status (`pending`, `running`) |
+
+### Examples
+
+```bash
+zester job active
+```
+
+```
+JID                   FUNCTION      TARGETS                STATUS
+20260115-002          state.apply   [db-01 db-02 db-03]    running
+```
+
+When no jobs are active:
+
+```bash
+zester job active
+```
+
+```
+No active jobs.
+```
+
+---
+
+## job kill
+
+Cancel a running job by publishing a cancel signal to the job's cancel subject.
+
+### Synopsis
+
+```
+zester job kill <jid>
+```
+
+### Description
+
+Publishes a cancel message to `zester.job.<jid>.cancel`. The master forwards
+the signal to the job manager, which cancels the watcher. Peels that are
+executing the job subscribe to the cancel subject and abort their running
+execution context.
+
+<Callout type="warn" title="Best-effort cancellation">
+Peels listen for cancel signals and abort their execution context when
+received. However, some operations (like in-progress package installations)
+may not be safely interruptible and will complete before the peel stops.
+</Callout>
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<jid>` | Yes | Job ID to cancel |
+
+### Flags
+
+This command has no subcommand-specific flags. See [global flags](/docs/reference/cli#global-flags).
+
+### Examples
+
+```bash
+zester job kill 20260115-002
+```
+
+```
+Cancel signal sent for job 20260115-002
+```

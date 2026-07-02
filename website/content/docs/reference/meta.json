@@ -1,0 +1,4 @@
+{
+  "title": "Reference",
+  "pages": ["cli", "configuration", "master-api", "enrollment-api", "authentication"]
+}

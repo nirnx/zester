@@ -1,0 +1,88 @@
+---
+title: "Introduction"
+description: "Zester is a SaltStack alternative built in pure Go, powered by NATS JetStream and nkeys."
+---
+
+Zester delivers infrastructure automation without the overhead: a single static
+binary, no Python runtime, no external database, no ZeroMQ. Same flavor family
+as Salt — sharper tool.
+
+## Why Zester?
+
+<Cards>
+<Card title="Single Binary, Zero Dependencies">
+Ship one static Go binary to every node. No Python interpreter, no pip packages, no virtualenvs. Install in seconds, not minutes.
+</Card>
+<Card title="NATS JetStream Built In">
+Replace ZeroMQ with a production-grade message bus that gives you durable events, KV storage, object storage, and horizontal scaling out of the box.
+</Card>
+<Card title="Ed25519 nkey Authentication">
+Modern cryptography with a three-tier trust hierarchy (Operator, Account, User). No RSA key exchange. No AES session negotiation. TLS 1.3 everywhere.
+</Card>
+<Card title="Built for Scale">
+Fan out commands to 100k nodes in ~250ms. Facts stored in NATS KV — no full fan-out needed. NATS superclusters and leaf nodes replace Salt syndic chains.
+</Card>
+<Card title="Jinja2-Compatible Templating">
+State files use Gonja, a Jinja2-compatible template engine for Go. Your existing template knowledge transfers directly.
+</Card>
+<Card title="Drop-In Concepts for Salt Users">
+Minions become Peels. Grains become Facts. Pillars become Settings. Mine becomes Basket. The mental model stays the same — the implementation gets better.
+</Card>
+</Cards>
+
+## Salt vs Zester at a Glance
+
+| Feature | SaltStack | Zester |
+|---|---|---|
+| **Language** | Python | Go (single static binary) |
+| **Message Bus** | ZeroMQ (custom protocol) | NATS JetStream (production-grade) |
+| **Authentication** | RSA key exchange + AES | Ed25519 nkeys + TLS 1.3 |
+| **Scaling** | Syndic hierarchy | NATS superclusters + leaf nodes |
+| **Fact Storage** | In-memory on master | NATS KV (persistent, distributed) |
+| **Settings Delivery** | Full render, encrypt, send | KV with per-peel subject isolation + NaCl |
+| **Event Persistence** | None (fire-and-forget) | JetStream (durable, replayable) |
+| **Job Tracking** | Master memory + optional returner | NATS KV (persistent, no external DB) |
+| **Deployment** | pip install + dependencies | Single binary, zero dependencies |
+| **Templating** | Jinja2 (Python) | Gonja (Jinja2-compatible, Go) |
+| **Multi-Region** | Complex syndic chains | Native NATS gateways |
+
+## Naming Map
+
+If you are coming from SaltStack, here is how concepts translate.
+
+| SaltStack | Zester | Purpose |
+|---|---|---|
+| Master | Master | Central control plane |
+| Minion | **Peel** | Managed node agent |
+| Grains | **Facts** | Local system information collected by the peel |
+| Pillars | **Settings** | Secure per-peel configuration from the master |
+| Mine | **Basket** | Peel-to-peel data sharing |
+| Syndic | **Leaf Node** | Multi-tier / edge relay (NATS native) |
+| Event Bus | **NATS JetStream** | Message bus with persistence |
+| Salt Keys | **nkeys** | Ed25519 authentication |
+| Jinja | **Gonja** | Jinja2-compatible Go template engine |
+| States | States | Declarative desired-state definitions |
+| Returner | *(built-in)* | JetStream KV replaces external returners |
+
+## Where to Go Next
+
+<Cards>
+<Card title="Installation" href="/docs/getting-started/installation">
+Build from source or download a release binary.
+</Card>
+<Card title="Quick Start" href="/docs/getting-started/quickstart">
+Set up a master, bootstrap a peel, and apply your first state — includes a Docker Compose playground.
+</Card>
+<Card title="Core Concepts" href="/docs/getting-started/concepts">
+Understand the building blocks: masters, peels, facts, settings, states, and jobs.
+</Card>
+<Card title="Salt Compatibility" href="/docs/getting-started/salt-compatibility">
+What transfers from Salt, what changes, and the migration tool.
+</Card>
+<Card title="Modules" href="/docs/guides/modules">
+Built-in state modules: file, pkg, service, cmd, user, group, cron, sysctl, mount, git, pip, and more.
+</Card>
+<Card title="Architecture" href="/docs/architecture">
+Deep dive into NATS JetStream, nkey authentication, and the security model.
+</Card>
+</Cards>

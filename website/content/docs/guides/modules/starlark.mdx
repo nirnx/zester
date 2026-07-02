@@ -1,0 +1,289 @@
+---
+title: "Starlark Custom Modules"
+---
+
+Zester supports custom state modules written in [Starlark](https://github.com/google/starlark-go), a sandboxed Python dialect. Drop `.star` files into `_modules/` directories and they become available as state modules alongside built-in Go modules.
+
+## Quick Start
+
+Create a module file:
+
+```python
+# _modules/nginx.star
+def configured(id, config):
+    file_write(config["path"], config["content"], 0o644)
+    cmd_run("nginx", args=["-s", "reload"])
+    return {"changed": True, "diff": "wrote config and reloaded"}
+```
+
+Use it in state files identically to built-in modules:
+
+```yaml
+web-config:
+  nginx.configured:
+    - path: /etc/nginx/nginx.conf
+    - content: "worker_processes auto;"
+    - require:
+      - pkg.installed:install-nginx
+```
+
+## Module Naming
+
+Module names are derived from the filename and function name: `{filename}.{function}`.
+
+- `_modules/nginx.star` containing `configured()` → `nginx.configured`
+- `_modules/nginx.star` containing `running()` → `nginx.running`
+
+### Multiple Actions Per File
+
+A single `.star` file can define multiple actions:
+
+```python
+# _modules/nginx.star → registers nginx.configured AND nginx.running
+def configured(id, config):
+    file_write(config["path"], config["content"], 0o644)
+    return {"changed": True}
+
+def running(id, config):
+    r = cmd_run("systemctl", args=["is-active", "nginx"])
+    if r["exit_code"] == 0:
+        return {"changed": False}
+    cmd_run("systemctl", args=["start", "nginx"])
+    return {"changed": True}
+```
+
+### Private Helpers
+
+Functions starting with `_` are private helpers and not registered as modules:
+
+```python
+def _reload_service(name):
+    cmd_run("systemctl", args=["reload", name])
+
+def configured(id, config):
+    file_write(config["path"], config["content"], 0o644)
+    _reload_service("nginx")
+    return {"changed": True}
+```
+
+## Return Values
+
+### Apply Function (required)
+
+Must return a dict with:
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `changed` | `bool` | Yes | Whether the system was modified |
+| `diff` | `str` | No | Description of changes |
+| `details` | `dict` | No | Module-specific result data (string keys and values) |
+
+```python
+def configured(id, config):
+    return {"changed": True, "diff": "wrote config", "details": {"path": config["path"]}}
+```
+
+### Check Function (optional)
+
+If defined as `{name}_check`, enables proper dry-run/check mode. Must return:
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `needs_change` | `bool` | Yes | Whether changes are needed |
+| `diff` | `str` | No | Description of what would change |
+
+```python
+def configured_check(id, config):
+    if file_exists(config["path"]) and file_read(config["path"]) == config["content"]:
+        return {"needs_change": False}
+    return {"needs_change": True, "diff": "content differs"}
+```
+
+If no `_check` function is defined, Check always reports `needs_change: True` (like `cmd.run`).
+
+### Revert Function (optional)
+
+If defined as `{name}_revert`, enables state revert:
+
+```python
+def configured_revert(id, config):
+    file_remove(config["path"])
+    return {"changed": True, "diff": "removed config"}
+```
+
+If no `_revert` function is defined, revert is a no-op.
+
+## Discovery and Loading
+
+### Global Modules
+
+Files in `{statesDir}/_modules/` are loaded at peel startup and available to all state files.
+
+### Hot-Reload
+
+The Loader tracks each `.star` file's modification time. On subsequent `LoadGlobal` or `LoadDir` calls, if a file's modification time has changed, the file is re-parsed and its modules are re-registered. This means updating a `.star` file takes effect on the next compile cycle without restarting the peel.
+
+### Formula-Specific Modules
+
+Files in `{formula}/_modules/` are loaded when that formula is compiled. For example, `state.apply "webserver"` loads:
+
+1. `{statesDir}/_modules/*.star` (global, loaded at startup)
+2. `{statesDir}/webserver/_modules/*.star` (formula-specific, loaded at compile time)
+3. `{statesDir}/common/_modules/*.star` (from includes, loaded at compile time)
+
+Formula-specific modules override global modules with the same name.
+
+### Distribution
+
+`.star` files in `_modules/` are within `--states-dir`, so they flow through the existing KV distribution path (master publishes to `state-files` bucket, peels cache locally). No additional configuration needed.
+
+## Available Builtins
+
+### Command Execution
+
+```python
+result = cmd_run("nginx", args=["-s", "reload"], cwd="/etc", env={"PATH": "/usr/bin"}, shell=False)
+# result = {"stdout": "...", "stderr": "...", "exit_code": 0}
+# On Go-level exec failure (e.g., binary not found): result also includes {"error": "..."}
+```
+
+`cmd_run` never raises on non-zero exit — it always returns the result dict. Check `exit_code` explicitly. If the command could not be started at the Go level (e.g., binary not found, permission denied), the result dict additionally contains an `"error"` key with the error message.
+
+### File Operations
+
+```python
+content = file_read("/etc/hosts")                    # returns str
+file_write("/etc/test.conf", "content", mode=0o644)  # returns None
+file_append("/var/log/app.log", "new line\n")        # returns None
+exists = file_exists("/etc/hosts")                    # returns bool
+info = file_stat("/etc/hosts")                        # returns {"size": int, "mode": int, "is_dir": bool} or None
+file_remove("/tmp/old.conf")                          # returns None
+file_mkdir("/etc/app/conf.d", mode=0o755)             # returns None
+```
+
+### Package Management
+
+```python
+installed = pkg_is_installed("nginx")     # returns bool
+pkg_install("nginx", version="1.24")      # returns None
+pkg_remove("nginx")                       # returns None
+```
+
+### HTTP Requests
+
+```python
+resp = http_get("https://api.example.com/status", headers={"Authorization": "Bearer token"}, timeout=30)
+resp = http_post("https://api.example.com/data", body='{"key":"value"}', headers={"Content-Type": "application/json"})
+resp = http_request("PUT", "https://api.example.com/resource", body="data")
+# resp = {"status": 200, "body": "...", "headers": {"Content-Type": "application/json"}}
+```
+
+HTTP builtins never raise on non-2xx — check `status` explicitly. Timeout is in seconds.
+
+### JSON
+
+```python
+data = json.decode('{"key": "value"}')  # returns dict
+text = json.encode({"key": "value"})    # returns str
+```
+
+Uses the standard `go.starlark.net/lib/json` module.
+
+### Utilities
+
+```python
+encoded = base64_encode("hello")        # returns str
+decoded = base64_decode(encoded)         # returns str
+digest = hash_sha256("hello")           # returns hex-encoded str
+sleep(5)                                 # sleeps 5 seconds (respects cancellation)
+```
+
+### Logging
+
+```python
+log.info("starting configuration")
+log.warn("deprecated option used")
+log.error("failed to connect")
+```
+
+### Context Variables
+
+```python
+os_family = facts["os"]["family"]       # read-only dict of current facts
+role = settings["role"]                  # read-only dict of current settings
+```
+
+Both `facts` and `settings` are frozen (immutable) dicts.
+
+## Shared Code Between Modules
+
+Use Starlark's `load()` to import from other `.star` files in the same `_modules/` directory:
+
+```python
+# _modules/helpers.star
+def make_result(changed, diff=""):
+    return {"changed": changed, "diff": diff}
+```
+
+```python
+# _modules/nginx.star
+load("helpers.star", "make_result")
+
+def configured(id, config):
+    file_write(config["path"], config["content"], 0o644)
+    return make_result(True, "wrote config")
+```
+
+## Error Handling
+
+- Starlark runtime errors (KeyError, type errors, etc.) are surfaced as Go errors and the state fails
+- Bad `.star` files (syntax errors) are skipped with a warning during loading; other modules still load
+- Provider nil checks return descriptive errors (e.g., "pkg_install: package provider not available")
+
+## Example: Complete Module
+
+```python
+# _modules/app.star
+
+def _ensure_dir(path):
+    if not file_exists(path):
+        file_mkdir(path, mode=0o755)
+
+def deployed(id, config):
+    """Deploy application from a tarball URL."""
+    url = config["url"]
+    dest = config.get("dest", "/opt/app")
+
+    _ensure_dir(dest)
+
+    resp = http_get(url, timeout=60)
+    if resp["status"] != 200:
+        return {"changed": False, "diff": "download failed: HTTP %d" % resp["status"]}
+
+    file_write(dest + "/app.tar.gz", resp["body"], 0o644)
+    cmd_run("tar", args=["xzf", "app.tar.gz"], cwd=dest)
+
+    return {"changed": True, "diff": "deployed from %s" % url, "details": {"dest": dest}}
+
+def deployed_check(id, config):
+    dest = config.get("dest", "/opt/app")
+    if file_exists(dest + "/app.tar.gz"):
+        return {"needs_change": False}
+    return {"needs_change": True, "diff": "app not deployed"}
+
+def deployed_revert(id, config):
+    dest = config.get("dest", "/opt/app")
+    file_remove(dest + "/app.tar.gz")
+    return {"changed": True, "diff": "removed deployment"}
+```
+
+Usage:
+
+```yaml
+deploy-app:
+  app.deployed:
+    - url: https://releases.example.com/app-v1.2.tar.gz
+    - dest: /opt/myapp
+    - require:
+      - pkg.installed:install-deps
+```

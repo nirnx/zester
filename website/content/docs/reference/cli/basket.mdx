@@ -1,0 +1,159 @@
+---
+title: "zester basket"
+description: "Query basket data. Basket is Zester's mechanism for peels to publish structured data that other peels or the master can consume -- enabling peel-to-peel data sharing."
+---
+
+## Synopsis
+
+```
+zester basket <subcommand> [flags]
+```
+
+## Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| [`get`](#basket-get) | Get basket data from targeted peels |
+| [`list`](#basket-list) | List all basket keys for a peel |
+
+---
+
+## basket get
+
+Query basket data from peels matching a target expression.
+
+### Synopsis
+
+```
+zester basket get <target> <function>
+```
+
+### Description
+
+Resolves the target expression to a set of peel IDs (using the same
+auto-detection as `state.apply`), then queries the basket KV bucket for each
+peel's data under the specified function key.
+
+Basket keys are stored in the format `<peel-id>.<function>` in the NATS KV
+basket bucket.
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<target>` | Yes | Target expression selecting peels |
+| `<function>` | Yes | Basket function name to query |
+
+### Flags
+
+This command has no subcommand-specific flags. See [global flags](/docs/reference/cli#global-flags).
+
+### Output Columns
+
+| Column | Description |
+|--------|-------------|
+| `PEEL` | Peel ID |
+| `VALUE` | Basket value (or `(no data)` if not available) |
+
+### Examples
+
+#### Get IP addresses from web servers
+
+```bash
+zester basket get 'web*' network.ip_addrs
+```
+
+```
+PEEL      VALUE
+web-01    10.0.1.10
+web-02    10.0.1.11
+web-03    10.0.1.12
+```
+
+#### Get data from specific peels
+
+```bash
+zester basket get 'L@db-01,db-02' postgres.version
+```
+
+```
+PEEL    VALUE
+db-01   15.4
+db-02   15.4
+```
+
+#### Missing basket data
+
+```bash
+zester basket get 'web*' nonexistent.function
+```
+
+```
+PEEL      VALUE
+web-01    (no data)
+web-02    (no data)
+web-03    (no data)
+```
+
+#### No target matches
+
+```bash
+zester basket get 'nonexistent*' any.function
+```
+
+```
+No peels matched the target expression.
+```
+
+---
+
+## basket list
+
+List all basket function keys available for a specific peel.
+
+### Synopsis
+
+```
+zester basket list <peel>
+```
+
+### Description
+
+Scans the basket KV bucket for all keys prefixed with `<peel-id>.` and
+displays the function portion of each key (everything after the first dot).
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<peel>` | Yes | Peel ID to list basket keys for |
+
+### Flags
+
+This command has no subcommand-specific flags. See [global flags](/docs/reference/cli#global-flags).
+
+### Examples
+
+#### List basket keys
+
+```bash
+zester basket list web-01
+```
+
+```
+FUNCTION
+network.ip_addrs
+network.interfaces
+disk.usage
+cpu.load
+```
+
+#### No basket data
+
+```bash
+zester basket list unknown-peel
+```
+
+```
+No basket data found for peel unknown-peel.
+```

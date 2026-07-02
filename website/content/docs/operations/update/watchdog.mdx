@@ -1,0 +1,147 @@
+---
+title: "Watchdog Runtime"
+description: "The watchdog (cmd/zester-watchdog) is the node-local process responsible for child lifecycle supervision and atomic binary swaps."
+---
+
+## Flags
+
+Source of truth: `registerFlags` in `cmd/zester-watchdog/main.go` (plain `flag` package, no YAML config).
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--child-bin` | (required) | Path to child binary |
+| `--child-args` | `""` | Arguments to pass to child (space-separated) |
+| `--nats-url` | `tls://localhost:4222` | NATS server URL |
+| `--nats-ca` | `""` | CA certificate for NATS TLS server verification |
+| `--nats-creds` | `""` | NATS credentials file |
+| `--health-url` | `http://127.0.0.1:9090/healthz` | Child liveness endpoint (restart monitoring, `WaitForHealthy`) |
+| `--ready-url` | `""` = derived from `--health-url` by replacing the path with `/readyz` | Child readiness endpoint, polled only during update soak |
+| `--health-timeout` | `5s` | Health check timeout |
+| `--health-interval` | `10s` | Health check interval |
+| `--health-retries` | `3` | Consecutive health failures before rollback |
+| `--soak-time` | `60s` | Post-update soak period |
+| `--id` | (required) | Node identity |
+| `--component` | (required) | `peel` or `master` |
+| `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
+| `--log-format` | `json` | `json`, `text` |
+
+Because `--ready-url` defaults to a derivation of `--health-url`, overriding `--health-url` alone (e.g. `http://127.0.0.1:9091/healthz` for a master child) keeps soak probing the right port. An explicit `--ready-url` wins. The packaged systemd units pass both flags explicitly.
+
+## Startup Sequence
+
+Source of truth: `cmd/zester-watchdog/main.go`.
+
+1. Build `SlotManager` on `--child-bin` and run `Recover()`.
+2. Start supervised child process (best effort).
+3. Start `AutoRestart()` loop.
+4. Connect to NATS (wait for creds file when configured).
+5. Start update command handler on `zester.update.cmd.<id>`.
+6. Start status reporter to `update-status` KV.
+
+## Slot Layout and Atomic Swap
+
+Source of truth: `pkg/update/slots.go`.
+
+- Current binary: `<basePath>`
+- Previous binary: `<basePath>.prev`
+- Staging binary: `<basePath>.staging`
+
+Apply behavior:
+
+1. remove existing `.prev` (if present)
+2. rename current -> `.prev`
+3. rename `.staging` -> current
+4. if step 3 fails, attempt rename `.prev` back to current
+
+Recovery behavior on startup:
+
+- If `.staging` exists and current is missing: move `.staging` -> current.
+- If `.prev` exists and current is missing: move `.prev` -> current.
+
+## Update Command Protocol
+
+Source of truth: `pkg/update/handler.go`.
+
+### Request (`UpdateCommand`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `command` | `string` | `prepare`, `apply`, `confirm`, `rollback`, `status` |
+| `version` | `string` | Target version |
+| `component` | `string` | `peel` or `master` |
+| `sha256` | `string` | Expected binary digest |
+| `object_key` | `string` | Object Store key |
+
+### Response (`UpdateResponse`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `status` | `string` | Result status (`error`, `staged`, `applying`, `confirmed`, etc.) |
+| `version` | `string` | Pending/confirmed version |
+| `hash` | `string` | Staged digest |
+| `error` | `string` | Error details |
+| `state` | `string` | Handler state (for `status`) |
+| `uptime` | `string` | Child uptime string (for `status`) |
+
+## Handler State Machine
+
+States from `pkg/update/handler.go`:
+
+- `idle`
+- `preparing`
+- `staged`
+- `applying`
+- `soaking`
+- `confirmed`
+- `rolling_back`
+
+Valid command transitions:
+
+| Command | Allowed state(s) | Result |
+|---|---|---|
+| `prepare` | `idle`, `confirmed` | Download + stage binary, move to `staged` |
+| `apply` | `staged` | Swap slots, restart child, enter `soaking` |
+| `confirm` | `soaking` | Cancel soak goroutine, cleanup staging, move to `confirmed` |
+| `rollback` | `staged`, `applying`, `soaking` | Restore previous binary, restart child, move to `idle` |
+| `status` | any | Return current handler state + uptime |
+
+## Soak and Health Policy
+
+- `apply` starts a background soak routine.
+- Soak behavior:
+  - Wait for `WaitForHealthy()` success first (liveness, `--health-url`).
+  - Then poll **readiness** (`Supervisor.CheckReady` against `--ready-url`; falls back to the health URL when unset) for the configured soak duration. Readiness catches a child that is alive but functionally dead — e.g. NATS-disconnected, where `/readyz` returns `503` while `/healthz` stays `200`.
+  - Consecutive readiness failures up to `HealthRetries` trigger auto-rollback; a successful probe resets the failure counter.
+- Restart monitoring and `WaitForHealthy` stay on liveness — a NATS outage never restarts a healthy child; only the soak decision uses readiness.
+- `confirm` or `rollback` cancels soak monitoring via context cancellation.
+
+### Confirm Deadline
+
+Entering `soaking` also arms a **confirm-deadline** covering the whole window (`WaitForHealthy` + soak + awaiting confirm): `HandlerConfig.ConfirmDeadline`, defaulting to 3× `SoakTime` floored at `MinConfirmDeadline` (5 minutes). If neither `confirm` nor `rollback` arrives from the controller before it expires — e.g. the driving master died mid-batch — the handler logs an Error (`no confirm or rollback from controller before deadline, auto-rolling back`) and rolls back to the previous binary, returning to `idle`. Rolling back is the safe default: an unconfirmed node also rejects all future prepares, so without the deadline it would run an unconfirmed binary forever. Readiness checks still gate only the soak window itself — after the soak passes, the handler simply waits for confirm or the deadline.
+
+Caveat: if NATS goes down while a node is inside its soak window, that node's `/readyz` reports `down` and the update rolls back even though the binary is fine. Avoid starting rollouts during planned NATS maintenance.
+
+## Supervisor Policy
+
+Source of truth: `pkg/update/supervisor.go`.
+
+- Child process start uses separate process group (`Setpgid: true`).
+- Stop behavior: `SIGTERM` then up to 10s wait, then `SIGKILL`.
+- Health/readiness probe expectations (`checkEndpoint`, shared by `CheckHealth` and `CheckReady`):
+  - HTTP `200`
+  - JSON body with `status: "ok"` or `"degraded"` (case-insensitive) — `degraded` means working-but-impaired and is not probe-fatal
+- `AutoRestart()`:
+  - exponential backoff restart (`2^n` seconds, capped at 60s)
+  - after 10 consecutive failures, enters a **degraded slow-retry tier** (not terminal): restart attempts continue every `SupervisorConfig.DegradedRetryInterval` (default 10m), and degraded state clears automatically once a restarted child survives the stability window
+  - failure counter (and degraded state) resets after 30s stable runtime
+
+## Status Reporting
+
+Source of truth: `pkg/update/status.go`.
+
+- Reporter writes `NodeStatus` entries to `update-status` every 30s (default).
+- Key format: `<component>.<id>`.
+- Includes runtime fields such as version, state, GOOS/GOARCH, child PID, uptime, and `updated_at`.
+- `NodeStatus.Degraded` (msgpack `degraded`, additive) reports whether the supervisor is in the degraded slow-retry tier, so a persistently failing child is visible in fleet status. Degraded nodes are excluded from rollouts by the master's rollout controller.
+- `NodeStatus.Protocol` (msgpack `protocol,omitempty`, additive) carries the node's update protocol number — the watchdog stamps `proto.ProtocolVersion` (currently 1) into every report. The rollout controller checks it against `Manifest.MinProtocol` before starting a rollout; a decoded 0 means the field was never set and is treated as compatible (it fails only an explicit `MinProtocol > 0` gate).
+- `zester update status` surfaces both as the trailing `DEGRADED` (yes/no) and `PROTO` (`-` = protocol 0, never reported) columns.

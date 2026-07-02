@@ -1,0 +1,16 @@
+/etc/nginx/nginx.conf:
+  file.managed:
+    - content: |
+        worker_processes {{ settings.worker_processes | default("auto") }};
+        events { worker_connections 1024; }
+        http {
+            server {
+                listen {{ settings.listen_port | default("80") }};
+                server_name {{ settings.server_name | default("localhost") }};
+                location / { root /usr/share/nginx/html; index index.html; }
+            }
+        }
+    - mode: "0644"
+    - makedirs: true
+    - require:
+      - "pkg.installed:nginx"

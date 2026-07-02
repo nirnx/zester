@@ -1,0 +1,11 @@
+include:
+  - common.packages
+  - webserver.packages
+  - webserver.config
+
+verify-nginx-config:
+  cmd.run:
+    - command: echo "nginx config written for {{ settings.server_name | default('localhost') }}"
+    - creates: /tmp/.nginx-verified
+    - watch:
+      - "file.managed:/etc/nginx/nginx.conf"

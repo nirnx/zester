@@ -1,0 +1,89 @@
+---
+title: "git.latest"
+---
+
+Ensures a Git repository is cloned at a target directory **and kept up to date** with its remote: an existing clone is fetched and fast-forwarded (or hard-reset with `force`). Compare with [`git.cloned`](/docs/guides/modules/git-cloned), which only ensures the clone exists at a revision.
+
+**Source**: `pkg/state/modules/git_latest.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Remote repository URL. |
+| `target` | `string` | **Yes** | — | Filesystem path for the working tree. |
+| `branch` | `string` | No | `""` | Branch to track. Used for `git clone --branch`, checkout, and the remote-tip comparison. |
+| `rev` | `string` | No | `""` | Pin to a specific commit/ref. When set, the clone is checked out at `rev` and the up-to-date check is a local HEAD comparison (no network). |
+| `force` | `bool` | No | `false` | Discard local changes: update with `git reset --hard` (to `rev`, `origin/<branch>`, or `origin/HEAD`) instead of a fast-forward merge. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+1. Target missing → changes needed (clone).
+2. `git remote get-url origin` compared with `name` → mismatch means changes needed.
+3. With `rev` set: no changes needed if `HEAD` starts with `rev` (prefix match, so short hashes work) — checked locally without network access.
+4. Otherwise: `git ls-remote origin <branch|HEAD>` is compared against the local `HEAD`; a differing remote tip means changes needed.
+
+---
+
+## Apply Behavior
+
+**Fresh clone** (target missing): `git clone [--branch <branch>] <url> <target>`, then `git checkout <rev>` when `rev` is set.
+
+**Existing clone**:
+
+1. The origin URL is corrected with `git remote set-url` if it drifted.
+2. The current HEAD is recorded (for revert), then `git fetch origin`.
+3. Update strategy:
+    - `force: true` → `git reset --hard` to `rev`, `origin/<branch>`, or `origin/HEAD`.
+    - `rev` set → `git checkout <rev>`.
+    - `branch` set → `git checkout <branch>` + `git merge --ff-only origin/<branch>`.
+    - Neither → `git merge --ff-only` (fails if the local branch diverged — use `force`).
+
+---
+
+## Revert Behavior
+
+- If Apply cloned the repository, Revert removes the target directory recursively.
+- If Apply updated an existing clone, Revert runs `git reset --hard <previous HEAD>`.
+- Otherwise Revert is a no-op.
+
+---
+
+## Examples
+
+### State File
+
+**Track a branch:**
+
+```yaml
+https://github.com/example/app.git:
+  git.latest:
+    - target: /opt/app
+    - branch: main
+```
+
+**Force-sync, discarding local changes:**
+
+```yaml
+deploy-config:
+  git.latest:
+    - name: git@git.internal:ops/config.git
+    - target: /etc/app-config
+    - branch: production
+    - force: true
+    - require:
+      - "pkg.installed:git"
+```
+
+---
+
+## Divergences from Salt
+
+- Salt's `user`, `identity` (SSH key), `submodules`, `depth`, and `rev`-as-branch semantics are not supported. Authentication relies on the peel's ambient git configuration (credential helpers, ssh-agent).
+- `rev` is compared as a commit-hash prefix against `HEAD`; symbolic refs (tag names) will always report changes needed since `rev-parse HEAD` returns a hash.

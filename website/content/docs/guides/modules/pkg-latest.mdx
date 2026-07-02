@@ -1,0 +1,75 @@
+---
+title: "pkg.latest"
+---
+
+Ensures a package is installed and kept at the newest available version. Upgradability is probed via the package manager CLI (`apt-get` / `dnf` / `yum`); when it cannot be determined, an installed package is treated as satisfied.
+
+**Source**: `pkg/state/modules/pkg_latest.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Name of the package to keep up to date. |
+| `refresh` | `bool` | No | `true` | Refresh the package cache before applying (matching Salt's `pkg.latest` semantics). |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+1. If the package is not installed, changes are needed.
+2. If installed, an upgrade probe runs based on the detected OS family (from the `os.family` fact, falling back to the active package provider name):
+    - **Debian/Ubuntu** — `apt-get -s install <pkg>` (simulation). An `Inst` line means an upgrade is available; "is already the newest version" means up to date.
+    - **RedHat family** — `dnf check-update <pkg>` (or `yum`). Exit code `100` means an upgrade is available; `0` means up to date; anything else is inconclusive.
+    - **Other (including macOS/brew)** — upgradability cannot be determined; an installed package is treated as satisfied to avoid needless churn.
+
+---
+
+## Apply Behavior
+
+1. Refreshes the package cache when `refresh` is true.
+2. Installs the package with no version pin, which installs or upgrades to the latest available candidate via the detected provider (apt, dnf, yum, brew).
+
+---
+
+## Revert Behavior
+
+Removes the package via the package provider. The previously installed version is **not** restored.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+zester 'web*' pkg.latest nginx
+```
+
+### State File
+
+**Keep a package current:**
+
+```yaml
+nginx:
+  pkg.latest: []
+```
+
+**Skip the cache refresh:**
+
+```yaml
+htop:
+  pkg.latest:
+    - refresh: false
+```
+
+---
+
+## Divergences from Salt
+
+- On platforms where upgradability cannot be probed (e.g. macOS/Homebrew), an installed package reports no changes needed — Salt would compare against the repository candidate version.
+- Salt's `version`, `pkgs`, and `fromrepo` parameters are not supported (use [`pkg.installed`](/docs/guides/modules/pkg-installed) for version pinning).

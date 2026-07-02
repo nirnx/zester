@@ -1,0 +1,235 @@
+package modules
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/ptorbus/zester/pkg/exec/exectest"
+)
+
+func testTZMctx(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileExec) *exec.ModuleContext {
+	return &exec.ModuleContext{
+		ProviderSet: exec.ProviderSet{
+			Command: fakeCmd,
+			File:    fakeFile,
+			Package: exectest.NewFakePackageExec("apt"),
+		},
+	}
+}
+
+func TestTimezoneSystemName(t *testing.T) {
+	mctx := testTZMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
+	builder := NewTimezoneSystemBuilder(mctx)
+	s, err := builder("America/New_York", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Name() != "timezone.system:America/New_York" {
+		t.Errorf("Name: got %q", s.Name())
+	}
+}
+
+func TestTimezoneSystemPrimaryParamDefault(t *testing.T) {
+	mctx := testTZMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
+	builder := NewTimezoneSystemBuilder(mctx)
+	s, err := builder("UTC", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tz := s.(*TimezoneSystem)
+	if tz.Timezone != "UTC" {
+		t.Errorf("Timezone: got %q, want UTC", tz.Timezone)
+	}
+}
+
+func TestTimezoneSystemRequisites(t *testing.T) {
+	mctx := testTZMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
+	builder := NewTimezoneSystemBuilder(mctx)
+	s, err := builder("UTC", map[string]any{
+		"require": []any{"pkg.installed:tzdata"},
+		"onfail":  []any{"cmd.run:fallback"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs := s.Reqs()
+	if len(reqs.Require) != 1 || reqs.Require[0] != "pkg.installed:tzdata" {
+		t.Errorf("Require: got %v", reqs.Require)
+	}
+	if len(reqs.OnFail) != 1 || reqs.OnFail[0] != "cmd.run:fallback" {
+		t.Errorf("OnFail: got %v", reqs.OnFail)
+	}
+}
+
+func TestTimezoneSystemCheckNoChange(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("timedatectl", &exec.CommandResult{
+		Stdout:   "America/New_York\n",
+		ExitCode: 0,
+	}, nil)
+	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
+	builder := NewTimezoneSystemBuilder(mctx)
+
+	s, err := builder("America/New_York", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Error("expected no change when timezone matches")
+	}
+}
+
+func TestTimezoneSystemCheckNeedsChange(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("timedatectl", &exec.CommandResult{
+		Stdout:   "UTC\n",
+		ExitCode: 0,
+	}, nil)
+	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
+	builder := NewTimezoneSystemBuilder(mctx)
+
+	s, err := builder("America/New_York", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange when timezone differs")
+	}
+}
+
+func TestTimezoneSystemCheckFallbackFile(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetError("timedatectl", errors.New("not found"))
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/etc/timezone", []byte("UTC\n"), 0644)
+
+	mctx := testTZMctx(fakeCmd, fakeFile)
+	builder := NewTimezoneSystemBuilder(mctx)
+
+	s, err := builder("UTC", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Error("expected no change when file timezone matches")
+	}
+}
+
+func TestTimezoneSystemApply(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	// First call (Check inside Apply for previousTZ): timedatectl show
+	fakeCmd.SetResult("timedatectl", &exec.CommandResult{Stdout: "UTC\n", ExitCode: 0}, nil)
+	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
+	builder := NewTimezoneSystemBuilder(mctx)
+
+	s, err := builder("America/New_York", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed after set-timezone")
+	}
+	if ar.Details["timezone"] != "America/New_York" {
+		t.Errorf("timezone detail: got %q", ar.Details["timezone"])
+	}
+}
+
+func TestTimezoneSystemApplyError(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetError("timedatectl", errors.New("permission denied"))
+	fakeFile := exectest.NewFakeFileExec()
+	// Also make dpkg-reconfigure fail so Apply returns an error.
+	fakeCmd.SetError("dpkg-reconfigure", errors.New("not found"))
+
+	mctx := testTZMctx(fakeCmd, fakeFile)
+	builder := NewTimezoneSystemBuilder(mctx)
+
+	s, err := builder("America/New_York", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Apply(context.Background())
+	if err == nil {
+		t.Error("expected error when both timedatectl and dpkg-reconfigure fail")
+	}
+}
+
+func TestTimezoneSystemRevert(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("timedatectl", &exec.CommandResult{Stdout: "UTC\n", ExitCode: 0}, nil)
+	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
+	builder := NewTimezoneSystemBuilder(mctx)
+
+	s, err := builder("America/New_York", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Apply to capture previousTZ.
+	if _, err2 := s.Apply(context.Background()); err2 != nil {
+		t.Fatal(err2)
+	}
+
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed after revert")
+	}
+}
+
+func TestTimezoneSystemRevert_NoPreviousTZ(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
+	builder := NewTimezoneSystemBuilder(mctx)
+
+	s, err := builder("America/New_York", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected no change when previous TZ is unknown")
+	}
+}
+
+func TestTimezoneSystemNoProvider(t *testing.T) {
+	mctx := &exec.ModuleContext{
+		ProviderSet: exec.ProviderSet{
+			File: exectest.NewFakeFileExec(),
+		},
+	}
+	builder := NewTimezoneSystemBuilder(mctx)
+	_, err := builder("UTC", map[string]any{})
+	if err == nil {
+		t.Error("expected error when no command provider is set")
+	}
+}

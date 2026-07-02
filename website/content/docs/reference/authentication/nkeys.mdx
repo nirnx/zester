@@ -1,0 +1,172 @@
+---
+title: "nkeys"
+---
+
+nkeys are Ed25519 key pairs that provide cryptographic identity for every entity in Zester. The `pkg/auth` package wraps the [nats-io/nkeys](https://github.com/nats-io/nkeys) library and organizes keys into a role-based hierarchy.
+
+## Key Roles
+
+Every nkey belongs to one of three roles, each with a distinct single-character prefix on its public key:
+
+| Role | Prefix | Purpose |
+|------|--------|---------|
+| **Operator** | `O` | Root of trust. Signs account JWTs. One per Zester deployment. |
+| **Account** | `A` | Namespace boundary. Signs user JWTs. Typically one per environment. |
+| **User** | `U` | Individual identity. One per peel (and one for the master). |
+
+The role is encoded in the `KeyRole` type:
+
+```go
+const (
+    RoleOperator KeyRole = iota  // prefix O
+    RoleAccount                   // prefix A
+    RoleUser                      // prefix U
+)
+```
+
+## The KeyBundle
+
+A `KeyBundle` groups the key pair with its metadata:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Role` | `KeyRole` | The role this key serves (operator, account, or user) |
+| `KeyPair` | `nkeys.KeyPair` | The underlying Ed25519 key pair (sign, verify, seed) |
+| `PublicKey` | `string` | The encoded public key with role prefix (e.g., `OABC...`) |
+| `Seed` | `[]byte` | The encoded private seed (e.g., `SOABC...`) |
+
+## Generating Keys
+
+Use `GenerateKeyBundle` to create a new key pair for any role:
+
+```go
+import "github.com/ptorbus/zester/pkg/auth"
+
+// Generate an operator key pair
+operatorKP, err := auth.GenerateKeyBundle(auth.RoleOperator)
+// operatorKP.PublicKey => "OAIVQ2..."
+// operatorKP.Seed     => "SOAIVQ2..."
+
+// Generate an account key pair
+accountKP, err := auth.GenerateKeyBundle(auth.RoleAccount)
+// accountKP.PublicKey => "ABJK7..."
+
+// Generate a user key pair
+userKP, err := auth.GenerateKeyBundle(auth.RoleUser)
+// userKP.PublicKey => "UCXP3..."
+```
+
+## Seed Files
+
+The seed is the private key material. It must be stored securely and never shared.
+
+### Saving a Seed
+
+```go
+err := operatorKP.SaveSeedToFile("/etc/zester/keys/operator.seed")
+```
+
+The file is written with mode `0600` (owner read/write only). The contents look like:
+
+```
+SOAIVQ2JDMRJSGBAMJBKFWQ5B5XQKJJVFL5HNCEPKXE4CM7GH...
+```
+
+<Callout type="error" title="Protect your seeds">
+The seed file contains the private key. Anyone with access to an operator seed can sign account JWTs and take full control of the deployment. Store operator and account seeds in a secrets manager or hardware security module when possible.
+</Callout>
+
+### Loading a Seed
+
+Load a key bundle from a previously saved seed file:
+
+```go
+operatorKP, err := auth.LoadKeyBundleFromFile(auth.RoleOperator, "/etc/zester/keys/operator.seed")
+```
+
+`LoadKeyBundleFromFile` supports both plain seed files (raw seed string) and **decorated `.creds` format** (extracts the seed from the `-----BEGIN USER NKEY SEED-----` block).
+
+Or from raw seed bytes:
+
+```go
+operatorKP, err := auth.LoadKeyBundle(auth.RoleOperator, seedBytes)
+```
+
+Both methods reconstruct the full `KeyBundle` including the public key.
+
+## Public Key Format
+
+Public keys are Base32-encoded Ed25519 public keys with a role prefix:
+
+```
+O  AIVQ2JDMRJSGBAMJBKFWQ5B5XQKJJVFL5HNCEPKXE4CM7GH...
+^  ^
+|  |-- Base32-encoded public key
+|-- Role prefix (O=Operator, A=Account, U=User)
+```
+
+Seeds follow the same pattern but with an `S` prefix before the role character:
+
+```
+SO AIVQ2...   (Operator seed)
+SA BJK7...    (Account seed)
+SU CXP3...    (User seed)
+```
+
+### Validating Public Keys
+
+Check that a public key is well-formed and matches an expected role:
+
+```go
+err := auth.ValidatePublicKey("OAIVQ2...", auth.RoleOperator)  // nil if valid
+err := auth.ValidatePublicKey("OAIVQ2...", auth.RoleAccount)   // error: wrong prefix
+```
+
+### Extracting a Public Key from a Seed
+
+When you only have a seed, extract the public key without building a full bundle:
+
+```go
+pub, err := auth.PublicKeyFromSeed(seedBytes)
+// pub => "OAIVQ2..." (prefix reveals the role)
+```
+
+## Curve Keys for Encryption
+
+Zester derives X25519 curve keys from the same Ed25519 seed for NaCl box encryption. This allows a single identity to serve both signing and encryption purposes.
+
+```go
+// Derive the X25519 curve key pair
+curveKP, err := userKP.DeriveCurveKeyPair()
+
+// Get just the curve public key (prefix: X)
+curvePub, err := userKP.CurvePublicKey()
+// curvePub => "XCXP3..."
+```
+
+Curve keys are used internally by the [encryption system](/docs/guides/settings/encryption) to protect sensitive settings values so that only the target peel can read them.
+
+| Key Type | Prefix | Algorithm | Use |
+|----------|--------|-----------|-----|
+| Signing (public) | `O`, `A`, `U` | Ed25519 | JWT signing, authentication |
+| Signing (seed) | `SO`, `SA`, `SU` | Ed25519 | Private key material |
+| Curve (public) | `X` | X25519 | NaCl box encryption |
+
+## CLI Examples
+
+Generate a full key hierarchy for bootstrapping using your NATS key-management tooling (for example `nsc`) or directly via the Go API (`auth.GenerateFullHierarchy`).
+
+This creates:
+
+```
+/etc/zester/keys/
+  operator.seed      # Operator private seed
+  account.seed       # Account private seed
+  master.seed        # Master user private seed
+  operator.pub       # Operator public key
+  account.pub        # Account public key
+```
+
+<Callout type="success" title="Key naming convention">
+Name seed files by their role and purpose: `operator.seed`, `account.seed`, `web-server-01.seed`. The public key can always be derived from the seed, so you only need to store the seed file.
+</Callout>

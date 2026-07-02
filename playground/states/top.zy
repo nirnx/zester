@@ -1,0 +1,9 @@
+base:
+  '*':
+    - common
+
+roles:
+  'web*':
+    - webserver
+  'db*':
+    - database

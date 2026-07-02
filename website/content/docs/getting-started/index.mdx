@@ -1,0 +1,63 @@
+---
+title: "Overview"
+description: "This section walks you through everything you need to go from zero to a working Zester setup."
+---
+
+---
+
+## What You Will Learn
+
+1. **[Installation](/docs/getting-started/installation)** — Build from source, download a release binary, or spin up the Docker Compose playground.
+
+2. **[Quick Start](/docs/getting-started/quickstart)** — A hands-on walkthrough: start a master, bootstrap a peel, collect facts, write a state file, and apply it. Includes a **Docker Compose playground** for the fastest path.
+
+3. **[Concepts](/docs/getting-started/concepts)** — Understand the core building blocks of Zester and how they map to SaltStack equivalents.
+
+---
+
+## Fastest Path: Docker Compose Playground
+
+If you just want to try Zester immediately, the Docker Compose playground gives you a fully working cluster in seconds:
+
+```bash
+git clone https://github.com/ptorbus/zester.git
+cd zester
+docker compose up -d
+```
+
+Then approve peel enrollments and run Salt-like commands from the `admin` container:
+
+```bash
+docker compose exec admin sh /playground/auto-approve.sh
+docker compose exec admin zester '*' cmd.run 'hostname'
+docker compose exec admin zester 'web-01' state.apply hello
+```
+
+See the [Quick Start](/docs/getting-started/quickstart#docker-compose-playground) for full details.
+
+---
+
+## Prerequisites
+
+Before you begin, make sure you have one of:
+
+- **Docker** and **Docker Compose** (for the playground — no Go required)
+- **Go 1.25+** (for building from source)
+
+You also need:
+
+- A Linux, macOS, or Windows machine to act as the master
+- One or more target machines to act as peels (or use a single machine / the Docker playground for testing)
+- Basic familiarity with infrastructure automation concepts
+
+<Callout type="success" title="Coming from Salt?">
+If you have experience with SaltStack, you will feel right at home. Zester uses the same conceptual model with different naming and a modern implementation. Start with the [Concepts](/docs/getting-started/concepts) page to see the full naming map.
+</Callout>
+
+---
+
+## Recommended Reading Order
+
+If you are new to Zester, follow the pages in order: Installation, then Quick Start, then Concepts. The quick start is designed to give you working infrastructure before diving into theory.
+
+If you are evaluating Zester, start with the [Docker Compose playground](/docs/getting-started/quickstart#docker-compose-playground) to see it in action, then read [Concepts](/docs/getting-started/concepts) for the architectural overview.

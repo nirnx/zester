@@ -1,0 +1,134 @@
+---
+title: "Regular Expressions"
+description: "Regex targeting matches peel IDs against a regular expression. Expressions use the E@ prefix to signal regex mode."
+---
+
+## Syntax
+
+```
+E@<regex-pattern>
+```
+
+The `E@` prefix is stripped before compilation. The remaining string is compiled
+as a Go `regexp` pattern (RE2 syntax).
+
+## RE2 Syntax
+
+Zester uses Go's `regexp` package, which implements the RE2 engine. RE2
+guarantees linear-time matching, which prevents catastrophic backtracking.
+
+### Supported constructs
+
+| Construct | Description | Example |
+|-----------|-------------|---------|
+| `.` | Any character | `E@web.01` |
+| `*` | Zero or more of preceding | `E@web-.*` |
+| `+` | One or more of preceding | `E@web-\d+` |
+| `?` | Zero or one of preceding | `E@web-0?1` |
+| `\d` | Digit character | `E@srv-\d{2}` |
+| `\w` | Word character | `E@\w+-prod` |
+| `\s` | Whitespace character | -- |
+| `[abc]` | Character class | `E@dc[12]-web` |
+| `[a-z]` | Range in character class | `E@[a-z]+-\d+` |
+| `[^abc]` | Negated character class | `E@web-[^0]\d` |
+| `{n}` | Exactly n repetitions | `E@db-\d{2}` |
+| `{n,m}` | Between n and m repetitions | `E@web-\d{1,3}` |
+| `^` | Start of string | `E@^web-` |
+| `$` | End of string | `E@-prod$` |
+| `(...)` | Capture group | `E@(web|db)-\d+` |
+| `(?:...)` | Non-capturing group | `E@(?:web|db)-\d+` |
+| `\|` | Alternation | `E@web\|db` |
+
+### Not supported (RE2 limitations)
+
+The following PCRE features are **not available** in RE2:
+
+| Feature | PCRE Syntax | Status |
+|---------|-------------|--------|
+| Backreferences | `\1`, `\2` | Not supported |
+| Lookahead | `(?=...)`, `(?!...)` | Not supported |
+| Lookbehind | `(?<=...)`, `(?<!...)` | Not supported |
+| Possessive quantifiers | `*+`, `++` | Not supported |
+| Atomic groups | `(?>...)` | Not supported |
+| Recursive patterns | `(?R)` | Not supported |
+| Conditional patterns | `(?(cond)yes\|no)` | Not supported |
+
+<Callout type="success" title="Why RE2?">
+RE2 guarantees linear-time matching regardless of input. This prevents
+denial-of-service through pathological patterns -- an important safety
+property when target expressions may come from user input or configuration
+files.
+</Callout>
+
+## Examples
+
+### Match by numeric suffix
+
+```bash
+zester 'E@^web-\d{2}$' state.apply nginx.restart
+```
+
+Matches: `web-01`, `web-42`, `web-99`
+Does not match: `web-1`, `web-001`, `webserver-01`
+
+### Alternation -- multiple prefixes
+
+```bash
+zester 'E@^(web|api)-' state.apply deploy.app
+```
+
+Matches: `web-01`, `api-prod-01`, `api-staging`
+Does not match: `db-01`, `cache-primary`
+
+### Exclude a pattern (use compound)
+
+Regex alone cannot negate. Use a compound expression instead:
+
+```bash
+zester 'E@^web- and not E@.*-dev-.*' state.apply deploy.prod
+```
+
+Matches web peels that do not contain `-dev-` in their ID.
+
+### Complex pattern
+
+```bash
+zester 'E@^(web|api)-dc[1-3]-srv\d+$' state.apply healthcheck.run
+```
+
+Matches: `web-dc1-srv01`, `api-dc3-srv42`
+Does not match: `web-dc4-srv01`, `db-dc1-srv01`
+
+## Validation
+
+Invalid regex patterns produce an immediate error at parse time:
+
+```bash
+zester 'E@web-[' state.apply base.ping
+```
+
+```
+Error: resolve target "E@web-[": target: create matcher:
+  target: invalid regex pattern "web-[":
+  error parsing regexp: missing closing ]: `[`
+```
+
+## Match Behavior
+
+The regex is tested using `MatchString`, which means it matches **anywhere**
+within the peel ID by default. To anchor the match to the full string, use `^`
+and `$`:
+
+```bash
+# Matches "web-01" AND "my-web-01-extra"
+zester 'E@web-01' state.apply ...
+
+# Matches ONLY "web-01"
+zester 'E@^web-01$' state.apply ...
+```
+
+<Callout type="warn" title="Anchor your patterns">
+Without `^` and `$` anchors, the regex performs a substring match. This is
+a common source of over-matching. Always use anchors when you need an exact
+match on the full peel ID.
+</Callout>

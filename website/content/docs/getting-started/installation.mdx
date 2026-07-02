@@ -1,0 +1,233 @@
+---
+title: "Installation"
+description: "Zester ships as a single static Go binary with zero external dependencies. No Python runtime, no pip packages, no database."
+---
+
+---
+
+## Docker Compose (Playground)
+
+The fastest way to try Zester is with the Docker Compose playground. No Go installation required — just Docker.
+
+```bash
+git clone https://github.com/ptorbus/zester.git
+cd zester
+docker compose up -d
+```
+
+This starts a complete Zester cluster:
+
+| Service | Role |
+|---|---|
+| `init` | Bootstraps auth credentials, NATS server config, and copies example states/settings, then exits |
+| `nats` | External NATS server with JetStream (port 4222) |
+| `master` | Zester master (connects to NATS as a client) |
+| `web-01` | Peel agent (auto-enrolls on startup) |
+| `web-02` | Peel agent (auto-enrolls on startup) |
+| `db-01` | Peel agent (auto-enrolls on startup) |
+| `admin` | Admin container with `zester` CLI for enrollment and management |
+
+Peels start without credentials and auto-enroll via the master's HTTPS API. Approve pending enrollments from the `admin` container, then run commands:
+
+```bash
+# Approve all pending enrollments
+docker compose exec admin sh /playground/auto-approve.sh
+
+# Run a command on all peels (after enrollment)
+docker compose exec admin zester '*' cmd.run 'hostname'
+
+# Apply a state
+docker compose exec admin zester 'web-01' state.apply hello
+
+# Manage a file directly
+docker compose exec admin zester 'db-01' file.managed /tmp/test.txt content="hello"
+```
+
+See the [Quick Start](/docs/getting-started/quickstart#docker-compose-playground) for a full walkthrough.
+
+---
+
+## System Requirements
+
+| Requirement | Minimum | Recommended |
+|---|---|---|
+| **OS** | Linux (amd64, arm64), macOS, Windows | Linux amd64 |
+| **Go** | 1.25+ (build from source only) | Latest stable |
+| **Memory** | 128 MB (peel), 512 MB (master) | 256 MB (peel), 2 GB (master) |
+| **Disk** | 50 MB (binary) | 1 GB+ for JetStream storage on master |
+| **Network** | TCP port 4222 (NATS) | TLS-capable network between master and peels |
+
+---
+
+## Build from Source
+
+Zester requires Go 1.25 or later. Building from source gives you the latest development version.
+
+### Install Go
+
+<Tabs items={["macOS", "Linux (apt)", "Linux (manual)"]}>
+<Tab value="macOS">
+
+```bash
+brew install go
+```
+</Tab>
+<Tab value="Linux (apt)">
+
+```bash
+sudo apt update && sudo apt install -y golang
+```
+</Tab>
+<Tab value="Linux (manual)">
+
+```bash
+wget https://go.dev/dl/go1.25.5.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz
+export PATH=$PATH:/usr/local/go/bin
+```
+</Tab>
+</Tabs>
+
+### Build Zester
+
+Clone the repository and build all binaries:
+
+```bash
+git clone https://github.com/ptorbus/zester.git
+cd zester
+go build -o bin/zester ./cmd/zester
+go build -o bin/zester-master ./cmd/zester-master
+go build -o bin/zester-peel ./cmd/zester-peel
+```
+
+Or install the CLI directly to your `$GOPATH/bin`:
+
+```bash
+go install github.com/ptorbus/zester/cmd/zester@latest
+go install github.com/ptorbus/zester/cmd/zester-master@latest
+go install github.com/ptorbus/zester/cmd/zester-peel@latest
+```
+
+<Callout type="info" title="Three binaries">
+Zester produces three separate binaries:
+
+- `zester` — CLI tool for administration and queries
+- `zester-master` — The master control plane (connects to external NATS)
+- `zester-peel` — The managed node agent
+</Callout>
+
+---
+
+## Binary Releases
+
+Pre-built binaries are available on the [GitHub Releases](https://github.com/ptorbus/zester/releases) page.
+
+<Tabs items={["Linux amd64", "Linux arm64", "macOS (Apple Silicon)", "macOS (Intel)"]}>
+<Tab value="Linux amd64">
+
+```bash
+curl -LO https://github.com/ptorbus/zester/releases/latest/download/zester-linux-amd64.tar.gz
+tar xzf zester-linux-amd64.tar.gz
+sudo mv zester zester-master zester-peel /usr/local/bin/
+```
+</Tab>
+<Tab value="Linux arm64">
+
+```bash
+curl -LO https://github.com/ptorbus/zester/releases/latest/download/zester-linux-arm64.tar.gz
+tar xzf zester-linux-arm64.tar.gz
+sudo mv zester zester-master zester-peel /usr/local/bin/
+```
+</Tab>
+<Tab value="macOS (Apple Silicon)">
+
+```bash
+curl -LO https://github.com/ptorbus/zester/releases/latest/download/zester-darwin-arm64.tar.gz
+tar xzf zester-darwin-arm64.tar.gz
+sudo mv zester zester-master zester-peel /usr/local/bin/
+```
+</Tab>
+<Tab value="macOS (Intel)">
+
+```bash
+curl -LO https://github.com/ptorbus/zester/releases/latest/download/zester-darwin-amd64.tar.gz
+tar xzf zester-darwin-amd64.tar.gz
+sudo mv zester zester-master zester-peel /usr/local/bin/
+```
+</Tab>
+</Tabs>
+
+---
+
+## Verify Installation
+
+After installing, verify that all binaries are available:
+
+```bash
+zester version
+```
+
+Expected output:
+
+```
+zester v0.1.0 (commit: abc1234, built: 2026-02-10T00:00:00Z)
+```
+
+Check each binary:
+
+```bash
+zester-master --help
+zester-peel --help
+```
+
+<Callout type="success" title="Shell completion">
+Zester uses [Cobra](https://github.com/spf13/cobra) for its CLI, which supports shell completions. Generate them with:
+
+<Tabs items={["Bash", "Zsh", "Fish"]}>
+<Tab value="Bash">
+
+```bash
+zester completion bash > /etc/bash_completion.d/zester
+```
+</Tab>
+<Tab value="Zsh">
+
+```bash
+zester completion zsh > "${fpath[1]}/_zester"
+```
+</Tab>
+<Tab value="Fish">
+
+```bash
+zester completion fish > ~/.config/fish/completions/zester.fish
+```
+</Tab>
+</Tabs>
+
+</Callout>
+
+---
+
+## Directory Layout
+
+Zester follows a conventional layout for configuration and data:
+
+| Path | Purpose |
+|---|---|
+| `/etc/zester/master.yaml` | Master configuration file |
+| `/etc/zester/peel.yaml` | Peel configuration file |
+| `~/.zester/config.yaml` | CLI configuration (user-level) |
+| `/var/lib/zester/jetstream/` | JetStream storage (master) |
+| `/srv/zester/states/` | State files (.zy) |
+| `/srv/zester/settings/` | Settings files (.zy) |
+| `/etc/zester/peel.key` | Peel nkey seed file (0600 permissions) |
+
+<Callout type="warn" title="Peel key permissions">
+The peel nkey seed file (`peel.key`) and credentials file (`.creds`) must have `0600` permissions. Zester writes these files with restricted permissions by default, but verify after any manual edits.
+</Callout>
+
+---
+
+## Next Steps
+
+With Zester installed, head to the [Quick Start](/docs/getting-started/quickstart) to set up your first master and peel.

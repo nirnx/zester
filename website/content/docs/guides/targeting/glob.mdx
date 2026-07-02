@@ -1,0 +1,101 @@
+---
+title: "Glob Patterns"
+description: "Glob patterns are the default targeting type. When a target expression has no recognized prefix and does not contain boolean operators, Zester treats it as a glob pattern and matches it against peel IDs."
+---
+
+Zester uses Go's `filepath.Match` semantics, which support the standard
+shell-style wildcards.
+
+## Syntax
+
+| Wildcard | Description | Example | Matches |
+|----------|-------------|---------|---------|
+| `*` | Matches any sequence of non-separator characters | `web*` | `web-01`, `webserver`, `web` |
+| `?` | Matches any single non-separator character | `web-0?` | `web-01`, `web-02` but not `web-001` |
+| `[abc]` | Matches any single character in the set | `web-0[123]` | `web-01`, `web-02`, `web-03` |
+| `[a-z]` | Matches any single character in the range | `db-[a-c]` | `db-a`, `db-b`, `db-c` |
+| `[^abc]` | Matches any single character **not** in the set | `web-0[^9]` | `web-01` through `web-08` |
+
+<Callout type="warn" title="No recursive/double-star support">
+Unlike some glob implementations, `filepath.Match` does **not** support
+`**` for recursive matching. The `*` wildcard does not match path separator
+characters. In Zester's context, peel IDs are flat strings (not paths), so
+`*` effectively matches any substring.
+</Callout>
+
+## Examples
+
+### Match all peels
+
+```bash
+zester '*' state.apply base.ping
+```
+
+```
+Targeting 12 peel(s): [web-01 web-02 web-03 db-01 db-02 ...]
+Applying state: base.ping (timeout: 5m0s)
+  Dispatched to web-01
+  Dispatched to web-02
+  ...
+```
+
+### Match by prefix
+
+```bash
+zester 'web*' state.apply nginx.restart
+```
+
+Matches: `web-01`, `web-02`, `webserver`, `web-prod-01`
+
+### Match with single-character wildcard
+
+```bash
+zester 'db-0?' state.apply postgres.vacuum
+```
+
+Matches: `db-01`, `db-02`, `db-09`
+Does not match: `db-10`, `db-001`
+
+### Match with character class
+
+```bash
+zester 'web-[12]*' state.apply deploy.app
+```
+
+Matches: `web-1`, `web-2`, `web-10`, `web-2-prod`
+Does not match: `web-3`, `web-01`
+
+### Match with negated character class
+
+```bash
+zester 'cache-[^0]*' state.apply redis.flush
+```
+
+Matches: `cache-a`, `cache-primary`
+Does not match: `cache-01`, `cache-0`
+
+## Validation
+
+Glob patterns are validated at parse time. An invalid pattern (for example, an
+unclosed `[` bracket) produces an immediate error:
+
+```bash
+zester 'web-[' state.apply base.ping
+```
+
+```
+Error: resolve target "web-[": target: create matcher:
+  target: invalid glob pattern "web-[": syntax error in pattern
+```
+
+## How It Works
+
+The `GlobMatcher` wraps Go's standard library `filepath.Match` function. When
+matching, it only looks at the peel ID string -- fact data is ignored.
+
+```
+GlobMatcher.Match(peelID, facts) -> filepath.Match(pattern, peelID)
+```
+
+The pattern is validated once during construction, and each subsequent match
+call is a simple string comparison with no allocations.

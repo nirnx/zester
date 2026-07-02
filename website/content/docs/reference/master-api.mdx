@@ -1,0 +1,142 @@
+---
+title: "Master REST API"
+description: "The master exposes a REST API on the same TLS listener used for peel enrollment (default :8443)."
+---
+
+Base path: `/api/v1`
+
+## Enablement
+
+Docs endpoints (Swagger UI + OpenAPI spec) are controlled by `api.docs_enabled` (default `false`) or the `--api-docs` CLI flag.
+
+<Callout type="warn" title="Docs are served without authentication">
+The Swagger UI and OpenAPI spec are served **unauthenticated** on the peel-facing enrollment listener. That is why they are opt-in: enable them only where exposing API documentation on that listener is acceptable (e.g., a lab or the Docker playground).
+</Callout>
+
+Protected API endpoints are only registered when at least one token is configured in `api.tokens`.
+
+```yaml title="/etc/zester/master.yaml"
+enroll:
+  addr: ":8443"
+  tls_cert: /data/auth/enroll.crt
+  tls_key: /data/auth/enroll.key
+
+api:
+  docs_enabled: false   # opt-in; served without authentication when true
+  tokens:
+    - username: ci-system
+      token_file: /data/auth/api-tokens/ci-system.token
+    - username: dashboard
+      token_file: /data/auth/api-tokens/dashboard.token
+```
+
+## Authentication
+
+Protected routes require:
+
+```http
+Authorization: Bearer <token>
+```
+
+Behavior:
+
+- Token files are read on every request (token rotation without restart).
+- Comparison uses constant-time checks.
+- On success, the configured `username` is attached to request context and logs.
+
+<Callout type="info" title="Token file permissions">
+Token files are expected to be mode `0600`. At startup, the master logs a warning for every token file that is unreadable or accessible by group/others.
+</Callout>
+
+<Callout type="success" title="Playground token">
+The Docker playground generates a **random** API token (32 random bytes, hex-encoded) at `/data/auth/api-tokens/integration.token`, mapped to username `integration-test`. Read it from the shared auth volume; it is never a predictable value.
+</Callout>
+
+## Rate Limiting
+
+The TLS listener applies per-IP token-bucket rate limits, split by route class:
+
+| Routes | Burst (bucket size) | Sustained rate |
+|---|---|---|
+| `/api/v1/enroll` and subpaths (unauthenticated enrollment) | 10 | 1 request / 10 s |
+| All other routes (REST API, docs) | 120 | 20 requests / s |
+
+The strict budget protects the unauthenticated enrollment endpoints; the REST API budget is sized so dispatch-and-poll clients aren't locked out. Note that `/api/v1/enrollments` (the admin REST route) is **not** an enrollment path — it gets the API budget.
+
+## Endpoints
+
+Public (only registered when docs are enabled):
+
+- `GET /api/v1/docs`
+- `GET /api/v1/docs/`
+- `GET /api/v1/openapi.yaml`
+- `GET /api/v1/openapi.json`
+
+Protected:
+
+- `POST /api/v1/jobs` dispatch job
+- `GET /api/v1/jobs/{jid}` job status + returns
+- `GET /api/v1/enrollments?state=<state|all>` list enrollments (default: `pending`)
+- `POST /api/v1/enrollments/{id}/approve` approve enrollment
+
+## Dispatch Request
+
+`POST /api/v1/jobs`
+
+```json
+{
+  "target": "web-*",
+  "function": "test.ping",
+  "args": {},
+  "timeout": "60s",
+  "metadata": {
+    "source": "ci"
+  }
+}
+```
+
+Notes:
+
+- Use either `target` (resolved by master) or explicit `targets` list.
+- `timeout` is Go duration format. Default is `60s`.
+- Response: `202 Accepted` with `jid`, resolved `targets`, and current `status`.
+
+## Enrollment List States
+
+For `GET /api/v1/enrollments`, `state` accepts:
+
+- `pending`
+- `approved`
+- `rejected`
+- `issued`
+- `active`
+- `revoked`
+- `all`
+
+## Logging
+
+Each API request logs a structured completion record:
+
+- `msg=http.request.complete`
+- `request_id` (from `X-Request-ID` or generated)
+- `method`, `path`, `status`
+- `duration_ms`, `bytes_out`
+- `remote_ip`, `user_agent`
+- `auth_username` (for authenticated routes)
+- `jid` / `enrollment_id` when applicable
+
+Unauthorized access attempts log:
+
+- `msg=http.request.unauthorized`
+- request metadata and failure reason
+
+## OpenAPI
+
+The OpenAPI artifacts are embedded into the binary and served directly:
+
+- YAML: `/api/v1/openapi.yaml`
+- JSON: `/api/v1/openapi.json`
+
+Swagger UI is served from embedded static HTML:
+
+- `/api/v1/docs`

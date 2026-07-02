@@ -1,0 +1,233 @@
+---
+title: "Timeouts and Cancellation"
+---
+
+Zester provides timeout and cancellation mechanisms to handle unresponsive peels, long-running jobs, and operational control over in-flight work. Every job has a configurable timeout, and any running job can be cancelled by the operator or programmatically through the Manager API.
+
+**Source**: `pkg/job/watcher.go`, `pkg/job/manager.go`
+
+---
+
+## Job Timeout
+
+Every job has a configurable `Timeout` field (`time.Duration`) that limits how long the master waits for all target peels to return results. At dispatch the master converts it into an absolute **`Deadline`** on the job record (`Created + Timeout`, anchored to the *master's* clock — client-supplied values are never trusted), and the Watcher's timer is capped at `time.Until(Deadline)`.
+
+The deadline is what makes failover honest: a watcher recovered after a master crash honors the **remaining** time budget instead of restarting the full timeout, and a job whose deadline has already passed is finalized immediately from the returns collected so far. A job record read back with a zero deadline is defensively normalized to `Created + Timeout` before use.
+
+### Default Timeout
+
+If no timeout is specified when creating a job, a default of **60 seconds** is applied when the deadline is computed.
+
+<Callout type="info" title="CLI default differs from Watcher default">
+The Watcher's built-in default is 60 seconds, but the `state.apply` CLI command defaults to **5 minutes**. The CLI default is intentionally longer because state applications typically involve package installs and service restarts. The 60-second Watcher default is a safety net for programmatic usage where no timeout is specified.
+</Callout>
+
+### Setting Timeouts
+
+Use the `--timeout` flag to set a custom timeout from the CLI:
+
+```bash title="Custom timeout examples"
+# Default 5-minute timeout (CLI default for state.apply)
+zester 'web*' state.apply webserver
+
+# Custom 10-minute timeout for complex states
+zester 'web*' state.apply webserver --timeout 10m
+
+# Short timeout for quick connectivity checks
+zester 'web*' state.apply test.ping --timeout 30s
+
+# Long timeout for large-scale deployments
+zester '*' state.apply base --timeout 1h
+```
+
+The timeout value accepts Go duration strings: `30s`, `5m`, `1h`, `2h30m`, etc.
+
+---
+
+## Timeout Behavior
+
+When the timer fires, the Watcher stops waiting for additional returns and proceeds to finalization. The final status depends on how many returns were collected before the timeout expired.
+
+```
+Watcher starts
+  |
+  +-- Subscribe to ack + return subjects
+  |
+  +-- Start timer: time.NewTimer(timeout)
+  |
+  +-- Arm one-shot ack-window timer (fresh dispatches only, default 5s)
+  |
+  +-- select {
+        case <-ctx.Done():     // All returns received or cancelled
+        case <-timer.C:        // Timeout expired
+        case <-ackC:           // Ack window: re-dispatch once to silent targets
+      }
+  |
+  +-- Finalize: determine status, persist results
+```
+
+The ack-window case never terminates the loop -- it fires exactly once, re-sending the ExecRequest to targets that have neither acked nor returned (see [Acks and Silent-Target Re-Dispatch](/docs/guides/jobs/dispatching#acks-and-silent-target-re-dispatch)).
+
+### Final Status After Timeout
+
+| Condition | Status | Description |
+|---|---|---|
+| All targets returned successfully before timer fired | `complete` | Timer never fires because `ctx.Done()` triggers first |
+| All targets returned, some with errors | `failed` | All peels responded but one or more reported failures |
+| Cancelled before all targets returned | `canceled` | Operator or API cancelled the job |
+| Some targets returned, timer fired | `partial` | Partial results are stored; missing peels are identifiable |
+| No targets returned, timer fired | `timeout` | No peels responded within the timeout window |
+
+<Callout type="warn" title="Partial results are still stored">
+When a job completes with `partial` status, the returns that were received are still persisted in the `job-returns` KV bucket. This data is not discarded -- you can retrieve and act on partial results even though the job did not fully complete.
+</Callout>
+
+### Identifying Missing Peels
+
+Compare the job's target list with the returned peel IDs:
+
+```bash title="Inspect a partial job"
+$ zester job show <jid>
+{
+  "jid": "2hPx2Kd8VnR7YmWqTz4PLsCfNjA",
+  "function": "state.apply",
+  "targets": ["web-01", "web-02", "web-03"],
+  "status": "partial",
+  ...
+}
+
+Returns:
+PEEL    SUCCESS  DURATION
+web-01  true     12.3s
+web-02  true     14.1s
+```
+
+In this example, `web-03` did not return. It either never received the job, is still executing, or crashed during execution. Check peel connectivity and logs to diagnose.
+
+---
+
+## Cancellation
+
+Jobs can be cancelled by the operator via the CLI or programmatically through the Manager API.
+
+### CLI Cancellation
+
+```bash
+zester job kill <jid>
+```
+
+```bash title="Cancel a running job"
+$ zester job kill 2hPx2Kd8VnR7YmWqTz4PLsCfNjA
+Cancel signal sent for job 2hPx2Kd8VnR7YmWqTz4PLsCfNjA
+```
+
+### Manager API Cancellation
+
+```go title="pkg/job/manager.go"
+err := manager.Cancel(ctx, jid)
+```
+
+The `Manager.Cancel` method performs three operations:
+
+1. **Signal the Watcher** -- Looks up the active Watcher for the given JID and calls `watcher.Cancel()`, which invokes the context cancel function to stop the Watcher's select loop.
+
+2. **Publish a cancel signal to peels** -- Publishes to `zester.job.<jid>.cancel`. Each peel executing this job subscribes to this subject and aborts its execution context when the signal arrives.
+
+3. **Publish a cancel event** -- Publishes an event to `zester.job.<jid>.cancel` with `EventCanceled` type and `"cancelled by user"` data. This is captured by the `job-events` stream for audit.
+
+### Watcher Cancellation Internals
+
+The Watcher's `Cancel()` method triggers the internal context cancellation function:
+
+```go title="pkg/job/watcher.go"
+func (w *Watcher) Cancel() {
+    w.mu.Lock()
+    w.canceled = true
+    fn := w.cancelFunc
+    w.mu.Unlock()
+    if fn != nil {
+        fn()
+    }
+}
+```
+
+This causes the Watcher's `select` to unblock on `ctx.Done()`, proceeding to finalization. Any returns collected before cancellation are preserved.
+
+<Callout type="success" title="Cancellation propagates to peels">
+When a job is dispatched, each peel creates a cancellable execution context and subscribes to `zester.job.<jid>.cancel`. When the cancel signal arrives, the peel's context is cancelled, aborting the running state modules. However, some operations (like in-progress package installations) may not be safely interruptible and will complete before the peel stops.
+</Callout>
+
+---
+
+## Manager Shutdown
+
+When the master process shuts down gracefully, the `Manager.Shutdown()` method **detaches** all active Watchers in parallel and waits for them to finish:
+
+```go title="pkg/job/manager.go"
+func (m *Manager) Shutdown() {
+    // Signal all watchers to detach
+    for _, w := range watchers {
+        w.Detach()
+    }
+    // Wait for each watcher's Watch goroutine to persist and exit
+    for _, w := range watchers {
+        <-w.Done()
+    }
+    // Clear the watchers map
+}
+```
+
+Detaching is deliberately **not** finalizing: the peels are still executing, so writing a terminal status would be a lie. Instead:
+
+1. **Collected returns are persisted** -- Each Watcher flushes its per-peel returns to the `job-returns` KV bucket before exiting.
+2. **In-flight jobs stay `running`** -- The job keeps its current epoch so the orphan scanner on a surviving master can reclaim it once this master's heartbeat expires (~55s), seed the recovery watcher from the persisted per-peel keys plus a `job-events` stream replay, and collect the outstanding returns against the remaining deadline.
+3. **No goroutine leaks** -- All Watcher goroutines are cleanly terminated and awaited.
+
+A detached watcher whose targets have *all* already returned finalizes normally -- the job is genuinely done. Operator cancellation (`Manager.Cancel`) still finalizes as `canceled`.
+
+<Callout type="warn" title="Ungraceful shutdown is recovered by surviving masters">
+If the master process is killed with `SIGKILL` (or crashes), active Watchers do not get a chance to finalize. In a multi-master deployment the orphan scanner on a surviving master reclaims the jobs (~55s worst case): per-peel returns already persisted to `job-returns` are read back, and the `job-events` stream is replayed to recover any returns that missed KV before the recovery watcher finalizes. In a single-master deployment the jobs remain `running` in KV until the same master restarts and reclaims them, or the 7-day TTL expires.
+</Callout>
+
+---
+
+## Best Practices
+
+### Setting Realistic Timeouts
+
+| Scenario | Suggested Timeout | Rationale |
+|---|---|---|
+| `test.ping` | 30s | Simple connectivity check |
+| `fact.refresh` | 1m | Fact collection is fast |
+| `cmd.run` (simple) | 2m | Short commands like `uptime` or `df` |
+| `state.apply` (small) | 5m | Default, covers most state applications |
+| `state.apply` (large) | 15-30m | Complex states with package installs |
+| `pkg.installed` (many packages) | 10-20m | Package downloads and installs take time |
+| Large-scale rollout | 30-60m | Hundreds of peels with broad target expressions |
+
+### Monitoring Partial Returns
+
+When jobs frequently complete with `partial` status, investigate:
+
+- **Network connectivity** -- Are specific peels consistently unreachable? Check NATS connection status.
+- **Peel performance** -- Are some peels slower than others? Compare `Duration` values in returns.
+- **Timeout adequacy** -- Is the timeout too short for the operation? Increase it and re-run.
+
+### Retry Patterns
+
+Zester does not have built-in automatic retry. Retries are intentionally manual to prevent cascading failures.
+
+```bash title="Retry missing peels after a partial result"
+# Original job targeted all web servers
+zester 'web*' state.apply webserver --timeout 10m
+
+# Check which peels returned
+zester job show <jid>
+
+# Retry specific missing peels with a longer timeout
+zester 'L@web-03,web-07' state.apply webserver --timeout 20m
+```
+
+<Callout type="success" title="Retry in smaller target slices">
+For large retries, split targets into smaller lists or narrower expressions to reduce load and isolate failures.
+</Callout>

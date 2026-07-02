@@ -1,0 +1,477 @@
+---
+title: "Syntax Guide"
+description: "Zester templates use Jinja2/Gonja syntax. This page is a complete reference for the template language as it applies to .zy files."
+---
+
+## Delimiters
+
+| Delimiter | Purpose | Example |
+|-----------|---------|---------|
+| `{{ }}` | Output expression | `{{ facts.os.name }}` |
+| `{% %}` | Statement/logic | `{% if facts.os.name == "linux" %}` |
+| `{# #}` | Comment (not rendered) | `{# TODO: add TLS config #}` |
+
+## Variables
+
+Variables are accessed using dot notation. In Zester templates, the primary variables are `facts` and `settings`:
+
+```yaml title="Variable access with dot notation"
+hostname: {{ facts.network.hostname }}
+os: {{ facts.os.name }}
+app_port: {{ settings.app.port }}
+```
+
+### Bracket Notation
+
+For dynamic keys or keys with special characters, use bracket notation:
+
+```yaml title="Dynamic key access"
+{% set ns = "os" %}
+platform: {{ facts[ns]["platform"] }}
+```
+
+### Undefined Variables
+
+Accessing an undefined variable produces an empty string. Use the `default` filter to provide fallbacks:
+
+```yaml title="Safe defaults for missing values"
+log_level: {{ settings.log_level | default("info") }}
+region: {{ facts.region | default("us-east-1") }}
+```
+
+<Callout type="success" title="Always use defaults for optional values">
+If a fact or setting might not exist on every peel, use `default()` to avoid rendering empty strings in your output YAML.
+</Callout>
+
+## Literals
+
+| Type | Example |
+|------|---------|
+| String | `"hello"`, `'world'` |
+| Integer | `42`, `-1`, `0` |
+| Float | `3.14`, `-0.5` |
+| Boolean | `true`, `false` |
+| List | `[1, 2, 3]`, `["a", "b"]` |
+| Dict | `{"key": "value"}` |
+| None | `none` |
+
+## Expressions
+
+Expressions can be used anywhere a value is expected:
+
+```yaml title="Arithmetic and string expressions"
+# Arithmetic
+max_connections: {{ facts.cpu.count * 25 }}
+half_memory_mb: {{ facts.memory.total / 1048576 / 2 }}
+
+# String concatenation with the ~ operator
+fqdn: {{ facts.network.hostname ~ "." ~ settings.domain }}
+
+# Comparisons
+{% if facts.memory.total > 8589934592 %}
+large_memory: true
+{% endif %}
+```
+
+### Comparison Operators
+
+| Operator | Description |
+|----------|-------------|
+| `==` | Equal |
+| `!=` | Not equal |
+| `<` | Less than |
+| `>` | Greater than |
+| `<=` | Less than or equal |
+| `>=` | Greater than or equal |
+
+### Logical Operators
+
+| Operator | Description |
+|----------|-------------|
+| `and` | Logical AND |
+| `or` | Logical OR |
+| `not` | Logical NOT |
+
+### Math Operators
+
+| Operator | Description |
+|----------|-------------|
+| `+` | Addition |
+| `-` | Subtraction |
+| `*` | Multiplication |
+| `/` | Division |
+| `//` | Integer division |
+| `%` | Modulo |
+| `**` | Power |
+
+### Membership
+
+| Operator | Description |
+|----------|-------------|
+| `in` | Check if value is in list/dict |
+| `not in` | Check if value is not in list/dict |
+
+```yaml title="Membership test"
+{% if "eth0" in facts.network.interfaces %}
+primary_interface: eth0
+{% endif %}
+```
+
+### String Concatenation
+
+Use the `~` operator to concatenate strings:
+
+```yaml title="String concatenation"
+full_name: {{ facts.network.hostname ~ "." ~ facts.domain }}
+```
+
+---
+
+## Control Structures
+
+### If / Elif / Else
+
+Conditional blocks let you branch based on facts, settings, or any expression:
+
+```yaml title="Conditional package manager selection"
+{% if facts.os.family == "debian" %}
+package_manager: apt
+{% elif facts.os.family == "rhel" %}
+package_manager: yum
+{% elif facts.os.family == "arch" %}
+package_manager: pacman
+{% else %}
+package_manager: unknown
+{% endif %}
+```
+
+Combine conditions with logical operators:
+
+```yaml title="Compound conditions"
+{% if facts.os.name == "linux" and facts.cpu.count >= 4 %}
+high_performance: true
+{% endif %}
+
+{% if not facts.maintenance_mode or facts.environment == "dev" %}
+accept_traffic: true
+{% endif %}
+```
+
+### For Loops
+
+```yaml title="Simple iteration"
+ntp_servers:
+  {% for server in ["0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org"] %}
+  - {{ server }}
+  {% endfor %}
+```
+
+```yaml title="Loop over facts"
+listen_addresses:
+  {% for ip in facts.network.ipv4 %}
+  - {{ ip }}:443
+  {% endfor %}
+```
+
+```yaml title="Loop with index"
+{% for mount in facts.disk.mounts %}
+mount_{{ loop.index }}:
+  path: {{ mount.mountpoint }}
+  device: {{ mount.device }}
+{% endfor %}
+```
+
+#### Loop Variables
+
+Inside a `for` loop, these special variables are available:
+
+| Variable | Description |
+|----------|-------------|
+| `loop.index` | Current iteration (1-indexed) |
+| `loop.index0` | Current iteration (0-indexed) |
+| `loop.first` | `true` on the first iteration |
+| `loop.last` | `true` on the last iteration |
+| `loop.length` | Total number of items |
+| `loop.revindex` | Iterations remaining (1-indexed) |
+| `loop.revindex0` | Iterations remaining (0-indexed) |
+
+### For with Else
+
+The `else` block executes when the iterable is empty:
+
+```yaml title="Fallback when no peers found"
+upstream_servers:
+  {% for peer in basket("role:api", "network.ipv4") %}
+  - {{ peer.value }}:8080
+  {% else %}
+  - localhost:8080  # Fallback when no API servers found
+  {% endfor %}
+```
+
+### For with Conditions
+
+```yaml title="Filtering within a loop"
+# Alert on disks over 80% usage
+{% for mount in facts.disk.mounts %}
+{% if mount.used_percent > 80 %}
+  - alert: {{ mount.mountpoint }} is {{ mount.used_percent }}% full
+{% endif %}
+{% endfor %}
+```
+
+---
+
+## Variable Assignment
+
+### Set
+
+```yaml title="Assigning computed values"
+{% set max_conns = facts.cpu.count * 25 %}
+max_connections: {{ max_conns }}
+
+{% set is_production = facts.environment == "production" %}
+{% if is_production %}
+log_level: warn
+{% endif %}
+```
+
+### Set Block
+
+Capture a block of output into a variable:
+
+```yaml title="Capturing a block into a variable"
+{% set server_block %}
+server {
+    listen 443 ssl;
+    server_name {{ facts.network.fqdn }};
+}
+{% endset %}
+
+nginx_config: |
+  {{ server_block }}
+```
+
+---
+
+## Filters
+
+Filters transform values. They are applied with the pipe (`|`) operator:
+
+```yaml title="Applying filters"
+hostname: {{ facts.network.hostname | upper }}
+config: {{ settings.app | to_json }}
+```
+
+Filters can be chained -- they apply left to right:
+
+```yaml title="Chaining filters"
+name: {{ facts.network.hostname | lower | truncate(10) }}
+db_host: {{ settings.database.host | default("localhost") | upper }}
+```
+
+Filters can accept arguments:
+
+```yaml title="Filter arguments"
+truncated: {{ value | truncate(20) }}
+joined: {{ servers | join(", ") }}
+fallback: {{ settings.port | default(8080) }}
+```
+
+See [Filters](/docs/guides/templating/filters) for the complete filter reference, including all Zester-specific and built-in filters.
+
+---
+
+## Comments
+
+Comments are enclosed in `{# #}` and are stripped from the rendered output:
+
+```yaml title="Template comments"
+{# This is a comment -- it will not appear in the output #}
+
+hostname: {{ facts.network.hostname }}
+
+{#
+  Multi-line comments work too.
+  Use them to document complex template logic.
+#}
+```
+
+---
+
+## Whitespace Control
+
+By default, template tags produce the whitespace around them. Use `-` to strip whitespace:
+
+```yaml title="Without whitespace control"
+items:
+  {% for i in [1, 2, 3] %}
+  - {{ i }}
+  {% endfor %}
+```
+
+```yaml title="With whitespace control"
+items:
+  {%- for i in [1, 2, 3] %}
+  - {{ i }}
+  {%- endfor %}
+```
+
+| Syntax | Effect |
+|--------|--------|
+| `{%- ... %}` | Strip whitespace before the tag |
+| `{% ... -%}` | Strip whitespace after the tag |
+| `{%- ... -%}` | Strip whitespace on both sides |
+| `{{- ... }}` | Strip whitespace before the expression |
+| `{{ ... -}}` | Strip whitespace after the expression |
+
+<Callout type="warn" title="Whitespace in YAML">
+Be careful with whitespace control in `.zy` files. YAML is whitespace-sensitive, and aggressive trimming can break indentation. Verify with a dry run (`zester '<target>' state.apply <name> --test`) before applying.
+</Callout>
+
+---
+
+## Template Inheritance
+
+### Extends and Blocks
+
+Use template inheritance for shared layouts. Paths are relative to the engine's base path (`/srv/zester`):
+
+```yaml title="/srv/zester/settings/base_app.zy (parent)"
+app:
+  log_level: {% block log_level %}info{% endblock %}
+  port: {% block port %}8080{% endblock %}
+  features:
+    {% block features %}
+    monitoring: true
+    {% endblock %}
+```
+
+```yaml title="/srv/zester/settings/roles/api.zy (child)"
+{% extends "settings/base_app.zy" %}
+
+{% block port %}9090{% endblock %}
+
+{% block features %}
+{{ super() }}
+    rate_limiting: true
+    auth: jwt
+{% endblock %}
+```
+
+Renders to:
+
+```yaml
+app:
+  log_level: info
+  port: 9090
+  features:
+    monitoring: true
+    rate_limiting: true
+    auth: jwt
+```
+
+<Callout type="success" title="super()">
+Use `{{ super() }}` inside a block to include the parent block's content. This is useful for additive overrides where you want to keep the parent's defaults and add more.
+</Callout>
+
+---
+
+## Includes
+
+Pull in another template file. Paths are relative to the engine's base path (`/srv/zester`):
+
+```yaml title="Including a partial template"
+{% include "settings/partials/ssl_config.zy" %}
+
+nginx:
+  worker_processes: {{ facts.cpu.count }}
+```
+
+The included template has access to the same context variables (`facts`, `settings`, etc.) as the parent template.
+
+---
+
+## Macros
+
+Macros are reusable template functions:
+
+```yaml title="Defining and calling macros"
+{% macro upstream(name, servers, port) %}
+upstream_{{ name }}:
+  {% for server in servers %}
+  - host: {{ server }}
+    port: {{ port }}
+  {% endfor %}
+{% endmacro %}
+
+{{ upstream("api", ["10.0.1.1", "10.0.1.2"], 8080) }}
+{{ upstream("auth", ["10.0.2.1"], 9090) }}
+```
+
+Renders to:
+
+```yaml
+upstream_api:
+  - host: 10.0.1.1
+    port: 8080
+  - host: 10.0.1.2
+    port: 8080
+
+upstream_auth:
+  - host: 10.0.2.1
+    port: 9090
+```
+
+---
+
+## Tests
+
+Tests check a value's type or property. Use with `is`:
+
+```yaml title="Using tests"
+{% if facts.cpu.count is defined %}
+workers: {{ facts.cpu.count }}
+{% endif %}
+
+{% if facts.network.ipv4 is iterable %}
+addresses:
+  {% for ip in facts.network.ipv4 %}
+  - {{ ip }}
+  {% endfor %}
+{% endif %}
+
+{% if settings.debug_mode is none %}
+debug_mode: false
+{% endif %}
+```
+
+Common tests:
+
+| Test | Description |
+|------|-------------|
+| `defined` | Value is not undefined |
+| `undefined` | Value is undefined |
+| `none` | Value is none/null |
+| `string` | Value is a string |
+| `number` | Value is numeric |
+| `iterable` | Value is iterable (list, dict) |
+| `mapping` | Value is a dict/map |
+| `even` | Number is even |
+| `odd` | Number is odd |
+
+---
+
+## Raw Blocks
+
+To output literal template delimiters without processing, use the `raw` block:
+
+```yaml title="Escaping template syntax"
+{% raw %}
+  This will not be {{ processed }} by the template engine.
+  {% This is literal too %}
+{% endraw %}
+```
+
+<Callout type="info" title="When to use raw blocks">
+Raw blocks are useful when generating configuration for other template engines, or when you need literal `{{ }}` or `{% %}` in your output (e.g., systemd unit files with specifiers, or Prometheus alerting rules).
+</Callout>

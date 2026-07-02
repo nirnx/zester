@@ -1,0 +1,78 @@
+---
+title: "Overview"
+---
+
+Facts are automatically collected system information about each peel -- the Zester equivalent of SaltStack grains. They describe the hardware, operating system, network configuration, and other attributes of the machine a peel runs on.
+
+## Why Facts Matter
+
+Facts serve two critical roles in Zester:
+
+1. **Targeting** -- The master uses facts to decide which peels receive which settings and states. For example, you can target all peels running Linux, or all peels with more than 8 CPU cores.
+2. **Template context** -- Facts are available inside `.zy` template files, so you can generate configuration that adapts to the host (e.g., allocate 80% of available memory to a database).
+
+## How Facts Work
+
+```
+┌─────────────────────────────────────────────┐
+│                  Peel                       │
+│                                             │
+│  ┌───────────┐  ┌───────────┐  ┌─────────┐ │
+│  │ OS        │  │ Network   │  │ CPU     │ │
+│  │ Collector │  │ Collector │  │Collector│ │
+│  └─────┬─────┘  └─────┬─────┘  └────┬────┘ │
+│        │              │              │      │
+│        └──────────┬───┘──────────────┘      │
+│                   ▼                         │
+│           Facts Manager                     │
+│           (merge + publish)                 │
+│                   │                         │
+└───────────────────┼─────────────────────────┘
+                    │  NATS KV
+                    ▼  (bucket: "facts")
+┌─────────────────────────────────────────────┐
+│                 Master                      │
+│                                             │
+│           Facts Index                       │
+│     (flatten → radix-tree lookup)           │
+│                                             │
+│     Match("os.name", "linux") → [peels]     │
+└─────────────────────────────────────────────┘
+```
+
+Each peel runs a set of **collectors** at startup (and optionally on a schedule). The collected facts are merged into a single nested map and published to the NATS JetStream KV bucket named `facts`, keyed by peel ID.
+
+On the master side, a **Facts Index** watches the KV bucket and builds a flattened, searchable index used for fast targeting.
+
+## Fact Namespaces
+
+Every collector owns a top-level namespace. The built-in collectors produce the following namespaces:
+
+| Namespace        | Collector | Refresh Interval | Description |
+|------------------|-----------|-------------------|-------------|
+| `os`             | OS        | Once at startup   | Operating system and kernel information |
+| `network`        | Network   | Once at startup   | Hostname, FQDN, IP addresses, interfaces |
+| `cpu`            | CPU       | Once at startup   | CPU model, core counts, clock speed |
+| `memory`         | Memory    | Every 5 minutes   | RAM and swap usage |
+| `disk`           | Disk      | Every 5 minutes   | Mount points and disk usage |
+| *(root)*         | DefaultIP | Once at startup   | Default outbound IPv4 address (`default_ipv4`), merged at top level |
+| *(root)*         | Custom    | Every 30 seconds  | Persistent custom facts from `/etc/zester/facts` (merged at top level, not namespaced) |
+
+## Accessing Facts
+
+Facts can be queried several ways:
+
+- **Direct execution (Salt-style)**: Query facts directly from peels using `zester`:
+    - `zester '<target>' facts.items` -- all facts (like Salt's `grains.items`)
+    - `zester '<target>' facts.get <key>` -- nested key lookup (like Salt's `grains.get`)
+    - `zester '<target>' facts.keys` -- list top-level fact names (like Salt's `grains.ls`)
+- **Management CLI**: `zester kv fact get <peel> [key]` -- reads from NATS KV without contacting the peel
+- **Templates**: `{{ facts.os.name }}` inside `.zy` files
+- **Dot notation**: `facts.Get("os.name")` in Go code
+- **NATS KV**: Direct read from the `facts` bucket using any NATS client
+
+## In This Section
+
+- [Built-in Collectors](/docs/guides/facts/collectors) -- Every field from every collector, with example output
+- [Custom Facts](/docs/guides/facts/custom) -- Defining your own facts via YAML configuration
+- [Querying Facts](/docs/guides/facts/querying) -- Dot notation, CLI usage, NATS KV access, and the index API

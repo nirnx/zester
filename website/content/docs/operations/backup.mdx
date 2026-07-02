@@ -1,0 +1,308 @@
+---
+title: "Backup & Recovery"
+---
+
+All persistent Zester data lives in NATS JetStream, stored on the **NATS server's** filesystem. The master is a stateless NATS client — it does not store JetStream data locally. This guide covers what to back up, how to do it, and how to recover from data loss.
+
+## What Data Lives Where
+
+### JetStream KV Buckets
+
+All operational data is stored in JetStream KV buckets under `/var/lib/zester/nats/jetstream/`:
+
+| KV Bucket | Purpose | TTL | History | Critical? |
+|---|---|---|---|---|
+| `facts` | Peel system facts (OS, network, hardware) | None | 5 revisions | **Yes** — loss means full fact re-sync |
+| `settings-files` | Sanitized .zy template files for peel-side rendering | None | 3 revisions | **Yes** — loss means re-publish from master |
+| `secrets` | Per-peel encrypted sensitive values | None | 3 revisions | **Yes** — loss means re-encrypt from master |
+| `basket` | Peel-to-peel shared data | None | 1 revision | Medium — peels re-populate on next cycle |
+| `jobs` | Job specs and status | 7 days | 10 revisions | Low — historical, auto-expires |
+| `job-returns` | Per-peel job execution results | 7 days | 1 revision | Low — historical, auto-expires |
+| `master-heartbeat` | Master instance heartbeats | 15 seconds | 1 revision | Low — auto-refreshed on master startup |
+| `enrollments` | Peel enrollment records and state | None | 10 revisions | **Yes** — loss means re-enrollment |
+| `enroll-challenges` | Short-lived enrollment challenge nonces | 5 minutes | 1 revision | Low — ephemeral, memory storage |
+
+### JetStream Streams
+
+| Stream | Purpose | Retention | Critical? |
+|---|---|---|---|
+| `job-events` | Full job lifecycle audit log | 7 days (LimitsPolicy) | Medium — audit trail, auto-expires |
+
+### Files on Disk
+
+| Data | Location | Managed By | Critical? |
+|---|---|---|---|
+| State files (SLS) | `/srv/zester/states/` | Git (source of truth) | **Yes** — restore from git |
+| Settings templates | `/srv/zester/settings/` | Git (source of truth) | **Yes** — restore from git |
+| Master config | `/etc/zester/master.yaml` | Config management | **Yes** — restore from CM/git |
+| TLS certificates | `/etc/zester/tls/` | Vault / cert-manager | **Yes** — re-issue from CA |
+| Operator/Account nkeys | Offline / Vault / HSM | Manual | **Critical** — irrecoverable if lost |
+| JetStream data | `/var/lib/zester/nats/` | NATS | **Yes** — all runtime state |
+
+<Callout type="error" title="Back up your nkey seeds">
+Operator and account nkey seeds are the root of trust for your entire Zester deployment. If lost, you must re-bootstrap every peel with new credentials. Store them in a hardware security module (HSM), HashiCorp Vault, or equivalent secure offline storage.
+</Callout>
+
+## Backup Procedures
+
+### JetStream Backup with NATS CLI
+
+The NATS CLI provides stream-level backup that captures all data in a consistent snapshot:
+
+```bash
+# Back up all KV buckets (each KV bucket is a JetStream stream named KV_<name>)
+BACKUP_DIR="/backup/nats/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+
+nats stream backup KV_facts          "$BACKUP_DIR/facts"
+nats stream backup KV_settings-files "$BACKUP_DIR/settings-files"
+nats stream backup KV_secrets        "$BACKUP_DIR/secrets"
+nats stream backup KV_basket         "$BACKUP_DIR/basket"
+nats stream backup KV_jobs           "$BACKUP_DIR/jobs"
+nats stream backup KV_job-returns    "$BACKUP_DIR/job-returns"
+nats stream backup KV_enrollments    "$BACKUP_DIR/enrollments"
+
+# Back up the job events stream
+nats stream backup job-events "$BACKUP_DIR/job-events"
+```
+
+<Callout type="info" title="KV bucket stream naming">
+JetStream KV buckets are stored as streams with the prefix `KV_`. The `facts` bucket is stored as stream `KV_facts`.
+</Callout>
+
+### Filesystem Backup
+
+For environments where the NATS CLI is not available, back up the JetStream data directory directly:
+
+```bash
+# Option 1: rsync (master can be running, but may miss in-flight writes)
+rsync -a /var/lib/zester/nats/jetstream/ /backup/nats/jetstream/
+
+# Option 2: LVM snapshot for consistency
+lvcreate --snapshot --size 10G --name nats-snap /dev/vg0/nats
+mount /dev/vg0/nats-snap /mnt/nats-snap
+rsync -a /mnt/nats-snap/jetstream/ /backup/nats/jetstream/
+umount /mnt/nats-snap
+lvremove -f /dev/vg0/nats-snap
+
+# Option 3: ZFS snapshot
+zfs snapshot zpool/nats@backup-$(date +%Y%m%d)
+zfs send zpool/nats@backup-$(date +%Y%m%d) > /backup/nats-$(date +%Y%m%d).zfs
+```
+
+<Callout type="success" title="Use filesystem snapshots for consistency">
+If the master is under heavy write load, filesystem-level snapshots (LVM, ZFS, or cloud provider snapshots) give you a consistent point-in-time backup without stopping the master.
+</Callout>
+
+### Backup Schedule
+
+| Data | Method | Frequency | Retention |
+|---|---|---|---|
+| JetStream KV buckets | `nats stream backup` or filesystem snapshot | Hourly | 7 days |
+| State files | Git push | On every change | Indefinite (git history) |
+| Settings templates | Git push | On every change | Indefinite (git history) |
+| Master config | Configuration management | On every change | Indefinite |
+| TLS certificates | Vault / secrets manager | On rotation | Until expiry + 30 days |
+| nkey seeds | Vault / HSM | On creation | Indefinite |
+
+### Automated Backup Script
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/bin/zester-backup.sh
+# Run via cron: 0 * * * * /usr/local/bin/zester-backup.sh
+
+set -euo pipefail
+
+BACKUP_BASE="/backup/zester"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP_DIR="$BACKUP_BASE/$TIMESTAMP"
+RETENTION_DAYS=7
+
+mkdir -p "$BACKUP_DIR"
+
+# Back up JetStream streams
+for stream in KV_facts KV_settings-files KV_secrets KV_basket KV_jobs KV_job-returns KV_enrollments job-events; do
+    echo "Backing up stream: $stream"
+    nats stream backup "$stream" "$BACKUP_DIR/$stream" 2>/dev/null || \
+        echo "WARN: Failed to back up $stream"
+done
+
+# Back up master config
+cp /etc/zester/master.yaml "$BACKUP_DIR/master.yaml"
+
+# Clean up old backups
+find "$BACKUP_BASE" -maxdepth 1 -type d -mtime +"$RETENTION_DAYS" -exec rm -rf {} \;
+
+echo "Backup completed: $BACKUP_DIR"
+```
+
+## Recovery Procedures
+
+### Restore from NATS CLI Backup
+
+```bash
+# Stop the master to prevent conflicts
+systemctl stop zester-master
+
+# Restore specific streams
+nats stream restore KV_facts      /backup/nats/20260210-120000/facts
+nats stream restore KV_settings-files /backup/nats/20260210-120000/settings-files
+nats stream restore KV_secrets    /backup/nats/20260210-120000/secrets
+nats stream restore KV_jobs       /backup/nats/20260210-120000/jobs
+nats stream restore KV_job-returns /backup/nats/20260210-120000/job-returns
+nats stream restore job-events    /backup/nats/20260210-120000/job-events
+
+# Start the master
+systemctl start zester-master
+
+# Verify NATS is healthy
+curl -s http://localhost:8222/jsz | jq '{streams, consumers, messages}'
+```
+
+### Restore from Filesystem Backup
+
+```bash
+# Stop the master
+systemctl stop zester-master
+
+# Remove current JetStream data
+rm -rf /var/lib/zester/nats/jetstream/
+
+# Restore from backup
+rsync -a /backup/nats/jetstream/ /var/lib/zester/nats/jetstream/
+
+# Fix ownership
+chown -R zester:zester /var/lib/zester/nats/
+
+# Start the master
+systemctl start zester-master
+```
+
+### Rebuild Without Backup
+
+If no backup is available, Zester can rebuild most data:
+
+1. **Start the master with an empty JetStream store.** The master creates all default KV buckets and streams on startup.
+
+2. **Facts rebuild automatically.** Peels re-sync their facts on the next collection interval (default: 5 minutes). Within one interval, the fact index is fully rebuilt.
+
+3. **Settings re-render from templates.** The master re-renders settings from the templates in `/srv/zester/settings/` using the rebuilt fact index. This happens automatically as facts arrive.
+
+4. **Job history is lost.** Historical job data and returns cannot be recovered without a backup. This does not affect ongoing operations.
+
+5. **Basket data is repopulated** by peels on their next reporting cycle.
+
+<Callout type="info" title="Recovery time without backup">
+A full rebuild from scratch takes approximately one fact collection interval (default: 5 minutes) for the fact index to fully repopulate. Settings are re-rendered as facts arrive. The only permanent data loss is job history.
+</Callout>
+
+## Data Retention Configuration
+
+### KV Bucket TTL
+
+Jobs and job-returns use a 7-day TTL by default. To change retention:
+
+```bash
+# Check current configuration
+nats stream info KV_jobs
+
+# Update job retention to 14 days
+nats stream edit KV_jobs --max-age 14d
+
+# Update job-returns retention to 3 days
+nats stream edit KV_job-returns --max-age 3d
+```
+
+### Job Events Stream Retention
+
+The `job-events` stream defaults to 7-day retention with LimitsPolicy:
+
+```bash
+# Extend to 30 days for audit compliance
+nats stream edit job-events --max-age 30d
+
+# Set maximum stream size
+nats stream edit job-events --max-bytes 10GB
+```
+
+### Purging Old Data
+
+To manually purge data when storage is running low:
+
+```bash
+# Purge all job returns older than 24 hours
+nats stream purge KV_job-returns --keep 0
+
+# Purge job events, keeping only the last 10,000 messages
+nats stream purge job-events --keep 10000
+
+# Purge a specific KV key
+nats kv del facts <peel-id>
+```
+
+<Callout type="warn" title="Purge operations are irreversible">
+Purged data cannot be recovered. Always take a backup before purging in production.
+</Callout>
+
+## Disaster Recovery
+
+### Scenario: Total Master Loss
+
+If the master server is completely lost (hardware failure, data corruption):
+
+1. **Provision a new server** with the same network identity (hostname, IP, or DNS).
+
+2. **Install the master binary** and restore configuration:
+    ```bash
+    cp zester-master /usr/bin/
+    # Restore config from git/CM
+    git clone git@repo:infra/zester-config.git /tmp/zester-config
+    cp /tmp/zester-config/master.yaml /etc/zester/
+    cp -r /tmp/zester-config/tls/ /etc/zester/tls/
+    ```
+
+3. **Restore JetStream data from backup** (if available):
+    ```bash
+    rsync -a /backup/nats/jetstream/ /var/lib/zester/nats/jetstream/
+    chown -R zester:zester /var/lib/zester/nats/
+    ```
+
+4. **Restore state and settings trees:**
+    ```bash
+    git clone git@repo:infra/zester-states.git /srv/zester/states
+    git clone git@repo:infra/zester-settings.git /srv/zester/settings
+    ```
+
+5. **Start the master:**
+    ```bash
+    systemctl start zester-master
+    ```
+
+6. **Peels reconnect automatically.** They have been buffering events and retrying connections. Once the master is back, they resume normal operation and re-sync facts.
+
+### Scenario: Clustered Master Node Loss
+
+In a 3-node NATS cluster, losing one node is tolerated automatically:
+
+1. **RAFT elects a new leader** within ~2 seconds. No manual intervention needed.
+2. **Replace the failed node** by provisioning a new server with the same cluster configuration.
+3. **Join the cluster** — NATS automatically synchronizes JetStream data to the new node.
+4. **Verify replica health:**
+    ```bash
+    nats server report jetstream
+    nats stream check
+    ```
+
+### Scenario: Split-Brain Recovery
+
+If a network partition causes a split-brain in the NATS cluster:
+
+1. **RAFT consensus prevents data corruption.** The minority partition becomes read-only.
+2. **Peels on the minority side** can still read cached facts/settings but cannot execute new jobs.
+3. **Fix the network issue.** NATS auto-heals when the partition resolves.
+4. **Verify data consistency:**
+    ```bash
+    nats stream check
+    nats server report jetstream
+    ```

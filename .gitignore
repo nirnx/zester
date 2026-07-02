@@ -1,0 +1,30 @@
+# Build artifacts
+bin/
+dist/
+
+# Test reports
+integration-report.html
+
+# Built binaries at repo root
+/zester
+/zester-master
+/zester-peel
+/zester-watchdog
+/zester-migrate
+*.test
+
+# Claude Code worktrees
+.claude/worktrees/
+
+# Docs site (Fumadocs, in website/) — build output
+website/out/
+website/.next/
+website/node_modules/
+website/.source/
+website/next-env.d.ts
+
+# Local MCP server config (contains API keys)
+.mcp.json
+
+# Local secrets (Context7 API key etc.) — never commit
+.env

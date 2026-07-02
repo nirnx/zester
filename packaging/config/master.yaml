@@ -1,0 +1,48 @@
+# Zester Master Configuration
+
+# NATS connection. Only tls:// URLs are accepted — plaintext nats:// is
+# rejected at startup. Point nats_ca at the CA that signed the NATS
+# server certificate (falls back to NATS_CA_FILE, then
+# /data/auth/nats-ca.crt when present, then the system trust store).
+nats_url: "tls://localhost:4222"
+nats_ca: "/var/lib/zester/auth/nats-ca.crt"
+
+auth_dir: "/var/lib/zester/auth"
+states_dir: "/var/lib/zester/states"
+settings_dir: "/var/lib/zester/settings"
+
+# JetStream replication factor for all Zester buckets/streams/object stores
+# (0 = single replica; set 3 on a 3+ node NATS cluster).
+jetstream_replicas: 0
+
+# Local /healthz, /readyz and /metrics endpoints, polled by zester-watchdog
+# (default 127.0.0.1:9091).
+# health_addr: "127.0.0.1:9091"
+
+# Log level: debug, info, warn or error (default info).
+# log_level: "info"
+
+# Log format: json or text (default json).
+# log_format: "json"
+
+# Enrollment HTTPS API (TLS is mandatory).
+enroll:
+  addr: ":8443"
+  tls_cert: "/var/lib/zester/auth/enroll.crt"
+  tls_key: "/var/lib/zester/auth/enroll.key"
+
+# REST API for automation, served on the enrollment listener.
+# Routes are only registered when at least one token is configured.
+# docs_enabled serves the Swagger UI + OpenAPI spec WITHOUT authentication
+# on the peel-facing port — leave it off unless you need it.
+# api:
+#   docs_enabled: false
+#   tokens:
+#     - username: "automation"
+#       token_file: "/var/lib/zester/auth/api-tokens/automation.token"
+
+# GitFS (optional)
+# gitfs:
+#   remotes: []
+#   interval: "5m"
+#   ssh_key: ""

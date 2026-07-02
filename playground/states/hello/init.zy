@@ -1,0 +1,10 @@
+/tmp/hello-zester.txt:
+  file.managed:
+    - content: |
+        Hello from Zester!
+        Peel ID: {{ facts.id }}
+        OS: {{ facts.os.name }}
+        Arch: {{ facts.os.arch }}
+        Generated at: {{ facts.os.uptime }}
+    - mode: "0644"
+    - makedirs: true

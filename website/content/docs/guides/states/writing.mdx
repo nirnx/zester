@@ -1,0 +1,396 @@
+---
+title: "Writing States"
+description: "State files define the desired configuration for target systems. Each file contains one or more state declarations in YAML format, describing resources that Zester should manage."
+---
+
+---
+
+## File Structure
+
+State files use YAML with a specific structure. Each top-level key is a **state ID**, and its value contains the **module declaration** and **parameters**.
+
+```yaml
+<state_id>:
+  <module.function>:
+    - <param>: <value>
+    - <param>: <value>
+    - require:
+      - <module.function>:<dependency_state_id>
+```
+
+### State ID
+
+The state ID is the unique name for a state instance within a file. It serves as both an identifier and a default value for the module's primary parameter when that parameter is not explicitly set.
+
+```yaml
+# The state ID "/etc/hosts" doubles as the file path
+/etc/hosts:
+  file.managed:
+    - content: "127.0.0.1 localhost"
+    - mode: "0644"
+```
+
+When you provide the primary parameter explicitly, the state ID is purely an identifier:
+
+```yaml
+# The state ID is descriptive; the actual path is set via "path"
+deploy_hosts_file:
+  file.managed:
+    - path: /etc/hosts
+    - content: "127.0.0.1 localhost"
+    - mode: "0644"
+```
+
+### Module Naming
+
+Modules follow a `<category>.<function>` naming convention:
+
+| Module | Category | Function | Purpose |
+|---|---|---|---|
+| `file.managed` | `file` | `managed` | Ensure a file exists with specific content and permissions |
+| `file.directory` | `file` | `directory` | Ensure a directory exists |
+| `file.absent` | `file` | `absent` | Ensure a file or directory does not exist |
+| `file.append` | `file` | `append` | Ensure content is appended to a file |
+| `cmd.run` | `cmd` | `run` | Execute a command on the system |
+| `pkg.installed` | `pkg` | `installed` | Ensure a system package is installed |
+| `test.ping` | `test` | `ping` | No-op state for testing connectivity |
+| `user.present` | `user` | `present` | Ensure a system user exists |
+| `user.absent` | `user` | `absent` | Ensure a system user does not exist |
+| `group.present` | `group` | `present` | Ensure a system group exists |
+| `group.absent` | `group` | `absent` | Ensure a system group does not exist |
+
+This table is a small sample. Zester ships many more built-in modules — `file.*` (`symlink`, `blockreplace`, `recurse`, `line`, `replace`, `comment`/`uncomment`, `keyvalue`, `copy`, `touch`), `pkg.*` (`removed`, `latest`, `purged`), `pkgrepo.managed`, `service.*`, `cron.*`, `mount.mounted`, `sysctl.present`, `locale.present`, `timezone.system`, `pip.installed`, `git.cloned`/`git.latest`, `archive.extracted`, `host.*`, `ssh_auth.*`, `module.run`, and the `test.*` helpers. See the [Module Reference](/docs/guides/modules) for the full list with parameters.
+
+The full state name used internally combines the module and state ID:
+
+```
+file.managed:/etc/hosts
+cmd.run:deploy_app
+pkg.installed:nginx
+```
+
+---
+
+## Parameters
+
+Parameters are passed as a YAML list under the module declaration. Each parameter is a key-value pair.
+
+### Inline Content
+
+```yaml
+motd:
+  file.managed:
+    - path: /etc/motd
+    - content: |
+        Welcome to {{ facts.hostname }}.
+        Managed by Zester.
+    - mode: "0644"
+```
+
+### File Source
+
+```yaml
+nginx_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx/nginx.conf
+    - mode: "0644"
+    - user: root
+    - group: root
+```
+
+### Commands
+
+```yaml
+initialize_database:
+  cmd.run:
+    - command: /usr/local/bin/init-db --setup
+    - cwd: /opt/myapp
+    - creates: /opt/myapp/.db-initialized
+    - env:
+        DB_HOST: localhost
+        DB_PORT: "5432"
+```
+
+### Packages
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - version: "1.24.0"
+    - refresh: true
+```
+
+---
+
+## Generic State Attributes
+
+Beyond module-specific parameters, every state accepts a set of generic attributes:
+
+| Attribute | Purpose |
+|---|---|
+| `onlyif` / `unless` | Shell-command guards: `onlyif` runs the state only if every command exits `0`; `unless` skips it if any command exits `0` |
+| `order` | Sorts states within a DAG level (`N`, `first`, or `last`) |
+| `retry` | Re-runs the state on failure (`retry: N` or `retry: {attempts: N, interval: seconds}`, interval default 10s) |
+| `failhard` | Aborts the remaining run levels if this state fails |
+| `names` | Expands one declaration into one state per listed name |
+
+```yaml
+base_tools:
+  pkg.installed:
+    - names:
+      - curl
+      - git
+    - retry: 3
+```
+
+See [Dependencies](/docs/guides/states/dependencies) for the full semantics of each attribute.
+
+---
+
+## Dependencies
+
+States declare dependencies using requisite parameters. The most common is `require`, but Zester supports the full Salt requisite set: `watch`, `onchanges`, `onfail`, `prereq`, `listen`, and the inverse `_in` forms of each. Each takes a list of state names in `module.function:state_id` format (Salt dict shorthand like `- pkg: nginx` is also accepted). See [Dependencies](/docs/guides/states/dependencies) for full details on all requisite types.
+
+```yaml
+install_package:
+  pkg.installed:
+    - name: nginx
+
+deploy_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx.conf
+    - require:
+      - pkg.installed:install_package
+
+start_service:
+  cmd.run:
+    - command: systemctl enable --now nginx
+    - creates: /run/nginx.pid
+    - require:
+      - file.managed:deploy_config
+```
+
+Dependencies create a DAG (Directed Acyclic Graph) that determines execution order. See [Dependencies](/docs/guides/states/dependencies) for details on resolution and parallel execution.
+
+---
+
+## State File Organization
+
+State files live under `/srv/zester/states/` on the master. A typical layout:
+
+```
+/srv/zester/
+  states/
+    base/
+      init.zy           # Base configuration applied to all peels
+      packages.zy       # Common packages
+      users.zy          # System users
+    webserver/
+      init.zy           # Nginx installation and config
+      vhosts.zy         # Virtual host configuration
+    database/
+      init.zy           # PostgreSQL setup
+      tuning.zy         # Performance tuning
+```
+
+---
+
+## Templating in States
+
+State files support Jinja2-compatible templating via [Gonja](https://github.com/nikolalohinski/gonja). Templates have access to the peel's facts, settings, and the `basket()` function.
+
+### Using Facts
+
+```yaml
+set_hostname:
+  cmd.run:
+    - command: hostnamectl set-hostname {{ facts.hostname }}
+    - creates: /etc/hostname
+
+{% if facts.os == "ubuntu" %}
+install_apt_packages:
+  pkg.installed:
+    - name: build-essential
+    - refresh: true
+{% endif %}
+```
+
+### Using Settings
+
+```yaml
+deploy_app_config:
+  file.managed:
+    - path: /etc/myapp/config.yml
+    - content: |
+        database:
+          host: {{ settings.db_host }}
+          port: {{ settings.db_port }}
+          name: {{ settings.db_name }}
+    - mode: "0600"
+    - user: myapp
+```
+
+### Using Basket
+
+```yaml
+deploy_haproxy_config:
+  file.managed:
+    - path: /etc/haproxy/haproxy.cfg
+    - content: |
+        frontend http
+          bind *:80
+        backend webservers
+        {% for peel in basket("role:webserver", "network.ip_addrs") %}
+          server {{ peel.peel_id }} {{ peel.value }}:8080 check
+        {% endfor %}
+    - mode: "0644"
+```
+
+---
+
+## Practical Examples
+
+### Complete Web Server Setup
+
+```yaml
+# states/webserver/init.zy
+
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - refresh: true
+
+nginx_config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx/nginx.conf
+    - mode: "0644"
+    - user: root
+    - group: root
+    - makedirs: true
+    - require:
+      - pkg.installed:install_nginx
+
+nginx_vhost:
+  file.managed:
+    - path: /etc/nginx/sites-available/default
+    - content: |
+        server {
+            listen 80;
+            server_name {{ facts.fqdn }};
+            root /var/www/html;
+
+            location / {
+                try_files $uri $uri/ =404;
+            }
+        }
+    - mode: "0644"
+    - require:
+      - pkg.installed:install_nginx
+
+enable_nginx:
+  cmd.run:
+    - command: systemctl enable --now nginx
+    - creates: /run/nginx.pid
+    - require:
+      - file.managed:nginx_config
+      - file.managed:nginx_vhost
+```
+
+### Application Deployment
+
+```yaml
+# states/myapp/deploy.zy
+
+install_deps:
+  pkg.installed:
+    - name: python3-pip
+
+create_app_user:
+  cmd.run:
+    - command: useradd -r -s /bin/false myapp
+    - creates: /home/myapp
+
+deploy_binary:
+  file.managed:
+    - path: /opt/myapp/bin/server
+    - source: /srv/zester/files/myapp/server
+    - mode: "0755"
+    - user: myapp
+    - makedirs: true
+    - require:
+      - cmd.run:create_app_user
+
+deploy_config:
+  file.managed:
+    - path: /opt/myapp/config.yml
+    - content: |
+        port: {{ settings.app_port | default(8080) }}
+        database:
+          host: {{ settings.db_host }}
+          password: {{ settings.db_password }}
+        log_level: {{ settings.log_level | default("info") }}
+    - mode: "0600"
+    - user: myapp
+    - require:
+      - cmd.run:create_app_user
+
+deploy_systemd_unit:
+  file.managed:
+    - path: /etc/systemd/system/myapp.service
+    - content: |
+        [Unit]
+        Description=My Application
+        After=network.target
+
+        [Service]
+        Type=simple
+        User=myapp
+        ExecStart=/opt/myapp/bin/server -config /opt/myapp/config.yml
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+    - mode: "0644"
+
+start_app:
+  cmd.run:
+    - command: systemctl daemon-reload && systemctl enable --now myapp
+    - require:
+      - file.managed:deploy_binary
+      - file.managed:deploy_config
+      - file.managed:deploy_systemd_unit
+```
+
+### Conditional Package Installation
+
+```yaml
+# states/base/packages.zy
+
+{% if facts.os_family == "debian" %}
+install_essentials:
+  pkg.installed:
+    - name: build-essential
+    - refresh: true
+
+install_curl:
+  pkg.installed:
+    - name: curl
+{% elif facts.os_family == "redhat" %}
+install_essentials:
+  pkg.installed:
+    - name: gcc
+    - refresh: true
+
+install_curl:
+  pkg.installed:
+    - name: curl
+{% endif %}
+
+install_git:
+  pkg.installed:
+    - name: git
+```

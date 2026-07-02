@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt needed on:"; echo "$out"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go mod tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: build
+        run: go build ./...
+
+      - name: unit tests
+        run: go test -count=1 ./...
+
+      - name: race detector (core packages)
+        run: go test -race -count=1 ./pkg/job/ ./pkg/schedule/ ./pkg/update/ ./pkg/statefiles/ ./pkg/basket/ ./pkg/facts/
+
+  integration:
+    runs-on: ubuntu-latest
+    # Docker-based end-to-end suite; heavier, so only on main pushes.
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: integration tests
+        run: go test -v -tags integration -count=1 -timeout 15m ./integration/

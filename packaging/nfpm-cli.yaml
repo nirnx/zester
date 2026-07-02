@@ -1,0 +1,12 @@
+name: zester
+arch: "${GOARCH}"
+platform: linux
+version: "${VERSION}"
+maintainer: "Zester Maintainers"
+description: "Zester CLI for operators"
+license: "Proprietary"
+contents:
+  - src: bin/release/zester
+    dst: /usr/local/bin/zester
+    file_info:
+      mode: 0755

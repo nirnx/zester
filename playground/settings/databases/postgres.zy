@@ -1,0 +1,4 @@
+pg_port: 5432
+max_connections: 200
+shared_buffers: 256MB
+pt: test

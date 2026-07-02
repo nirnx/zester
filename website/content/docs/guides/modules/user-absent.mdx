@@ -1,0 +1,82 @@
+---
+title: "user.absent"
+description: "Ensures a user account does not exist on the system."
+---
+
+**Source**: `pkg/state/modules/user.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Username to remove. If omitted, the state ID is used as the username. |
+| `purge` | `bool` | No | `false` | If `true`, remove the user's home directory and mail spool (`userdel -r`). |
+| `force` | `bool` | No | `false` | Parsed but not yet implemented in the execution layer. Has no effect. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+1. **User lookup** — looks up the user by name.
+2. If the user does not exist, the state reports no changes needed.
+3. If the user exists, the state needs changes.
+
+---
+
+## Apply Behavior
+
+1. Deletes the user via `userdel`.
+2. If `purge` is `true`, the home directory and mail spool are also removed (`userdel -r`).
+
+---
+
+## Revert Behavior
+
+No-op. User deletion cannot be reverted because the original user data (password hash, groups, etc.) is not preserved.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Remove a user, keeping their home directory
+zester 'web-01' user.absent olduser
+
+# Remove a user and purge their home directory
+zester 'web*' user.absent olduser purge=true
+```
+
+### State File
+
+**Simple user removal:**
+
+```yaml
+olduser:
+  user.absent: []
+```
+
+**Remove user and home directory:**
+
+```yaml
+remove_temp_user:
+  user.absent:
+    - name: tempuser
+    - purge: true
+```
+
+**Remove user after stopping their service:**
+
+```yaml
+decommission_app:
+  user.absent:
+    - name: appuser
+    - purge: true
+    - require:
+      - "cmd.run:stop_app_service"
+```

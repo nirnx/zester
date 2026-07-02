@@ -1,0 +1,515 @@
+---
+title: "Enrollment Security Specification"
+---
+
+This document defines the security requirements for the Zester peel enrollment flow. It covers cryptographic protocols, replay protection, rate limiting, audit logging, key storage, credential delivery, revocation, and incident response.
+
+The enrollment system allows peels to join a Zester deployment through a manual-approval or auto-trust workflow. Since enrollment is the gateway that introduces new identities into the trust hierarchy, it is the highest-value attack surface and must be secured accordingly.
+
+## Threat Model
+
+The enrollment system must defend against the following threat categories:
+
+| Threat | Description | Impact |
+|--------|-------------|--------|
+| **Impersonation** | Attacker enrolls a rogue peel to receive commands or exfiltrate settings | Full compromise of commands/data for that identity |
+| **Replay** | Attacker captures and replays a valid enrollment request | Unauthorized enrollment with a stolen challenge response |
+| **Denial of service** | Attacker floods enrollment endpoints to exhaust master resources | Legitimate peels cannot enroll |
+| **Key theft** | Attacker steals a peel's nkey seed from disk or memory | Full impersonation of that peel until revoked |
+| **Credential interception** | Attacker intercepts the one-time credential download | Full impersonation of the enrolled peel |
+| **Privilege escalation** | Attacker with peel-level access attempts to approve their own enrollment | Unauthorized fleet membership |
+
+## Shared Listener Exposure
+
+The master's enrollment TLS listener (default `:8443`) also hosts the master REST API and (optionally) its API docs. Each route class has a different authentication level (see `pkg/enroll/server.go` and `pkg/masterapi/handler.go`):
+
+| Route class | Authentication | Per-IP rate limit |
+|-------------|----------------|-------------------|
+| `/api/v1/enroll` and subpaths (peel-facing enrollment) | None (TLS only); `/creds` additionally requires an Nkey signature | Strict: burst 10, 1 req/10s |
+| REST API (`/api/v1/enrollments*`, `/api/v1/jobs*`) | `Bearer` token (`api.tokens`); routes only registered when at least one token is configured | Burst 120, 20 req/s |
+| API docs (`/api/v1/docs`, `/api/v1/openapi.json`, `/api/v1/openapi.yaml`) | **None** | Burst 120, 20 req/s |
+
+**ENROLL-EXPOSE-1**: Because the Swagger UI and OpenAPI spec are served **without authentication** on this peel-facing listener, `api.docs_enabled` defaults to **false**. Serving docs is an explicit opt-in (`--api-docs` flag or `api.docs_enabled: true` in `master.yaml`) and SHOULD only be enabled on deployments where the listener is not reachable from untrusted networks.
+
+**ENROLL-EXPOSE-2**: API token files MUST have `0600` permissions (no group/other access). The master logs a startup warning for token files with wider permissions (see `pkg/masterapi/handler.go`).
+
+## 1. NKey Signature Verification Protocol
+
+### Challenge-Response Flow
+
+The enrollment handshake uses Ed25519 challenge-response to prove the peel controls the private key corresponding to the public key it presents. This is the same cryptographic primitive used by NATS nkey authentication (`nkeys.KeyPair.Sign`).
+
+```
+Peel                                    Master
+  |                                       |
+  |--- GET /api/v1/enroll/nonce --------->|
+  |    ?peel_id=...&public_key=...        |
+  |                                       |
+  |<-- 200 { challenge_id, challenge,     |
+  |          expires_at } ---------------|
+  |                                       |
+  |    [Peel signs challenge ||           |
+  |     curvePublicKey with Ed25519       |
+  |     private seed]                     |
+  |                                       |
+  |--- POST /api/v1/enroll ------------->|
+  |    { challenge_id, peel_id,           |
+  |      public_key, curve_public_key,    |
+  |      signature }                      |
+  |                                       |
+  |<-- 201 { id, peel_id, state,          |
+  |          message } ------------------|
+  |                                       |
+```
+
+### Requirements
+
+**ENROLL-SIG-1**: The challenge MUST be a cryptographically random 32-byte nonce generated from `crypto/rand.Reader`. The nonce MUST NOT be derived from any predictable input (timestamps, counters, peel IDs).
+
+**ENROLL-SIG-2**: The peel MUST sign `challenge_bytes || curve_public_key_bytes` using `nkeys.KeyPair.Sign()`, which produces an Ed25519 signature over the combined message. Including the curve public key in the signed message cryptographically binds it to the enrollment proof, preventing curve key substitution attacks (see `enrollSignatureMessage()` in `pkg/enroll/verify.go`).
+
+**ENROLL-SIG-3**: The master MUST verify the signature using `nkeys.FromPublicKey(publicKey)` followed by `kp.Verify(challenge || curvePublicKey, signature)`. The master MUST NOT reconstruct the peel's key pair from a seed -- it only uses the public key. See `VerifyEnrollSignature()` in `pkg/enroll/verify.go`.
+
+**ENROLL-SIG-4**: The public key submitted in the enrollment request MUST be validated using `auth.ValidatePublicKey(pub, auth.RoleUser)` to confirm it is a well-formed User nkey (prefix `U`). Reject Operator (`O`) and Account (`A`) keys at the enrollment endpoint.
+
+**ENROLL-SIG-5**: The peel MUST also submit its X25519 curve public key (prefix `X`), derived from the same Ed25519 seed via `auth.CurvePublicKeyFromSeed()`. The master SHOULD verify that the curve key is well-formed but cannot verify the derivation relationship without the peel's private seed.
+
+**ENROLL-SIG-6**: The master MUST bind the challenge to the specific `peel_id` and `public_key` presented in the initial request. A signature verified against challenge C is only valid for the exact (peel_id, public_key) tuple that requested C. This prevents an attacker from requesting a challenge for one key and replaying a signature from a different key.
+
+### Signature Verification Implementation
+
+```go
+// Verify the enrollment signature (challenge || curvePublicKey)
+kp, err := nkeys.FromPublicKey(publicKey)
+if err != nil {
+    return fmt.Errorf("enroll: invalid public key: %w", err)
+}
+msg := enrollSignatureMessage(challenge, curvePublicKey) // challenge || curvePublicKey bytes
+if err := kp.Verify(msg, signature); err != nil {
+    return fmt.Errorf("enroll: signature verification failed: %w", err)
+}
+```
+
+## 2. Replay Protection
+
+### Challenge Lifecycle
+
+**ENROLL-REPLAY-1**: Each challenge MUST have a TTL of **5 minutes** from issuance. After expiry, the challenge is invalid and the peel must request a new one. This limits the window for replay attacks.
+
+**ENROLL-REPLAY-2**: Challenges MUST be stored in a NATS KV bucket (`enroll-challenges`) with a TTL of 5 minutes. The KV TTL provides automatic cleanup. Challenge records MUST include:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `challenge_id` | `string` | KSUID identifier for the challenge |
+| `challenge` | `[]byte` | The 32-byte random nonce |
+| `peel_id` | `string` | The peel ID that requested the challenge |
+| `public_key` | `string` | The public key bound to this challenge |
+| `issued_at` | `time.Time` | Issuance timestamp (server clock) |
+| `expires_at` | `time.Time` | Expiry timestamp (`issued_at + 5m`) |
+| `used` | `bool` | Whether the challenge has been consumed |
+
+**ENROLL-REPLAY-3**: Each challenge MUST be single-use. After successful verification, the challenge record MUST be deleted (or marked as used via CAS update). A second verification attempt with the same challenge MUST fail with HTTP 401 Unauthorized ("challenge verification failed").
+
+**ENROLL-REPLAY-4**: The master MUST validate that the `peel_id` and `public_key` in the verify request match the values bound to the challenge at issuance. Mismatches MUST be rejected with HTTP 400.
+
+**ENROLL-REPLAY-5** *(not yet implemented)*: The verify request SHOULD include a client-provided timestamp. The master SHOULD reject requests where the timestamp differs from server time by more than **30 seconds** (clock skew tolerance). This would prevent far-future replays even if a challenge token is intercepted.
+
+**ENROLL-REPLAY-6** *(not yet implemented)*: Enrollment requests SHOULD carry an idempotency key (a client-generated UUID in the `Idempotency-Key` header). If the master receives a duplicate idempotency key within 10 minutes, it SHOULD return the same response without creating a new enrollment record. Note: the current implementation handles idempotency for pending enrollments by returning the existing record when the peel ID already has a pending enrollment (see `handleEnroll` in `pkg/enroll/handler.go`).
+
+### Challenge Storage
+
+```go
+// Recommended KV bucket for enrollment challenges
+bus.BucketConfig{
+    Bucket:      "enroll-challenges",
+    Description: "Short-lived enrollment challenge nonces",
+    TTL:         5 * time.Minute,
+    History:     1,
+    Replicas:    1,
+    Storage:     jetstream.MemoryStorage, // challenges are ephemeral
+}
+```
+
+## 3. Rate Limiting
+
+### Per-IP Token Bucket
+
+**ENROLL-RATE-1**: The enrollment API MUST implement per-source-IP token bucket rate limiting on all enrollment endpoints. The strict enrollment budget applies ONLY to `/api/v1/enroll` and its subpaths (`isEnrollPath()` in `pkg/enroll/server.go`); all other routes on the shared listener (the token-authenticated REST API, including `/api/v1/enrollments*`) use a separate, higher per-IP budget so authenticated dispatch-and-poll clients are not locked out.
+
+| Parameter | Enrollment routes (`/api/v1/enroll*`) | Other routes (REST API) | Rationale |
+|-----------|---------------------------------------|-------------------------|-----------|
+| Bucket capacity | 10 tokens | 120 tokens | Reasonable burst for legitimate enrollments; higher budget for authenticated API clients |
+| Refill rate | 1 token per 10 seconds | 20 tokens per second | 6 requests/minute sustained maximum for unauthenticated enrollment |
+| Token cost per request | 1 token | 1 token | Each request costs 1 token |
+| Stale entry eviction | 5000 entries / 5 min TTL | 5000 entries / 5 min TTL | Prevents unbounded memory growth from many source IPs |
+
+**ENROLL-RATE-2**: When a client exceeds the rate limit, the master MUST respond with HTTP 429 (Too Many Requests) and include a `Retry-After` header indicating the number of seconds until the next token is available. The response body MUST NOT reveal internal rate limit parameters.
+
+**ENROLL-RATE-3**: The master MUST use the TCP connection's remote address (`RemoteAddr`) for rate limiting. `X-Forwarded-For` and similar headers are deliberately NOT trusted because the enrollment API cannot verify the connecting IP is a trusted proxy. Trusting forwarded headers would allow attackers to spoof their IP to bypass per-IP rate limiting (see `remoteIP()` in `pkg/enroll/handler.go`).
+
+### Rate Limit Storage
+
+Rate limit state is stored in-memory (per master instance). In multi-master HA deployments, each master enforces its own rate limits independently. This is acceptable because:
+- Enrollment is infrequent (fleet onboarding, not steady-state traffic).
+- Per-IP limits on a single master are sufficient to prevent abuse.
+- The bucket map is protected by a mutex and includes stale entry eviction (entries older than 5 minutes are swept when the map exceeds 5000 entries) to prevent unbounded memory growth.
+
+## 4. Audit Logging Requirements
+
+### Events to Log
+
+All enrollment-related events MUST be logged using structured logging (`*slog.Logger`) at the appropriate level.
+
+| Event | Level | Description |
+|-------|-------|-------------|
+| `enrollment.challenge.issued` | INFO | A challenge was issued to a peel |
+| `enrollment.challenge.expired` | DEBUG | A challenge expired before verification |
+| `enrollment.verify.success` | INFO | Signature verification succeeded, enrollment record created |
+| `enrollment.verify.failure` | WARN | Signature verification failed |
+| `enrollment.verify.replay` | WARN | Attempt to reuse an already-consumed challenge |
+| `enrollment.verify.mismatch` | WARN | peel_id or public_key mismatch with challenge binding |
+| `enrollment.approved` | INFO | Administrator approved a pending enrollment |
+| `enrollment.rejected` | INFO | Administrator rejected a pending enrollment |
+| `enrollment.revoked` | INFO | A previously approved enrollment was revoked |
+| `enrollment.credential.generated` | INFO | Credentials generated for an approved peel |
+| `enrollment.credential.downloaded` | INFO | Credentials were downloaded by the peel |
+| `enrollment.credential.expired` | WARN | Download token expired before credential retrieval |
+| `enrollment.ratelimit.exceeded` | WARN | Rate limit exceeded for a source IP |
+
+### Required Fields
+
+Each audit log entry MUST include the following fields where applicable:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `peel_id` | The peel identifier | `"web-server-01"` |
+| `public_key` | The peel's Ed25519 public key (full key is safe to log) | `"UCXP3..."` |
+| `source_ip` | The client's IP address | `"10.0.1.42"` |
+| `enrollment_id` | The enrollment record identifier | `"enroll-2Fd3..."` |
+| `challenge_id` | The challenge identifier | `"challenge-2Fd3..."` |
+| `decided_by` | The identity that approved/rejected/revoked | `"admin@example.com"` |
+| `timestamp` | Event timestamp (UTC, RFC3339) | `"2026-02-10T14:30:00Z"` |
+| `master_id` | The master instance that processed the event | `"master-2Fd3aB..."` |
+
+### Fields That MUST NOT Be Logged
+
+**ENROLL-AUDIT-1**: The following data MUST NEVER appear in log entries, error messages, or API responses:
+
+| Prohibited Field | Reason |
+|-----------------|--------|
+| NKey seeds (`SU...`, `SA...`, `SO...`) | Private key material |
+| Challenge nonce raw bytes | Could enable replay if logs are compromised |
+| Signature raw bytes | Could be used for cryptographic analysis |
+| Download token values | One-time credential delivery tokens |
+| JWT token strings | Contains authorization claims; should not be logged in full |
+| X25519 private curve keys | Encryption private key material |
+
+**ENROLL-AUDIT-2**: Error messages returned to clients MUST be generic and not reveal internal state. For example:
+- "signature verification failed" -- not "signature verification failed: expected key UCXP3... but got UABC..."
+- "enrollment not found" -- not "enrollment enroll-2Fd3... is in state rejected"
+- "rate limit exceeded" -- not "rate limit exceeded: 3 of 10 tokens remaining"
+
+### Audit Log Retention
+
+**ENROLL-AUDIT-3**: Enrollment audit logs SHOULD be retained for a minimum of **90 days** to support incident investigation. Log rotation and retention are managed by the deployment's logging infrastructure (not by Zester itself).
+
+**ENROLL-AUDIT-4**: The NATS JetStream `job-events` stream pattern SHOULD be extended to capture enrollment events on subjects matching `zester.enroll.>`, with the same 7-day retention as job events. This provides a secondary audit trail in addition to structured logging.
+
+## 5. Key Storage Security
+
+### Enrollment Records in NATS KV
+
+**ENROLL-STORE-1**: Enrollment records MUST be stored in a dedicated NATS KV bucket (`enrollments`) with the following configuration:
+
+```go
+bus.BucketConfig{
+    Bucket:      "enrollments",
+    Description: "Peel enrollment records and state",
+    TTL:         0, // no expiry -- records persist until explicitly deleted
+    History:     10, // preserve state transition history for audit
+    Replicas:    1, // match deployment topology
+    Storage:     jetstream.FileStorage,
+}
+```
+
+**ENROLL-STORE-2**: Enrollment records MUST be keyed by enrollment ID (`enr-<KSUID>`) with a separate peel-to-enrollment index (`peel.<peel-id>`) for O(1) lookup by peel ID. Records contain:
+
+| Field | Type | Stored | Description |
+|-------|------|--------|-------------|
+| `id` | `string` | Yes | Enrollment identifier (`enr-` + KSUID) |
+| `peel_id` | `string` | Yes | Human-readable peel identifier |
+| `public_key` | `string` | Yes | Ed25519 public key (safe to store) |
+| `curve_public_key` | `string` | Yes | X25519 curve public key (safe to store) |
+| `state` | `State` | Yes | Current lifecycle state |
+| `created_at` | `time.Time` | Yes | When enrollment was requested |
+| `decided_at` | `*time.Time` | Yes | When the enrollment decision was made |
+| `decided_by` | `string` | Yes | Who approved/rejected/revoked |
+| `reject_reason` | `string` | Yes | Optional reason for rejection |
+| `issued_at` | `*time.Time` | Yes | When credentials were issued |
+| `expires_at` | `*time.Time` | Yes | JWT expiry time |
+| `remote_addr` | `string` | Yes | IP address of the enrollment request |
+| `nkey_seed` | -- | **NEVER** | The peel's private seed MUST NEVER be stored on the master |
+
+**ENROLL-STORE-3**: The master MUST NEVER store, cache, or log the peel's nkey seed. The seed exists only on the peel. The master only stores the public key.
+
+### File Permission Requirements
+
+**ENROLL-STORE-4**: All credential files and seed files MUST be written with `os.FileMode(0600)` (owner read/write only). This is already enforced by `auth.WriteCredsFile` and `auth.SaveSeedToFile`.
+
+**ENROLL-STORE-5**: Directories containing credential files MUST have permissions `0700` (owner read/write/execute only).
+
+**ENROLL-STORE-6**: On the peel side, the enrollment client MUST verify file permissions after writing credentials. If the file permissions are wider than `0600`, the client MUST log a WARN and attempt to correct them.
+
+### Memory Handling
+
+**ENROLL-STORE-7**: Seed bytes held in memory during enrollment operations SHOULD be zeroed after use via explicit byte slice zeroing:
+
+```go
+func zeroBytes(b []byte) {
+    for i := range b {
+        b[i] = 0
+    }
+}
+```
+
+This is a defense-in-depth measure. While Go's garbage collector prevents deterministic memory cleanup, zeroing reduces the window during which seeds are visible in process memory.
+
+**ENROLL-STORE-8**: The master MUST NOT hold peel seed material at any point. The enrollment flow is designed so that the peel generates its own key pair locally and only transmits the public key.
+
+### CAS Protection
+
+**ENROLL-STORE-9**: All state transitions on enrollment records MUST use Compare-And-Swap (CAS) updates via NATS KV `Update(key, value, lastRevision)`. This prevents race conditions when multiple administrators attempt to approve/reject the same enrollment concurrently.
+
+## 6. One-Time Credential Delivery
+
+### Credential Generation
+
+When an enrollment is approved and the peel needs credentials (JWT + seed bundled into a `.creds` file), the master generates credentials on behalf of the peel. However, in the enrollment flow, the peel already has its own seed -- the master only needs to deliver the signed JWT.
+
+**ENROLL-CRED-1**: Credentials are generated on-demand when the peel calls `GET /api/v1/enroll/{id}/creds` (not at approval time). The master MUST:
+1. Verify the peel's Nkey signature in the `Authorization` header (proof of key ownership).
+2. Create a User JWT for the peel using `auth.CreateUserJWTForPublicKey()` with the peel's public key and `auth.PeelUserJWTOptions()`.
+3. Transition the enrollment to `issued` state via CAS BEFORE returning the JWT (single-use enforcement).
+4. Return the JWT base64-encoded in the response body.
+
+The issued JWT carries a deliberately narrow grant set (see `auth.PeelUserJWTOptions()` in `pkg/auth/jwt.go`): publish is restricted to peel-scoped subjects (`zester.fact.<peel-id>`, `zester.event.<peel-id>.>`, `zester.job.*.ack.<peel-id>`, `zester.job.*.return.<peel-id>`, `zester.job.*.schedule.<peel-id>`) and JetStream API access scoped to the `facts`, `settings-files`, `secrets`, `basket`, and `state-files` KV buckets. Peels have **no** write access to the `jobs` or `job-returns` KV buckets — scheduler results flow through the peel-scoped `zester.job.*.schedule.<peel-id>` subject and are persisted by the master, so a compromised peel cannot read, forge, or overwrite other peels' job records or returns.
+
+### Credential Download Authentication
+
+**ENROLL-CRED-2**: The peel MUST prove key ownership when downloading credentials by signing the enrollment ID with its nkey and including it in an `Authorization: Nkey <pub>:<sig>` header. This prevents a network-level attacker who observed the enrollment request from downloading the credentials.
+
+**ENROLL-CRED-3**: The download endpoint (`GET /api/v1/enroll/{id}/creds`) MUST:
+1. Require an `Authorization: Nkey <public_key>:<base64url_signature_of_enrollment_id>` header.
+2. Verify the signature matches the public key stored in the enrollment record (via `VerifyCredsSignature()` in `pkg/enroll/verify.go`).
+3. If valid and enrollment is in `approved` state: transition to `issued` via CAS BEFORE returning the JWT (single-use enforcement), then return the credentials.
+4. If the CAS update fails (concurrent download): return HTTP 409 Conflict.
+5. If signature is invalid: return HTTP 401 Unauthorized.
+
+**ENROLL-CRED-4**: The credential response MUST be transmitted over TLS. The response MUST include:
+- `Cache-Control: no-store` -- prevent caching of credentials.
+- `Content-Type: application/json` -- the JWT is returned base64-encoded in a JSON response body.
+
+### Alternative: Push-Based Delivery
+
+**ENROLL-CRED-5**: As an alternative to pull-based download, the master MAY support push-based credential delivery where the approved JWT is published to a NATS subject that the peel is temporarily subscribed to during enrollment. This requires:
+- The peel to maintain an open connection during the approval wait.
+- The enrollment-phase NATS connection to use a temporary, limited-scope JWT that only allows subscribing to `zester.enroll.<peel_id>.creds`.
+- The credential payload to be encrypted with the peel's X25519 curve public key using `auth.Encryptor.Seal()`.
+
+## 7. Revocation Strategy
+
+### Immediate Revocation
+
+**ENROLL-REVOKE-1**: When a peel's enrollment is revoked via `zester enroll revoke <enrollment-id>` (CLI via NATS KV):
+1. The enrollment record state MUST transition to `revoked` via CAS update.
+2. The peel's User JWT MUST be added to the NATS account's revocation list. This is done by updating the Account JWT with the revoked user's public key in the revocation list and re-publishing the account JWT to the NATS resolver.
+3. A `enrollment.revoked` audit event MUST be logged.
+
+### JWT Revocation Mechanisms
+
+Zester supports two complementary revocation strategies:
+
+**ENROLL-REVOKE-2 (Account-Level Revocation)**: The preferred method. The account JWT's revocation list (`ac.Revocations`) provides server-enforced disconnection:
+
+```go
+ac := jwt.NewAccountClaims(accountKP.PublicKey)
+// Revoke a specific user public key at the current timestamp
+ac.Revocations.Revoke(revokedUserPublicKey, time.Now())
+// Re-sign and publish the updated account JWT
+```
+
+When the NATS server processes the updated account JWT, it disconnects any connected client whose user JWT was issued before the revocation timestamp.
+
+**ENROLL-REVOKE-3 (JWT Expiry)**: User JWTs issued during enrollment SHOULD have a bounded expiry. The default is **6 months** (`DefaultJWTExpiry = 180 * 24 * time.Hour` in `pkg/enroll/credential.go`). This provides a natural credential rotation cycle and limits the damage window if a JWT is leaked but not revoked. Peels MUST re-enroll or refresh their JWT before expiry.
+
+**ENROLL-REVOKE-4 (KeyStore Revocation)**: The in-memory `auth.KeyStore.RevokeKey()` provides application-level revocation that is checked before dispatching commands or settings to a peel. Even if the NATS connection remains active (e.g., during account JWT propagation delay), a revoked peel will not receive new work.
+
+### Revocation Propagation
+
+**ENROLL-REVOKE-5**: After revoking a peel, the master MUST:
+1. Update the NATS account JWT revocation list (disconnects the peel from NATS).
+2. Update the enrollment record in KV (prevents re-enrollment with the same key).
+3. Remove any cached settings, secrets, or pending jobs for the revoked peel.
+4. Log the revocation event with the revoking administrator's identity.
+
+**ENROLL-REVOKE-6**: Revocation MUST take effect within **30 seconds** of the administrator's action. The account JWT re-publication and NATS server processing MUST complete within this window. If the deployment uses an external NATS resolver, the propagation delay depends on the resolver's refresh interval.
+
+## 8. Incident Response Procedures
+
+### Compromised Peel Key
+
+If a peel's nkey seed is suspected to be compromised:
+
+**Step 1 -- Immediate Revocation (within minutes)**
+```bash
+zester enroll revoke <enrollment-id> --reason "suspected key compromise"
+```
+This triggers ENROLL-REVOKE-1 through ENROLL-REVOKE-5.
+
+**Step 2 -- Verify Disconnection**
+Confirm the peel is disconnected from NATS:
+```bash
+zester peel list | grep <peel_id>
+```
+If still connected, forcibly disconnect via the NATS admin API.
+
+**Step 3 -- Audit Review**
+Review audit logs for the compromised peel to determine:
+- When was the peel last legitimately active?
+- Were any unauthorized commands executed?
+- Were any settings or secrets accessed?
+- Are there enrollment requests from unusual source IPs using this peel's key?
+
+**Step 4 -- Rotate Secrets**
+If the compromised peel had access to encrypted secrets (`$KV.secrets.<peel_id>`):
+- Rotate all secrets that were encrypted for that peel.
+- Re-encrypt and re-publish secrets for remaining peels.
+
+**Step 5 -- Re-Provision**
+Generate new credentials on the cleaned (or replaced) machine by deleting the old credential and seed files and restarting the peel. Enrollment is automatic on startup when no `.creds` file exists:
+```bash
+# On the peel machine (after remediation)
+rm /data/auth/<peel_id>.creds /data/auth/<peel_id>.seed
+systemctl restart zester-peel
+```
+The peel generates a fresh nkey, and the new enrollment goes through the standard approval flow.
+
+### Compromised Account Key
+
+If the account signing key is compromised, all peel JWTs signed by that key are potentially affected:
+
+**Step 1 -- Rotate the Account Signing Key**
+1. Generate a new account signing key.
+2. Add it to the account JWT's signing keys list.
+3. Remove the compromised signing key.
+4. Re-sign and publish the updated account JWT.
+
+**Step 2 -- Re-Issue All Peel JWTs**
+All peels whose JWTs were signed by the compromised key MUST receive new JWTs signed by the new key. This requires revoking all active enrollments and having each peel re-enroll. The `zester enroll rotate-credentials` command is not yet implemented; use the following approach:
+```bash
+zester enroll list --state active | tail -n +2 | awk '{print $1}' | while read id; do
+  zester enroll revoke "$id" --reason "Account key rotation"
+done
+# Then on each peel: remove .creds and .seed, restart to trigger re-enrollment
+```
+
+**Step 3 -- Revoke the Compromised Key**
+Add the compromised signing key's public key to the account revocation list to ensure any JWTs signed by it are no longer accepted.
+
+### Compromised Master
+
+If the master's credentials or the account key bundle stored at `/data/auth/account.seed` is compromised:
+
+**Step 1 -- Isolate** the compromised master immediately (network disconnect).
+
+**Step 2 -- Rotate the Operator Signing Key** (if the operator key was used as the account signer):
+1. Generate a new operator signing key.
+2. Update the operator JWT.
+3. Re-sign the account JWT with the new operator key.
+
+**Step 3 -- Re-Issue the Account Key**:
+1. Generate a new account key pair.
+2. Sign the new account JWT with the operator (or its signing key).
+3. Re-issue all peel user JWTs under the new account.
+
+**Step 4 -- Rebuild and Re-Deploy** the master from a known-good image. Re-provision all credentials.
+
+### Mass Enrollment Anomaly
+
+If an abnormal number of enrollment requests are detected (possible automated attack):
+
+**Step 1 -- Check Rate Limit Logs**
+```bash
+# Check for rate limit events in the last hour
+grep "enrollment.ratelimit" /var/log/zester/master.log | tail -50
+```
+
+**Step 2 -- Temporarily Disable Enrollment**
+Pause enrollment by stopping or firewalling the enrollment HTTP listener (port 8443) on the master while the investigation is underway. The `zester enroll pause` command is not yet implemented.
+
+**Step 3 -- Review Pending Enrollments**
+```bash
+zester enroll list --state pending
+```
+Reject any suspicious enrollments (unknown peel IDs, unusual source IPs).
+
+**Step 4 -- Resume Enrollment**
+Re-enable the enrollment HTTP listener after resolving the incident.
+
+## Security Configuration Defaults
+
+The following table summarizes all configurable security parameters and their recommended defaults:
+
+| Parameter | Default | Min | Max | Description |
+|-----------|---------|-----|-----|-------------|
+| `enroll.challenge.ttl` | 5m | 1m | 15m | Challenge nonce lifetime |
+| `enroll.challenge.size` | 32 bytes | 32 bytes | 64 bytes | Challenge nonce entropy |
+| `enroll.ratelimit.bucket_size` | 10 | 5 | 100 | Per-IP token bucket capacity |
+| `enroll.ratelimit.refill_rate` | 1/10s | 1/60s | 1/s | Token refill rate |
+| `enroll.ratelimit.sweep_size` | 5000 | -- | -- | Trigger stale entry eviction when map exceeds this size |
+| `enroll.ratelimit.stale_after` | 5m | -- | -- | Evict entries older than this duration during sweep |
+| `enroll.credential.jwt_expiry` | 4380h (6 months) | 1h | 17520h (2 years) | User JWT validity period |
+| `enroll.idempotency.ttl` | 10m | 5m | 30m | Idempotency key lifetime (not yet implemented) |
+| `enroll.clock_skew.tolerance` | 30s | 10s | 60s | Maximum client-server clock difference (not yet implemented) |
+
+## API Security Headers
+
+All enrollment HTTP responses MUST include the following security headers:
+
+```
+Strict-Transport-Security: max-age=63072000; includeSubDomains
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Cache-Control: no-store
+Content-Security-Policy: default-src 'none'
+Referrer-Policy: no-referrer
+```
+
+## TLS Requirements
+
+**ENROLL-TLS-1**: The enrollment HTTP API MUST be served over TLS 1.3 only (matching the `MinVersion: tls.VersionTLS13` enforced by `bus.ServerTLSConfig`).
+
+**ENROLL-TLS-2**: The enrollment API MUST NOT be exposed over plaintext HTTP under any circumstances. There is no HTTP-to-HTTPS redirect -- the plaintext listener does not exist.
+
+**ENROLL-TLS-3**: The enrollment API server certificate MUST be issued by the same CA that signs the NATS server certificate, or by a publicly trusted CA. The peel's enrollment client MUST validate the server certificate against a configured CA bundle.
+
+## CORS Policy
+
+**ENROLL-CORS-1**: The enrollment API MUST NOT set any CORS headers. The enrollment endpoints are not intended for browser access. Requests with an `Origin` header SHOULD be rejected.
+
+## Input Validation Summary
+
+All enrollment API inputs MUST be validated before processing:
+
+| Field | Validation | Max Length |
+|-------|-----------|------------|
+| `peel_id` | Alphanumeric, hyphens, underscores. Must match `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,253}[a-zA-Z0-9]$` | 255 chars |
+| `public_key` | Must be valid User nkey (`auth.ValidatePublicKey(pub, auth.RoleUser)`) | 56 chars |
+| `curve_public_key` | Must start with `X` prefix and be valid base32 | 56 chars |
+| `signature` | Base64-encoded Ed25519 signature | 128 chars (base64 of 64 bytes) |
+| `challenge_id` | Valid KSUID format | 27 chars |
+| `token` | Base64url-encoded, 32 bytes decoded | 43 chars |
+| `Idempotency-Key` | UUID v4 format | 36 chars |
+| Request body | Maximum size enforced by HTTP server | 4 KB |
+
+Any request exceeding these limits MUST be rejected with HTTP 400 before further processing.

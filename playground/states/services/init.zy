@@ -1,0 +1,16 @@
+nginx_pkg:
+  pkg.installed:
+    - name: nginx
+
+nginx_running:
+  service.running:
+    - name: nginx
+    - enable: true
+    - require:
+      - "pkg.installed:nginx_pkg"
+
+nginx_enabled:
+  service.enabled:
+    - name: nginx
+    - require:
+      - "service.running:nginx_running"

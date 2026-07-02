@@ -1,0 +1,160 @@
+---
+title: "Overview"
+---
+
+Settings are secure, per-peel configuration data -- the Zester equivalent of SaltStack pillars. Unlike facts (which describe what a machine *is*), settings describe what a machine *should do*: database credentials, feature flags, application config, TLS certificates, and anything else your states need.
+
+## Why Settings Exist
+
+Configuration management requires a way to deliver structured data to each host, and much of that data is sensitive. Settings solve both problems:
+
+- **Targeted delivery** -- A `top.zy` file maps targeting patterns to settings files, so each peel only receives the settings it needs.
+- **Template rendering** -- Settings files are `.zy` (YAML + Jinja2) templates, rendered per-peel with that peel's facts as context.
+- **Encryption** -- Fields tagged with `!encrypted` are sealed using NaCl box encryption with the target peel's public key. Only that peel can decrypt them.
+- **Deep merge** -- When multiple settings files match a peel, they are merged recursively so you can layer shared defaults with environment-specific overrides.
+
+## How Settings Work
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    Master                           │
+│                                                     │
+│  Walk settings dir ──→ SanitizeFile each .zy        │
+│    (replaces !encrypted values with                 │
+│     __ZESTER_SECRET:key__ placeholders)             │
+│                                      │              │
+│                              publish sanitized .zy  │
+│                              to settings-files KV   │
+│                                      │              │
+│                              encrypt !encrypted     │
+│                              values per-peel        │
+│                                      │              │
+│                              publish secrets to     │
+│                              secrets KV (per-peel)  │
+│                              + _master_curve_pub    │
+└──────────────────────────────┼──────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────┐
+│                     Peel                            │
+│                                                     │
+│  Load raw .zy from ──→ parse top.zy ──→ target      │
+│  settings-files KV         matching                 │
+│                                │                    │
+│                           render templates          │
+│                           with local facts          │
+│                                │                    │
+│                           read own secrets          │
+│                           from secrets KV           │
+│                                │                    │
+│                           decrypt per-key and       │
+│                           merge into settings       │
+│                                │                    │
+│                        available as {{ settings }}  │
+└─────────────────────────────────────────────────────┘
+```
+
+The master prepares settings for peel-side rendering:
+
+1. Walking the settings directory and calling `SanitizeFile` on each `.zy` file, replacing `!encrypted` literal values with `__ZESTER_SECRET:<key.path>__` placeholders
+2. Publishing the sanitized templates to the `settings-files` KV bucket (shared, readable by all peels)
+3. Encrypting the extracted secret values individually for each target peel using the peel's X25519 public key
+4. Publishing per-peel encrypted secrets to the `secrets` KV bucket, keyed by peel ID
+5. Publishing its own X25519 public key to the `secrets` KV bucket as `_master_curve_pub`
+
+Each peel resolves its own settings:
+
+1. Loading all raw `.zy` files from the `settings-files` KV bucket
+2. Parsing `top.zy` and evaluating targeting against its own facts to determine which files apply
+3. Rendering each matched template locally using the peel's facts
+4. Reading its per-peel encrypted secrets from the `secrets` KV bucket and decrypting them
+5. Merging secrets into the rendered settings, replacing `__ZESTER_SECRET:*__` placeholders with plaintext values
+
+This design means the master never renders templates per-peel, making multi-master deployments straightforward: any master that has access to peel curve public keys can publish secrets.
+
+## Directory Layout
+
+Settings live under `/srv/zester/settings/` by default:
+
+```
+/srv/zester/settings/
+  top.zy                    # Targeting rules
+  common/
+    base.zy                 # Shared defaults
+    monitoring.zy           # Monitoring config for all peels
+  webservers/
+    nginx.zy                # Nginx-specific settings
+    certs.zy                # TLS certificate paths
+  databases/
+    postgres.zy             # PostgreSQL settings
+    credentials.zy          # DB passwords (with !encrypted)
+  environments/
+    production.zy           # Production overrides
+    staging.zy              # Staging overrides
+```
+
+Settings file references in `top.zy` use **dot notation** mapped to the directory structure:
+
+| Reference            | File Path |
+|----------------------|-----------|
+| `common.base`        | `common/base.zy` |
+| `webservers.nginx`   | `webservers/nginx.zy` |
+| `databases.postgres` | `databases/postgres.zy` |
+
+## NATS KV Storage
+
+Two KV buckets are used by the settings pipeline:
+
+| Bucket | Key Format | History | TTL | Purpose |
+|--------|-----------|---------|-----|---------|
+| `settings-files` | `<relative-path>` | 3 revisions | None | Sanitized `.zy` source files (with `__ZESTER_SECRET:*__` placeholders) |
+| `secrets` | `<peel-id>` or `_master_curve_pub` | 3 revisions | None | Per-peel encrypted `!encrypted` values; also holds the master's X25519 public key under `_master_curve_pub` |
+
+The `_master_curve_pub` entry in the `secrets` bucket stores the master's X25519 public key. Peels read this on startup and whenever it changes (via `WatchMasterCurvePub`) to enable secret decryption.
+
+## Querying Settings (Salt-Style)
+
+The `settings.*` modules let you query a peel's resolved settings directly, similar to Salt's `pillar.*` functions. These modules run the full peel-side settings resolution pipeline (load raw files, parse `top.zy`, target matching, template rendering, secret decryption) and return the results.
+
+### settings.items
+
+Return all resolved settings for a peel (equivalent to Salt's `pillar.items`):
+
+```bash
+zester 'web-01' settings.items
+```
+
+### settings.get
+
+Look up a specific setting by dot-separated key path (equivalent to Salt's `pillar.get`):
+
+```bash
+# Get a specific key
+zester 'web-01' settings.get database.port
+
+# With a default value if the key is missing
+zester 'web-01' settings.get database.port default=5432
+```
+
+### settings.keys
+
+List the top-level settings key names (equivalent to Salt's `pillar.keys`):
+
+```bash
+zester 'web-01' settings.keys
+```
+
+### Output Formats
+
+All `settings.*` modules support `--format json` and `--format yaml`:
+
+```bash
+zester 'web-01' settings.items --format json
+zester 'web-01' settings.get database --format yaml
+```
+
+## In This Section
+
+- [Settings Files](/docs/guides/settings/files) -- The `.zy` file format, YAML + templates, directory structure
+- [Top File](/docs/guides/settings/top) -- `top.zy` syntax, targeting patterns, multi-environment examples
+- [Encryption](/docs/guides/settings/encryption) -- The `!encrypted` tag, NaCl box encryption, end-to-end flow

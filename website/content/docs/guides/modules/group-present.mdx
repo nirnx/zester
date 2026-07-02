@@ -1,0 +1,107 @@
+---
+title: "group.present"
+description: "Ensures a group exists with the specified attributes and membership."
+---
+
+**Source**: `pkg/state/modules/group.go`
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | Group name. If omitted, the state ID is used as the group name. |
+| `gid` | `int` | No | *(auto)* | Numeric group ID. Only compared/set when non-zero. |
+| `system` | `bool` | No | `false` | If `true`, create a system group (low GID range). Used only during creation. |
+| `members` | `list` | No | `[]` | Exact membership list. When specified, the group will contain exactly these users — extra members are removed, missing members are added. |
+| `addusers` | `list` | No | `[]` | Users to add to the group without affecting other existing members. |
+| `delusers` | `list` | No | `[]` | Users to remove from the group without affecting other existing members. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Check Behavior
+
+The check phase performs these comparisons in order:
+
+1. **Group existence** — if the group does not exist, the state needs changes.
+2. **GID** — if `gid` is specified (non-zero) and differs from the current value, the state needs changes.
+3. **Members** — if `members` is specified and the current membership does not match exactly, the state needs changes.
+4. **AddUsers** — if any user in `addusers` is not currently a member, the state needs changes.
+5. **DelUsers** — if any user in `delusers` is currently a member, the state needs changes.
+
+If all checks pass, the state reports no changes needed.
+
+---
+
+## Apply Behavior
+
+1. Looks up the group. If the group does not exist:
+   - Creates the group via `groupadd` with the specified `gid` and `system` flag.
+   - If `members` or `addusers` are specified, adds those users to the newly created group via `gpasswd -a`.
+   - Records that the group was created (for revert).
+2. If the group already exists:
+   - Stores the original group info as a backup (for revert).
+   - If `gid` is specified and differs, updates the GID.
+   - If `members` is specified, computes exact add/remove lists to match the desired membership.
+   - Processes `addusers` (add missing users via `gpasswd -a`) and `delusers` (remove unwanted users via `gpasswd -d`).
+   - GID changes are applied via `groupmod`.
+
+---
+
+## Revert Behavior
+
+- If the group was created by Apply, deletes the group via `groupdel`.
+- If the group was modified by Apply, restores the original GID via `groupmod`. Membership changes (`addusers`, `delusers`, `members`) are **not** reverted.
+- If no changes were made, no-op.
+
+---
+
+## Examples
+
+### Direct Execution
+
+```bash
+# Create a group with defaults
+zester 'web-01' group.present docker
+
+# Create a group with a specific GID
+zester 'db*' group.present dbadmin gid=2000
+```
+
+### State File
+
+**Basic group creation:**
+
+```yaml
+docker:
+  group.present:
+    - system: true
+```
+
+**Group with exact membership:**
+
+```yaml
+webadmins:
+  group.present:
+    - gid: 3000
+    - members:
+      - alice
+      - bob
+      - charlie
+```
+
+**Add users without removing existing members:**
+
+```yaml
+developers:
+  group.present:
+    - addusers:
+      - newdev
+    - delusers:
+      - formerdev
+    - require:
+      - "user.present:newdev"
+```
