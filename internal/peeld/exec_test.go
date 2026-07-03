@@ -10,6 +10,7 @@ import (
 
 	"github.com/ptorbus/zester/pkg/bus"
 	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/ptorbus/zester/pkg/proto"
 )
 
 // TestResolveStatesDirWith covers the C2 retry helper: a ReadDir landing in
@@ -111,7 +112,7 @@ func TestExecModuleLazyStatesEngine(t *testing.T) {
 	}
 
 	// State compilation against the nil engine returns the clear error.
-	resp, err := a.execModule(context.Background(), "", "state.highstate", nil)
+	resp, err := a.execModule(context.Background(), proto.ExecRequest{Module: "state.highstate"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +141,7 @@ func TestExecModuleLazyStatesEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err = a.execModule(context.Background(), "", "state.apply", map[string]any{"state": "ping"})
+	resp, err = a.execModule(context.Background(), proto.ExecRequest{Module: "state.apply", Args: map[string]any{"state": "ping"}})
 	if err != nil {
 		t.Fatal(err)
 	}

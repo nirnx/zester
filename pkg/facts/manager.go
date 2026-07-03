@@ -294,5 +294,5 @@ func Watch(ctx context.Context, js bus.JetStreamAPI, fn WatchFunc, logger *slog.
 			return
 		}
 		fn(entry.Key(), facts)
-	}, logger)
+	}, nil, logger)
 }

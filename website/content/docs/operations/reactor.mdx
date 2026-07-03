@@ -1,0 +1,128 @@
+---
+title: "Reactor Operations"
+---
+
+This guide covers running the reactor in production: enabling and configuring it, the metrics and readiness semantics to monitor, beacon setup on peels, and runbook entries for the common failure modes.
+
+For rule authoring see the [Reactor guide](/docs/guides/reactor); for the system design see the [Reactor architecture](/docs/architecture/reactor).
+
+---
+
+## Enabling and Configuration
+
+The reactor is **enabled by default** on `zester-master`. All knobs live under the `reactor:` section of `master.yaml`, each with a matching flag (flag > YAML > default):
+
+```yaml
+reactor:
+  enabled: true
+  dir: /data/reactor
+  workers: 4
+  max_chain_depth: 3
+  enable_chaining: true
+  default_throttle: 0
+  source_rate_limit: 120
+  max_event_age: 1h
+  storm_rate: 60
+  breaker_cooldown: 5m
+```
+
+| Setting | Flag | Default | Meaning |
+|---|---|---|---|
+| `enabled` | `--reactor` | `true` | Run the reactor engine, rule loader, test service, and lag gauge on this master |
+| `dir` | `--reactor-dir` | `/data/reactor` | Local directory holding `top.zy` + reaction `.zy` files (published to the `reactor-files` bucket by the `publisher` lease holder) |
+| `workers` | `--reactor-workers` | `4` | Render/execute worker pool size |
+| `max_chain_depth` | `--reactor-max-chain-depth` | `3` | Events at or beyond this chain depth are dropped; `event.send` refuses to emit at the cap |
+| `enable_chaining` | `--reactor-enable-chaining` | `true` | Allow reaction rules to emit derived events (`event.send`) |
+| `default_throttle` | `--reactor-default-throttle` | `0` | Per-(rule, source) refractory period for rules without their own `throttle` (0 = none) |
+| `source_rate_limit` | `--reactor-source-rate-limit` | `120` | Per-origin events/minute (burst 30); `0` = unlimited |
+| `max_event_age` | `--reactor-max-event-age` | `1h` | Drop events older than this at consume time; `0` = no staleness gate (full replay) |
+| `storm_rate` | `--reactor-storm-rate` | `60` | Per-rule fires/minute that trips the circuit breaker; `0` = no breaker |
+| `breaker_cooldown` | `--reactor-breaker-cooldown` | `5m` | How long a tripped breaker stays open |
+
+<Callout type="warn" title="Default staleness gate: a master outage longer than 1h drops queued events">
+Events published while no master is running queue durably in the `events` stream and replay when a master returns — **but** the default `max_event_age: 1h` drops any replayed event older than one hour. Each drop is loud: a Warn log (`reactor: dropping stale event`) and `zester_reactor_events_dropped_total{reason="stale"}`. This is deliberate (reacting to a 20-hour-old service-down alarm after an outage is usually harmful), but if your rules must process **every** event regardless of age, set `max_event_age: 0` for full replay. Alert on the `stale` drop reason either way.
+</Callout>
+
+Disabling the reactor (`reactor.enabled: false` / `--reactor=false`) skips the engine, loader, test service, lag gauge, and the `reactor` readiness check entirely on that master. The master still emits `_master` events (e.g. enrollment-pending events) — they queue in the stream for whichever master runs the reactor — and it still **publishes `reactor.dir` to the `reactor-files` bucket when it holds the `publisher` lease**: rule distribution is independent of the enabled knob, so a dedicated-publisher master with the reactor off cannot starve the enabled masters of rules.
+
+## Metrics
+
+Master metrics (all under the `zester_` namespace, exported on `/metrics`):
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `zester_reactor_events_total` | counter | `origin_type` (`peel`\|`master`\|`admin`) | Events consumed by the reactor |
+| `zester_reactor_events_dropped_total` | counter | `reason` (`malformed`\|`decode`\|`spoof`\|`depth`\|`ratelimit`\|`stale`\|`backpressure`) | Events dropped at the consume gates (backpressure is a delayed redelivery, not a loss) |
+| `zester_reactor_events_unmatched_total` | counter | | Events that matched no rule (not a drop — normal for unrouted tags) |
+| `zester_reactor_reactions_total` | counter | `rule`, `result` (`dispatched`\|`duplicate`\|`throttled`\|`breaker_open`\|`render_error`\|`validate_error`\|`aborted`\|`refused`\|`no_targets`\|`error`) | Reaction executions per rule and outcome |
+| `zester_reactor_render_duration_seconds` | histogram | | Time to render one matched reaction rule |
+| `zester_reactor_breaker_open` | gauge | `rule` | 1 while a rule's storm circuit breaker is open; clears within ~15s of the cooldown expiring (a periodic sweep — no new matching event needed) |
+| `zester_reactor_lag` | gauge | | Pending (undelivered) events on the shared `reactor` consumer, polled every 15s |
+| `zester_reactor_rule_errors_total` | counter | | Failed rule loads (the last-known-good rule set stays active) |
+| `zester_reactor_rules_loaded` | gauge | | Rules in the active rule set |
+
+Peel metric:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `zester_peel_beacon_events_total` | counter | `beacon` | Beacon events generated by this peel (counted before publish, so offline-buffered events are included) |
+
+Suggested alerts: `increase(zester_reactor_events_dropped_total[15m]) > 0` (any drop reason deserves a look; `spoof` and `ratelimit` may indicate a misbehaving or compromised peel), `zester_reactor_breaker_open == 1` (a rule is storming), growing `zester_reactor_lag`, and `increase(zester_reactor_rule_errors_total[15m]) > 0` together with the degraded readiness check below.
+
+## Readiness Semantics
+
+Reactor-enabled masters register a `reactor` check on `GET /readyz`:
+
+| Status | Meaning |
+|---|---|
+| `down` | The shared durable consumer is not running. A boot failure is non-fatal: the master retries every 60s and the check flips to `ok` once the engine starts. Events are safe meanwhile — they queue in the `events` stream (subject to `max_event_age` at consume time). |
+| `degraded` | The engine is running but impaired: either the **last rule load failed** (the reactor is operating on the last-known-good rule set; the check message carries the load error) or a **storm circuit breaker is open** (that rule's reactions are being skipped wholesale; the message lists the affected rules). `/readyz` still returns `200` (degraded never 503s). |
+| `ok` | Consumer running, last rule load succeeded, no breaker open. |
+
+The check is registered only when the reactor is enabled.
+
+## Beacon Setup (Peels)
+
+v1 ships one beacon: **`service`**. It is configured through the settings pipeline (not `peel.yaml`), so it hot-reloads on settings changes and warm-starts from the on-disk settings snapshot on offline boots:
+
+```yaml
+# settings, e.g. web.zy
+beacons:
+  service:
+    services:
+      nginx: {}
+      redis: {}
+    interval: 10        # seconds, or a duration string like "10s" (default 10s)
+    onchangeonly: true  # default true: emit only on running-state TRANSITIONS
+```
+
+Behavior notes:
+
+- With `onchangeonly: true` the first poll of a service establishes a baseline **without** emitting; you get an event only when the running state changes. `onchangeonly: false` emits every service's state on every poll — pair it with a rule throttle.
+- Events publish on `zester.event.<peel-id>.beacon.service` with data `{service, running, previous}`; the reactor match key is `<peel-id>/beacon/<peel-id>/service`.
+- While NATS is unreachable, events buffer in a bounded 256-entry FIFO (oldest dropped first) and drain in order on reconnect.
+- Polls are **skipped while the peel's exec worker runs a mutating execution**, so a reaction-triggered state run doesn't re-trip the beacon that caused it.
+- A config error in the `beacons:` section rejects the whole section with a Warn (never a half-applied beacon); an absent `beacons:` key simply disables polling.
+- The full Salt beacon set (disk usage, memory, load, filewatch, ...) is Phase 2 — configuring an unknown beacon name logs a Warn and is ignored.
+
+## Runbook
+
+### A rule is not firing
+
+1. **Dry-run the match key**: `zester reactor test '<origin>/<tag>' --data k=v`. No matches means the glob is wrong — the most common cause is a **missing origin segment**: keys are `<origin>/<tag>`, so a beacon event from `web-01` is `web-01/beacon/web-01/service`, not `beacon/web-01/service`. Rules for chained events must match `_master/reaction/<tag>`.
+2. **Confirm the event is actually flowing**: `zester event watch '<glob>'` while reproducing. If nothing appears, the producer side is the problem (peel offline, beacon not configured, wrong tag).
+3. **Check the drop counters**: `zester_reactor_events_dropped_total` — `stale` (event older than `max_event_age`), `ratelimit` (source over 120/min), `depth` (chain cap), `spoof`/`malformed` (broken producer).
+4. **Check reaction results**: `zester_reactor_reactions_total{rule="<ref>"}` — `throttled` (rule throttle), `breaker_open` (see below), `render_error`/`validate_error` (see the master's Error logs for the exact template or validation failure; a reaction file with any invalid block executes nothing), `no_targets` (target expression resolved to zero peels — a trustworthy signal: during master boot, dispatch reactions redeliver as `error` until the facts index finishes its initial replay, so `no_targets` is never a boot artifact), `refused` (enroll gate: non-`_master` origin or `require_peel` mismatch; or chaining disabled).
+5. **Check readiness**: `curl -s localhost:9091/readyz | jq .checks.reactor` — `down` means no consumer is running on that master (check every master; only one needs it).
+
+### Breaker open (`zester_reactor_breaker_open{rule=...} == 1`)
+
+The rule exceeded `storm_rate` completed fires/minute — almost always a feedback loop: the reaction causes the condition that re-emits the event (e.g. a restart that keeps crashing the service). While open, the master's `reactor` readiness check reports `degraded` listing the affected rules. The breaker auto-closes after `breaker_cooldown` (default 5m) — within ~15s of expiry even if no further events arrive — and re-trips if the storm continues. Fix the underlying loop (add a `throttle:` to the rule, fix the failing service, narrow the glob); don't just raise `storm_rate`.
+
+### Lag growing (`zester_reactor_lag`)
+
+Events are arriving faster than reactions complete. Check `zester_reactor_render_duration_seconds` (slow templates), look for `backpressure` drops (worker queue saturation — raise `reactor.workers`), and check whether one source is flooding (`zester_reactor_events_total` rate vs. `ratelimit` drops). Remember all reactor-enabled masters share the consumer — adding a master adds reaction capacity.
+
+### Readiness `degraded`: "running on last-known-good rules"
+
+The last rule load failed — typically a YAML error in `top.zy`, a rule referencing a missing reaction file, or a torn publish. The exact error is in the check message and the master's Warn logs (`reactor: rule load failed`). The previous good rule set stays active, so reactions keep working; fix the file in `reactor.dir` on the publisher master and trigger a republish — reactor files publish when a master acquires the `publisher` lease, so restart the publishing master (or fail the lease over). The reload then flips the check back to `ok`. `zester reactor test` runs against the same live snapshot, so it can confirm what's actually loaded.

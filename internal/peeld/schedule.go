@@ -6,14 +6,15 @@ import (
 
 	"github.com/ptorbus/zester/internal/config"
 	"github.com/ptorbus/zester/pkg/job"
+	"github.com/ptorbus/zester/pkg/proto"
 	"github.com/ptorbus/zester/pkg/schedule"
 )
 
 // schedExec is the scheduler's ExecFn. Scheduled single-module runs carry no
 // separate state ID; state modules that need one read it from args (e.g.
-// name/path/state).
+// name/path/state — and a scheduled event.send reads its tag from tag=).
 func (a *Agent) schedExec(ctx context.Context, module string, args map[string]any) schedule.ExecResult {
-	resp, err := a.execModule(ctx, "", module, args)
+	resp, err := a.execModule(ctx, proto.ExecRequest{Module: module, Args: args})
 	if err != nil {
 		return schedule.ExecResult{Error: err.Error()}
 	}

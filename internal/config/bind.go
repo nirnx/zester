@@ -34,19 +34,28 @@ import (
 )
 
 var (
-	durationType    = reflect.TypeOf(time.Duration(0))
-	stringSliceType = reflect.TypeOf([]string(nil))
+	durationType       = reflect.TypeOf(time.Duration(0))
+	configDurationType = reflect.TypeOf(Duration(0))
+	stringSliceType    = reflect.TypeOf([]string(nil))
 )
+
+// isDurationType reports whether t is one of the duration flag types:
+// time.Duration or the YAML-tolerant config.Duration (both bind as
+// flag.Duration; the flag form is identical).
+func isDurationType(t reflect.Type) bool {
+	return t == durationType || t == configDurationType
+}
 
 // BindFlags registers one flag on fs per `flag:"..."`-tagged field of the
 // struct pointed to by cfg, using the field's current value as the flag
 // default (callers set defaults by pre-populating the struct). The optional
 // `usage:"..."` tag supplies the help text.
 //
-// Supported field types: string, bool, int, int64, time.Duration, float64,
-// and []string (flag value parsed as a comma-separated list, empty items
-// dropped). Untagged struct fields are recursed into; other untagged fields
-// are skipped. A tag of `flag:"-"` skips the field explicitly.
+// Supported field types: string, bool, int, int64, time.Duration (and the
+// YAML-tolerant config.Duration), float64, and []string (flag value parsed
+// as a comma-separated list, empty items dropped). Untagged struct fields
+// are recursed into; other untagged fields are skipped. A tag of `flag:"-"`
+// skips the field explicitly.
 //
 // Duplicate flag names (within cfg or against flags already registered on
 // fs), unsupported tagged field types, and non-struct-pointer cfg values
@@ -62,8 +71,8 @@ func BindFlags(fs *flag.FlagSet, cfg any) error {
 		}
 		v := bf.value
 		switch {
-		case v.Type() == durationType:
-			fs.Duration(bf.name, v.Interface().(time.Duration), bf.usage)
+		case isDurationType(v.Type()):
+			fs.Duration(bf.name, time.Duration(v.Int()), bf.usage)
 		case isStringSlice(v.Type()):
 			def := make([]string, v.Len())
 			for i := range def {
@@ -184,7 +193,7 @@ func walkFlagFields(v reflect.Value, prefix string, out *[]flagField, seen map[s
 			continue
 		}
 		if !supportedFlagType(sf.Type) {
-			return fmt.Errorf("config: field %s has unsupported flag type %s (supported: string, bool, int, int64, float64, time.Duration, []string)", path, sf.Type)
+			return fmt.Errorf("config: field %s has unsupported flag type %s (supported: string, bool, int, int64, float64, time.Duration, config.Duration, []string)", path, sf.Type)
 		}
 		if prev, dup := seen[name]; dup {
 			return fmt.Errorf("config: duplicate flag name %q (fields %s and %s)", name, prev, path)
@@ -201,7 +210,7 @@ func walkFlagFields(v reflect.Value, prefix string, out *[]flagField, seen map[s
 }
 
 func supportedFlagType(t reflect.Type) bool {
-	if t == durationType || isStringSlice(t) {
+	if isDurationType(t) || isStringSlice(t) {
 		return true
 	}
 	switch t.Kind() {
@@ -241,7 +250,7 @@ func setFieldValue(field reflect.Value, val any) error {
 			return nil
 		}
 	case time.Duration:
-		if field.Type() == durationType {
+		if isDurationType(field.Type()) {
 			field.SetInt(int64(v))
 			return nil
 		}

@@ -1,0 +1,12 @@
+# Self-heal reaction for 'web-01/beacon/*/service' events: when the service
+# beacon reports a service DOWN (running: false), start it again on the
+# emitting peel. Events reporting the service running render an empty
+# document — no actions, no job.
+{% if not event.data.get('running', true) %}
+heal-{{ event.data.get('service', 'unknown') }}:
+  dispatch.module:
+    - target: "{{ event.peel }}"
+    - function: service.running
+    - state_id: "{{ event.data.get('service', '') }}"
+    - timeout: 120
+{% endif %}

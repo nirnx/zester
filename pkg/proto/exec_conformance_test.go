@@ -35,12 +35,13 @@ func fullStateResult() proto.StateResult {
 
 func fullExecRequest() proto.ExecRequest {
 	return proto.ExecRequest{
-		V:      proto.ProtocolVersion,
-		JID:    "jid-123",
-		Module: "cmd.run",
-		ID:     "uptime",
-		Args:   map[string]any{"command": "uptime"},
-		Epoch:  7,
+		V:            proto.ProtocolVersion,
+		JID:          "jid-123",
+		Module:       "cmd.run",
+		ID:           "uptime",
+		Args:         map[string]any{"command": "uptime"},
+		Epoch:        7,
+		ReactorDepth: 2,
 	}
 }
 
@@ -109,7 +110,9 @@ func TestWireKeyConformance(t *testing.T) {
 		req := fullExecRequest()
 		requireAllFieldsSet(t, req)
 		assertGoldenKeys(t, "ExecRequest", encodedKeys(t, req), []string{
-			"args", "epoch", "id", "jid", "module", "v",
+			// "rdepth" (ReactorDepth) is the reactor chain depth threaded
+			// through the job hop; added additively (omitempty, zero-safe).
+			"args", "epoch", "id", "jid", "module", "rdepth", "v",
 		})
 	})
 
@@ -198,5 +201,33 @@ func TestVersionFieldOmittedWhenZero(t *testing.T) {
 	}
 	if decoded.JID != "old" || decoded.Module != "test.ping" {
 		t.Fatalf("legacy ExecRequest decode mismatch: %+v", decoded)
+	}
+}
+
+// TestReactorDepthOmittedWhenZero verifies the omitempty contract on
+// ReactorDepth: requests not spawned by the reactor (the overwhelming
+// majority) must not emit "rdepth", and decoding a message without it must
+// yield ReactorDepth == 0 — the documented not-reactor-spawned marker.
+func TestReactorDepthOmittedWhenZero(t *testing.T) {
+	req := fullExecRequest()
+	req.ReactorDepth = 0
+	for _, k := range encodedKeys(t, req) {
+		if k == "rdepth" {
+			t.Fatalf("ExecRequest with ReactorDepth=0 encoded an \"rdepth\" key; it must be "+
+				"omitted so non-reactor dispatches stay byte-compatible with old readers. %s", policyMsg)
+		}
+	}
+
+	// Round-trip a pre-reactor message: no "rdepth" key → ReactorDepth == 0.
+	data, err := msgpack.Marshal(map[string]any{"jid": "old", "module": "test.ping"})
+	if err != nil {
+		t.Fatalf("msgpack marshal legacy map: %v", err)
+	}
+	var decoded proto.ExecRequest
+	if err := msgpack.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("msgpack unmarshal legacy ExecRequest: %v", err)
+	}
+	if decoded.ReactorDepth != 0 {
+		t.Fatalf("legacy ExecRequest decoded ReactorDepth=%d, want 0 (not reactor-spawned marker)", decoded.ReactorDepth)
 	}
 }

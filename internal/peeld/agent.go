@@ -44,6 +44,7 @@ import (
 	"github.com/ptorbus/zester/internal/metrics"
 	"github.com/ptorbus/zester/internal/version"
 	"github.com/ptorbus/zester/pkg/auth"
+	"github.com/ptorbus/zester/pkg/beacon"
 	"github.com/ptorbus/zester/pkg/bus"
 	"github.com/ptorbus/zester/pkg/enroll"
 	"github.com/ptorbus/zester/pkg/exec"
@@ -164,6 +165,18 @@ type Agent struct {
 	// grains.*, sys.list_functions) deliberately run OUTSIDE this mutex on
 	// contexts derived from mctxTemplate (finding 32).
 	execMu sync.Mutex
+
+	// execBusy is set while a mutating module execution runs (the execModule
+	// body, under execMu) and read lock-free by the beacon manager's BusyFn:
+	// beacons skip polls while the exec worker is busy so a
+	// reaction-triggered state run does not re-trip the beacon that caused
+	// it (disable_during_state_run, reactor amendment 22).
+	execBusy atomic.Bool
+
+	// beaconPtr holds the beacon manager once the connected phase starts it;
+	// applyResolvedSettings hot-swaps its config through this pointer on
+	// settings changes — same shape as schedPtr.
+	beaconPtr atomic.Pointer[beacon.Manager]
 
 	// execQueue is the bounded queue feeding the single exec worker
 	// goroutine; see handler.go. Sized execQueueSize; when full, requests are
@@ -704,6 +717,18 @@ func (a *Agent) applyResolvedSettings(newSettings map[string]any, initial bool) 
 		if initial && len(dynEntries) > 0 {
 			a.logger.Info("schedule entries loaded from settings", "count", len(dynEntries))
 		}
+	}
+
+	// Hot-reload the beacon config (v1: the service beacon). Best-effort,
+	// mirroring the schedule reload above: whatever parsed cleanly is
+	// applied (removing the beacons key disables polling); parse errors are
+	// Warn-logged and never crash the watcher.
+	if bm := a.beaconPtr.Load(); bm != nil {
+		bcfg, err := beacon.ParseConfig(newSettings)
+		if err != nil {
+			a.logger.Warn("beacon settings reload error", "error", err)
+		}
+		bm.UpdateConfig(bcfg)
 	}
 }
 

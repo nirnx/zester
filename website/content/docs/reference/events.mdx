@@ -1,0 +1,193 @@
+---
+title: "Events & Reactor Reference"
+---
+
+Reference for Zester's event system: the wire format, subject scheme, tag and match-key derivation, CLI commands, rule file schemas, and the field tables for every reaction action type.
+
+Concepts and design live in the [Reactor architecture](/docs/architecture/reactor); rule-authoring guidance in the [Reactor guide](/docs/guides/reactor).
+
+**Source**: `pkg/event`, `pkg/reactor`, `pkg/bus/subjects.go`
+
+---
+
+## Event Wire Format
+
+Every message under `zester.event.>` is a MessagePack-encoded `event.Event`. Wire evolution is additive-only (the encoded key set is pinned by a conformance test):
+
+| Field | msgpack key | Type | Meaning |
+|---|---|---|---|
+| `ID` | `id` | string | Publisher-minted KSUID (deterministic SHA-256 hex for reactor-derived events) — the dedup anchor for reaction JIDs and chain IDs |
+| `Tag` | `tag` | string | Slash tag (`myco/deploy/finished`). Must equal the subject-derived tag or consumers drop the event as a spoof |
+| `Data` | `data` (omitempty) | map | Untrusted publisher payload |
+| `TS` | `ts` | timestamp | Publisher's timestamp (untrusted; used only for the staleness gate) |
+| `V` | `v` (omitempty) | int | Wire-protocol generation (`proto.ProtocolVersion`); decoded `0` = never set = compatible |
+| `Origin` | `origin` (omitempty) | string | Provenance: empty for organic events, `reaction:<rule-ref>` for reactor-derived events |
+| `Depth` | `depth` (omitempty) | int | Reaction chain depth: 0 organic, parent+1 per reactor hop |
+
+## Subject Scheme
+
+| Subject | Origin token | Derived slash tag | Kind |
+|---|---|---|---|
+| `zester.event.<peel-id>.send.<t1>.<t2>...` | `<peel-id>` | `t1/t2/...` | peel `event.send` |
+| `zester.event.<peel-id>.beacon.<name>` | `<peel-id>` | `beacon/<peel-id>/<name>` | beacon |
+| `zester.event._master.<t1>.<t2>...` | `_master` | `t1/t2/...` | master-synthesized |
+| `zester.event._admin.send.<t1>.<t2>...` | `_admin` | `t1/t2/...` | operator (`zester event send`) |
+
+`event.ParseSubject` rejects subjects with fewer than 4 tokens, empty or wildcard tokens, unrecognized shapes, and any `_`-prefixed origin other than `_master`/`_admin`. Peel IDs are validated at enrollment against `^[a-zA-Z0-9][a-zA-Z0-9_-]*$` (max 128 chars — no dots, no leading `_`, no NATS wildcards), so peel origins can never collide with the reserved tokens.
+
+Related non-event subjects:
+
+| Subject | Purpose |
+|---|---|
+| `zester.reactor.test` | CLI → master request/reply for rule dry-runs (queue group `zester-reactor-testers`) |
+
+### Tags and Match Keys
+
+- **Slash form** in payloads, rule files, and CLI output: `myco/deploy/finished`. **Dotted form** on subjects: `myco.deploy.finished`. The mapping is 1:1 because tag segments may only contain `[a-zA-Z0-9_-]` (`event.ValidateTag`; dots, `*`, `>`, whitespace rejected). Tags may lead with `_`; origins may not.
+- **Match key** = `<origin>/<slash-tag>` — what reactor rules and `zester event watch` filters match against. Examples: `web-01/myco/deploy/finished`, `web-01/beacon/web-01/service`, `_master/enroll/pending/enr-123`, `_admin/maintenance/start`, `_master/reaction/<tag>` (chained events).
+- **Master-emitted events** shipped in v1: `enroll/pending/<enrollment-id>` with data `{id, peel_id, ip}` (`ip` omitted when unknown), published when a new enrollment request is created. Job lifecycle events (`job/<jid>/finalized` etc.) are Phase 2 — not emitted yet.
+
+## NATS Resources
+
+| Resource | Name | Parameters |
+|---|---|---|
+| Stream | `events` | subjects `zester.event.>`, MaxAge 7d, MaxBytes 1 GiB, MaxMsgs 1,000,000, MsgID duplicate window 2m, file storage, limits retention |
+| Durable consumer | `reactor` (shared by all masters) | filter `zester.event.>`, DeliverNew, explicit ack, AckWait 60s, MaxDeliver 5, MaxAckPending 64 |
+| KV bucket | `reactor-files` | rule files under `reactor/<path>` keys + `_manifest` + `_revision`; history 3; master-only (no peel JWT grants) |
+
+JWT grants: peels publish events via the pre-existing `zester.event.<peel-id>.>` grant (nothing new needed). Admin credentials carry publish on `zester.event._admin.>` (for `zester event send`) and `zester.reactor.>` (for `zester reactor test`), plus subscribe on `zester.event.>` (for `zester event watch`); admin creds issued before these grants existed work degraded — the event/reactor CLI fails until they are re-issued.
+
+## CLI Reference
+
+### `zester event send <tag> [key=value ...]`
+
+Publish an operator event on `zester.event._admin.send.<dotted-tag>` (match key `_admin/<tag>`). The tag may be given in slash (`myco/deploy/finished`) or dotted (`myco.deploy.finished`) form. Every remaining argument must be `key=value` (values are strings); pairs become `Event.Data`. Honors the global `--format text|json|yaml` for the confirmation (ID, tag, match key, subject). The publish is flushed before exit, so success means the event provably reached the server.
+
+```bash
+zester event send myco/deploy/finished version=1.2.3
+zester event send maintenance/start reason='kernel patching'
+```
+
+### `zester event watch [match-glob]`
+
+Subscribe to `zester.event.>` and print one line per event until interrupted. The optional glob filters client-side against the match key with rule semantics (`*` crosses `/`). Text format shows `HH:MM:SS  <match-key>  [depth=N]  <data-json>`; `--format json|yaml` emits structured records (`ts`, `key`, `origin`, `tag`, `id`, `depth`, `provenance`, `data`). Origin and tag come from the subject; malformed events are silently skipped.
+
+```bash
+zester event watch
+zester event watch '_master/enroll/pending/*'
+zester event watch '*/beacon/*/service'
+```
+
+### `zester reactor test <match-key> [--data k=v ...] [--event-json '<json>']`
+
+Dry-run a match key (`<origin>/<tag>`) against the live rule set over `zester.reactor.test` (5s timeout). A reactor-enabled master matches the key, renders each matched reaction with a synthetic event, and returns the normalized action summaries and any render/validation errors — **nothing executes**. `--event-json` supplies the event data as a JSON object; repeatable `--data key=value` entries overlay it. A no-responders error means no running master has the reactor enabled.
+
+```bash
+zester reactor test '_master/enroll/pending/enr-1'
+zester reactor test 'web-01/myco/deploy/finished' --data version=1.2.3
+```
+
+### `zester '<target>' event.send <tag> [key=value ...]` (execution module)
+
+Runs on the targeted peels: each publishes the event under its **own** identity on `zester.event.<peel-id>.send.<dotted-tag>` (match key `<peel-id>/<tag>`). The bare positional is the tag (slash or dotted form); scheduled runs without a positional may pass `tag=<tag>` in args instead. Remaining args become `Event.Data` verbatim (the control keys `test` and `tag` are stripped). `--test` / `test=True` reports what would be sent without publishing. The module runs on the serialized exec-worker path; a publish failure (NATS down) fails the execution — ad-hoc events are not buffered peel-side. When the execution itself was dispatched by a reactor rule, the emitted event inherits the chain depth from `ExecRequest.ReactorDepth`.
+
+## Rule File Schemas
+
+### `reactor/top.zy`
+
+Plain YAML (never templated). `reactor:` is an ordered list of single-key entries; the key is an fnmatch glob over match keys (`*` crosses `/`, `?` one char, `[seq]`/`[!seq]` classes); every matching entry fires, in file order.
+
+```yaml
+reactor:
+  # Form 1: bare list of dotted reaction refs
+  - '<match-glob>':
+      - <ref>
+      - <ref2>
+  # Form 2: options map
+  - '<match-glob>':
+      react:
+        - <ref>
+      throttle: 30s        # duration string or bare seconds; per (rule, source)
+```
+
+Refs are dotted paths resolved to bucket keys by replacing dots with slashes and appending `.zy` (`reactor.deploy.notify` → key `reactor/deploy/notify.zy`, i.e. `deploy/notify.zy` inside the reactor dir — the leading `reactor.` segment is the published key namespace and is always required); segments are limited to `[a-zA-Z0-9_-]`. A ref pointing at a missing file fails the whole rule load (last-known-good rules stay active).
+
+### Reaction files
+
+Jinja-rendered YAML producing a mapping of blocks; each block has exactly one action key. Render context: `event.{id,tag,peel,origin,depth,ts,data}`, top-level aliases `tag`/`data`, and `origin_facts`. Unknown action keys or fields fail validation; a file with any invalid block executes **no** actions.
+
+## Action Field Tables
+
+### `dispatch.module`
+
+| Field | Required | Type / Default | Meaning |
+|---|---|---|---|
+| `target` | yes | string | Target expression (compound/glob by default) — must parse under `pkg/target` |
+| `target_type` | no | `glob` | One of `glob`, `pcre`/`regex`, `fact`/`grain`/`grains`, `settings`/`pillar`, `list`, `compound` — folded into the `E@`/`G@`/`I@`/`L@` prefix form |
+| `function` | yes | string | Module function; must match `^[a-z0-9_]+\.[a-z0-9_]+$` |
+| `args` | no | map | Module arguments |
+| `state_id` | no | string | Bare positional (forwarded as the `ExecRequest` ID, e.g. a state or package name) |
+| `timeout` | no | 60s (5m for `state.apply`, 10m for `state.highstate`) | Job timeout (duration string or seconds) |
+| `max_targets` | no | unlimited | Abort the action (`result="aborted"`) when the resolved target count exceeds this |
+
+### `dispatch.state`
+
+| Field | Required | Type / Default | Meaning |
+|---|---|---|---|
+| `target`, `target_type` | yes / no | | As above |
+| `sls` | one of | string | Dispatches `state.apply` with `mods: <sls>` (default timeout 5m) |
+| `highstate` | one of | bool | Dispatches `state.highstate` (default timeout 10m). Mutually exclusive with `sls` |
+| `args` | no | map | Extra module arguments (merged over `mods`) |
+| `timeout` | no | 5m / 10m | Overrides the state-function default |
+| `max_targets` | no | unlimited | As above |
+
+### `local.<mod.func>` (Salt sugar)
+
+Normalizes to a dispatch action with `function` = the part after `local.`.
+
+| Field | Required | Type | Meaning |
+|---|---|---|---|
+| `tgt` | yes | string | Target expression |
+| `tgt_type` | no | string | Same values as `target_type` |
+| `arg` | no | string or 1-element list | The single positional argument (becomes `state_id`); more than one positional is a validation error — use `kwarg` |
+| `kwarg` | no | map | Keyword arguments (becomes `args`) |
+| `timeout` | no | function-dependent | Job timeout (60s; 5m/10m for the state functions — same defaults as `dispatch.*`) |
+
+### `enroll.approve` / `enroll.reject` / `enroll.revoke`
+
+Executor-enforced gate: these actions run **only** for `_master`-origin events, regardless of rule globs.
+
+| Field | Required | Type | Meaning |
+|---|---|---|---|
+| `id` | yes | string | Enrollment ID (`enr-<ksuid>`) |
+| `require_peel` | yes | glob | The enrollment record's peel ID must match this fnmatch glob or the action is refused. **Mandatory at compile time** — a block without it fails validation |
+| `reason` | no | string | Recorded on reject/revoke |
+
+Outcome classification: already-applied transitions → `duplicate` (suppressed); missing record, `require_peel` mismatch, or invalid state transition → `refused`; transient KV/CAS failures redeliver and reclassify. Transitions record operator `reactor` on the enrollment record; the master's audit log carries `reactor:<rule>`.
+
+### `event.send`
+
+| Field | Required | Type | Meaning |
+|---|---|---|---|
+| `tag` | yes | string | Slash tag of the derived event (validated by `event.ValidateTag`) |
+| `data` | no | map | Derived event payload |
+
+Publishes on `zester.event._master.reaction.<dotted-tag>` (match key `_master/reaction/<tag>`) with deterministic ID `sha256(parent.ID ‖ rule ‖ block)` (also the JetStream MsgID), provenance `origin: reaction:<rule>`, and `depth = parent + 1`. Refused when chaining is disabled or the derived depth would reach `max_chain_depth`.
+
+### `log`
+
+| Field | Required | Type | Meaning |
+|---|---|---|---|
+| `message` | yes | string | Logged at Info with rule, event ID, tag, and origin. Scalar shorthand `log: "<message>"` also accepted |
+
+## Reaction Job Attribution
+
+Jobs dispatched by reactions are regular jobs with deterministic identity and full provenance:
+
+| Property | Value |
+|---|---|
+| JID | `rxn-` + `hex(sha256(origin ‖ event.ID ‖ rule ‖ block))[:32]` — a duplicate dispatch fails with `job.ErrJIDConflict` and is suppressed |
+| `Job.User` | `reactor:<rule-ref>` |
+| `Job.TargetExpr` | The rendered target expression (audit) |
+| `Job.Metadata` | `source: reactor`, `rule`, `event_id`, `event_tag`, `reactor_depth` (= event depth + 1) |
+| `ExecRequest.ReactorDepth` | msgpack `rdepth,omitempty` — stamped from `Metadata["reactor_depth"]` on every publish path, so a peel-side `event.send` inside the job emits at the correct chain depth |

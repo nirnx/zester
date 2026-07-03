@@ -71,6 +71,16 @@ The packaged config installed by the `.deb`/`.rpm` (`packaging/config/master.yam
 | `gitfs.remotes` | list | `[]` | Git remote URLs for state file sync |
 | `gitfs.interval` | duration | `5m` | GitFS pull interval |
 | `gitfs.ssh_key` | string | `""` | Path to SSH private key for GitFS |
+| `reactor.enabled` | bool | `true` | Run the reactor engine (event-driven reactions) on this master |
+| `reactor.dir` | string | `/data/reactor` | Local directory holding reactor rule files (`top.zy` + reaction `.zy` files) |
+| `reactor.workers` | int | `4` | Reactor render/execute worker pool size |
+| `reactor.max_chain_depth` | int | `3` | Maximum reaction chain depth before events are dropped |
+| `reactor.enable_chaining` | bool | `true` | Allow reaction rules to emit derived events (`event.send`) |
+| `reactor.default_throttle` | duration | `0` | Default per-(rule, source) refractory period (`0` = none) |
+| `reactor.source_rate_limit` | int | `120` | Per-source event rate limit in events/minute (`0` = unlimited) |
+| `reactor.max_event_age` | duration | `1h` | Drop events older than this at consume time (`0` = full replay). See [Reactor operations](/docs/operations/reactor). |
+| `reactor.storm_rate` | int | `60` | Per-rule fires/minute that trips the circuit breaker (`0` = no breaker) |
+| `reactor.breaker_cooldown` | duration | `5m` | How long a tripped reaction circuit breaker stays open |
 
 <Callout type="info" title="REST API exposure and rate limiting">
 REST API routes are only registered when `api.docs_enabled` is true or at least one `api.tokens` entry exists. The unauthenticated peel-facing enrollment endpoints (`/api/v1/enroll` and subpaths) get a strict per-IP rate limit (burst 10, 1 req/10s); all other routes — the token-authenticated REST API — get a much higher budget (burst 120, 20 req/s per IP).
@@ -97,6 +107,16 @@ REST API routes are only registered when `api.docs_enabled` is true or at least 
 | `--gitfs-remotes` | `""` | Comma-separated Git remote URLs for state file sync. Passing an explicitly empty value (`--gitfs-remotes ""`) disables GitFS even when the config file sets `gitfs.remotes`. |
 | `--gitfs-interval` | `5m` | GitFS pull interval |
 | `--gitfs-ssh-key` | `""` | Path to SSH private key for GitFS authentication |
+| `--reactor` | `true` | Enable the reactor engine (event-driven reactions) |
+| `--reactor-dir` | `/data/reactor` | Local directory holding reactor rule files |
+| `--reactor-workers` | `4` | Reactor render/execute worker pool size |
+| `--reactor-max-chain-depth` | `3` | Maximum reaction chain depth before events are dropped |
+| `--reactor-enable-chaining` | `true` | Allow reaction rules to emit derived events |
+| `--reactor-default-throttle` | `0` | Default per-(rule, source) refractory period |
+| `--reactor-source-rate-limit` | `120` | Per-source event rate limit (events/minute; `0` = unlimited) |
+| `--reactor-max-event-age` | `1h` | Drop events older than this at consume time (`0` = full replay) |
+| `--reactor-storm-rate` | `60` | Per-rule fires/minute that trips the circuit breaker (`0` = no breaker) |
+| `--reactor-breaker-cooldown` | `5m` | How long a tripped reaction circuit breaker stays open |
 
 The master credentials file is loaded from `<auth-dir>/master.creds` and the account seed from `<auth-dir>/account.seed`. The default auth directory is `/data/auth`; override with `--auth-dir` or `auth_dir` in the config file.
 
@@ -132,6 +152,7 @@ Readiness checks:
 | `sched-consumer` | The `schedule-results` consumer is not running. A boot failure is retried every 60s in the background; the check flips to OK once a retry succeeds (log line: `scheduled-result consumer started after retry`). | — |
 | `target-service` | The target-resolution service failed to start. Non-fatal: CLI and peel targeting fall back to facts-KV scans. | — |
 | `gitfs` (registered only when GitFS is enabled) | The GitFS syncer exited | No successful sync yet — normal on a standby master that does not hold the [publisher lease](#multi-master-coordination) — or the last fully successful sync is older than 3× the pull interval |
+| `reactor` (registered only when the reactor is enabled) | The shared durable `reactor` consumer is not running. A boot failure is retried every 60s in the background. | The last rule load failed (running on last-known-good rules), or a rule's storm circuit breaker is open (the message lists the affected rules). See [Reactor operations](/docs/operations/reactor). |
 
 `/readyz` reports `503` from process start until the NATS connection is established, so it is suitable for systemd/Kubernetes readiness gating and is what the watchdog polls during the update soak phase (`--ready-url`).
 
@@ -149,7 +170,7 @@ Two pieces of work are gated behind **advisory leader leases** — TTL'd entries
 
 | Lease key | Leader-only work |
 |-----------|------------------|
-| `publisher` | Settings-files publish, state-files publish, and the GitFS sync loop |
+| `publisher` | Settings-files publish, state-files publish, reactor-rules publish (independent of `reactor.enabled`), and the GitFS sync loop |
 | `facts-secrets` | Per-peel encrypted-secrets publication from the facts watcher |
 
 In a single-master deployment the leases are acquired immediately after storage initialization, so startup behavior is unchanged. Standby masters log `publisher lease candidate started; standing by until acquired` and still load the settings files locally — `settings files loaded for peel-side rendering` appears on every master, because every master must be able to encrypt secrets — but only the lease holder logs `published raw settings files for peel-side rendering` and `published state files`. When a standby acquires the lease (the previous holder died or lost connectivity), it republishes the settings and state files and takes over the GitFS sync loop.
@@ -292,8 +313,8 @@ JetStream storage benefits significantly from SSD/NVMe storage. Mechanical disks
 4. Connect to the external NATS server using credentials (`<auth-dir>/master.creds`), retrying with backoff (up to 20 attempts).
 5. Initialize KV buckets and streams (`InitializeStorage`) and the update Object Store (`InitializeObjectStores`), each with short per-attempt timeouts and retries.
 6. Load account key for settings encryption (`<auth-dir>/account.seed`), initialize the peel-side rendering publisher, publish the master curve public key, and load + sanitize the raw settings files (`settings files loaded for peel-side rendering` — this runs on every master).
-7. Initialize the state-files publisher and construct the GitFS syncer if `gitfs.remotes` is configured.
-8. Start the `publisher` leader lease — the holder publishes the settings files and state files to KV and runs the GitFS sync loop (see [Multi-Master Coordination](#multi-master-coordination)).
+7. Initialize the state-files publisher and the reactor-files publisher (constructed regardless of `reactor.enabled` — rule distribution is a lease concern, not an engine concern), and construct the GitFS syncer if `gitfs.remotes` is configured.
+8. Start the `publisher` leader lease — the holder publishes the settings files, state files, and reactor rule files to KV and runs the GitFS sync loop (see [Multi-Master Coordination](#multi-master-coordination)).
 9. Generate unique master instance ID (KSUID-based) and start the job manager.
 10. Start the shared durable `schedule-results` consumer on the `job-events` stream (persists peel scheduler `return_job` results as synthetic jobs); a boot failure is retried every 60s in the background.
 11. Subscribe to job dispatch requests via queue group (`zester.masters`).
@@ -308,7 +329,8 @@ JetStream storage benefits significantly from SSD/NVMe storage. Mechanical disks
 20. Start the enrollment admin request/reply service (queue group `zester-masters-admin`).
 21. Initialize the rollout controller, subscribe to rollout start/abort requests, and start the rollout resume loop (adopts rollouts orphaned by dead masters, 60s scan).
 22. Start the target-resolution service (queue group `zester-target-resolvers`) backed by an in-memory facts index.
-23. Start the connected-peels gauge (recounts the `peel-heartbeat` bucket every 15s into `zester_master_connected_peels`).
+23. Start the reactor (when `reactor.enabled`): the rule loader over the `reactor-files` bucket, the shared durable `reactor` consumer on the `events` stream, the `zester.reactor.test` service, and the lag gauge; a boot failure is retried every 60s in the background.
+24. Start the connected-peels gauge (recounts the `peel-heartbeat` bucket every 15s into `zester_master_connected_peels`).
 
 ## Shutdown
 

@@ -242,7 +242,7 @@ JWT-based subject permissions enforce strict isolation between peels at the NATS
 
 | Subject Pattern | Purpose |
 |-|-|
-| `zester.event.<peel-id>.>` | Only its own events and beacons |
+| `zester.event.<peel-id>.>` | Only its own events and beacons — the reactor derives event identity from this NATS-enforced subject token, so a compromised peel can spoof only itself, never another peel or the reserved `_master`/`_admin` origins (see [Reactor architecture](/docs/architecture/reactor)) |
 | `zester.fact.<peel-id>` | Only its own fact data |
 | `zester.job.*.ack.<peel-id>` | Only its own job acknowledgments |
 | `zester.job.*.return.<peel-id>` | Only its own job returns |

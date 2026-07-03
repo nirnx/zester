@@ -1,0 +1,272 @@
+---
+title: "Reactor"
+---
+
+The reactor turns events into actions: peels and operators publish events, and master-side rules dispatch jobs, approve enrollments, chain further events, or log. This guide covers writing rules — the top file, reaction templates, every action type with worked examples — plus testing and Salt migration notes.
+
+For the system design see the [Reactor architecture](/docs/architecture/reactor); for configuration knobs, metrics, and runbooks see [Reactor operations](/docs/operations/reactor); for exact schemas and field tables see the [Events reference](/docs/reference/events).
+
+**Source**: `pkg/reactor`, `pkg/event`
+
+---
+
+## Where Rules Live
+
+Rules are `.zy` files in the master's reactor directory (default `/data/reactor`, configurable via `reactor.dir` / `--reactor-dir`). The master holding the `publisher` lease publishes them to the `reactor-files` KV bucket when it acquires the lease (start-up or failover), and every master's rule loader hot-reloads from the bucket within seconds of a publish. To push edited rules, restart the publishing master (or fail the lease over) — reactions keep running on the previous rule set meanwhile, and peels are unaffected.
+
+```
+/data/reactor/
+├── top.zy                # the rule table (which events fire which reactions)
+├── restart_service.zy    # reaction files (Jinja-rendered YAML) — ref "reactor.restart_service"
+├── autoapprove.zy        # ref "reactor.autoapprove"
+└── deploy/
+    └── notify.zy         # nested dirs work: ref "reactor.deploy.notify"
+```
+
+The whole directory is published under the `reactor/` key namespace, so every dotted reaction ref starts with the `reactor.` segment.
+
+## The Top File: `reactor/top.zy`
+
+`top.zy` is **plain YAML** (never templated): an ordered list of entries mapping a match-key glob to reaction refs. Two entry forms are supported:
+
+```yaml
+reactor:
+  # Bare-list form: glob -> list of dotted reaction refs
+  - '_master/enroll/pending/*':
+      - reactor.autoapprove
+
+  # Options form: react (required) + throttle (optional)
+  - 'web-*/beacon/*/service':
+      react:
+        - reactor.restart_service
+      throttle: 30s
+```
+
+- **Match keys include the origin**: rules match against `<origin>/<slash-tag>`, e.g. `web-01/myco/deploy/finished`, `_master/enroll/pending/enr-123`, `_admin/maintenance/start`. Forgetting the origin segment is the most common reason a rule never fires — `myco/deploy/*` does **not** match `web-01/myco/deploy/finished`.
+- **fnmatch semantics** (Salt-faithful): `*` matches any run of characters **including `/`**, `?` matches one character, `[seq]` / `[!seq]` are character classes. `*` crossing `/` means `web-*/beacon/*` matches `web-01/beacon/web-01/service` in one glob.
+- **Ordered, all matches fire**: every entry whose glob matches the key fires, in file order (Salt semantics).
+- **Refs are dotted paths** with dots mapping to directory separators: `reactor.deploy.notify` → `deploy/notify.zy` inside the reactor dir (the leading `reactor.` segment is the published key namespace). Refs referencing missing files fail the whole rule load (the previous good rule set stays active).
+- **`throttle`** is a per-(rule, source) refractory period — after the rule fires for a given origin, further fires for that same origin are skipped until the period elapses. Accepts a duration string (`30s`, `5m`) or a bare number of seconds.
+
+## Reaction Files
+
+Reaction files are Jinja-rendered YAML — the same template engine as states and settings, so filters (`|to_json`/`|json`), dict methods, and control structures all work. The context is the **event context** below, though: the `facts`/`settings` variables (and their `grains`/`pillar` aliases) render as empty maps here — use `origin_facts` for the emitting peel's facts. The rendered document is a mapping of **blocks**, each with exactly one action key:
+
+```yaml
+restart-{{ event.data.service }}:
+  dispatch.module:
+    target: {{ event.peel | to_json }}
+    function: service.restart
+    args:
+      name: {{ event.data.service | to_json }}
+    max_targets: 1
+```
+
+### Render Context
+
+| Variable | Meaning |
+|---|---|
+| `event.id` | The event's unique ID |
+| `event.tag` | The slash tag (subject-derived, spoof-proof) |
+| `event.peel` | The emitting peel's ID — empty for `_master` / `_admin` events. Subject-derived: a peel cannot fake it. |
+| `event.origin` | The raw origin token (`<peel-id>`, `_master`, or `_admin`) |
+| `event.depth` | Reaction chain depth (0 for organic events) |
+| `event.ts` | The publisher's timestamp |
+| `event.data` | The event payload map (**untrusted** — see below) |
+| `tag`, `data` | Salt-compat top-level aliases for `event.tag` / `event.data` |
+| `origin_facts` | The emitting peel's facts from the master's index (empty map for non-peel origins or unknown peels) |
+
+An all-conditional template that renders to nothing is valid: no actions execute. `salt['mod.func'](...)` is **not** available in reaction files — reactions have no master-side module dispatch, and using it is a render error.
+
+<Callout type="warn" title="Review reaction files like sudoers">
+`event.data` is attacker-controlled for peel-origin events: any process on a compromised peel can emit events with arbitrary data. Always pass event data through `|to_json` when interpolating it into YAML values — especially **targets**, function args, and file paths — so newlines and quotes cannot inject extra YAML keys or blocks. Post-render validation limits the blast radius (function-name allowlist, target must parse, optional `max_targets`), but the rule author decides what event data may influence. Treat every reaction file as a privileged program.
+</Callout>
+
+## Actions
+
+Each block has exactly one action key. Unknown action keys and unknown fields inside a block fail validation loudly — and a reaction file with **any** invalid block executes **nothing** (a partial reaction is worse than none).
+
+### `dispatch.module` — run a module on targeted peels
+
+```yaml
+collect-diagnostics:
+  dispatch.module:
+    target: 'G@role:web'
+    function: cmd.run
+    args:
+      name: /usr/local/bin/diag.sh
+    timeout: 120s
+    max_targets: 20
+```
+
+Fields: `target` (required), `target_type` (optional: `glob`, `pcre`, `fact`/`grain`, `settings`/`pillar`, `list`, `compound` — folded into the canonical `G@`/`E@`/`I@`/`L@` prefix form), `function` (required, must match `^[a-z0-9_]+\.[a-z0-9_]+$`), `args` (map), `state_id` (the bare positional, e.g. a package name), `timeout` (default 60s), `max_targets` (abort if the resolved target count exceeds it).
+
+### `dispatch.state` — apply a state or highstate
+
+```yaml
+refresh-loadbalancers:
+  dispatch.state:
+    target: 'G@role:loadbalancer'
+    sls: haproxy          # or: highstate: true (mutually exclusive)
+```
+
+`sls: <name>` dispatches `state.apply` with `mods: <name>` (default timeout 5m); `highstate: true` dispatches `state.highstate` (default 10m). `args`, `timeout`, `max_targets`, `target_type` as above.
+
+### `local.*` — Salt reactor sugar
+
+Salt's `local.<mod.func>` blocks work directly (`tgt`, `tgt_type`, `arg`, `kwarg`, `timeout`) and normalize to a `dispatch.module`:
+
+```yaml
+restart nginx:
+  local.service.restart:
+    tgt: 'web-*'
+    arg:
+      - nginx
+```
+
+Only **one** positional `arg` is supported (it becomes the bare positional / `state_id`); pass additional arguments via `kwarg`.
+
+### `enroll.approve` / `enroll.reject` / `enroll.revoke` — enrollment transitions
+
+```yaml
+approve-staging-peels:
+  enroll.approve:
+    id: {{ event.data.id | to_json }}
+    require_peel: 'staging-*'
+```
+
+`require_peel` is **mandatory at compile time**: the enrollment record's peel ID must match this glob or the action is refused. Additionally, the executor only runs `enroll.*` actions for events with the `_master` origin — a peel-emitted event can never trigger an enrollment transition, no matter how the rule is written. `reject` and `revoke` accept an optional `reason`. Already-applied transitions are suppressed as duplicates; records outside the state machine's allowed transitions are refused.
+
+The master emits `zester.event._master.enroll.pending.<id>` (match key `_master/enroll/pending/<id>`, data `{id, peel_id, ip}`) whenever a new enrollment request lands — pair it with the rule above for auto-approval of a trusted naming pattern.
+
+### `event.send` — emit a derived event (chaining)
+
+```yaml
+announce:
+  event.send:
+    tag: myco/deploy/alldone
+    data:
+      version: {{ event.data.version | to_json }}
+```
+
+The derived event publishes on `zester.event._master.reaction.<dotted-tag>` with `depth = parent + 1` and provenance `origin: "reaction:<rule>"` — so chained rules match it under the key `_master/reaction/<tag>` (e.g. `_master/reaction/myco/deploy/alldone`). Emission is refused when the chain depth would reach `reactor.max_chain_depth` (default 3) or when chaining is disabled (`reactor.enable_chaining: false`). Derived-event IDs are deterministic, so redeliveries never double-fire downstream rules.
+
+### `log` — structured log line
+
+```yaml
+audit:
+  log: "deploy finished on {{ event.peel }}: {{ data.version }}"
+# or the map form:
+audit2:
+  log:
+    message: "deploy finished"
+```
+
+Logged at Info on the processing master with rule, event ID, tag, and origin attached.
+
+## Worked Example: Service Self-Heal via Beacon
+
+**1. Configure the service beacon** on the peels (settings pipeline, e.g. `web.zy`):
+
+```yaml
+beacons:
+  service:
+    services:
+      nginx: {}
+    interval: 10
+    onchangeonly: true
+```
+
+The peel now emits `zester.event.<peel-id>.beacon.service` with data `{service, running, previous}` on every running-state transition.
+
+**2. Route the event** (`/data/reactor/top.zy` on the master):
+
+```yaml
+reactor:
+  - 'web-*/beacon/*/service':
+      react:
+        - reactor.restart_service
+      throttle: 60s
+```
+
+**3. React** (`/data/reactor/restart_service.zy`):
+
+```yaml
+{% if not data.running and data.previous %}
+restart-{{ data.service }}:
+  dispatch.module:
+    target: {{ event.peel | to_json }}
+    function: service.restart
+    args:
+      name: {{ data.service | to_json }}
+    max_targets: 1
+{% endif %}
+```
+
+The `throttle: 60s` gives the restart time to take effect before the rule may fire again for the same peel, and the storm breaker backstops a crash-looping service. The peel's beacon skips polls while its exec worker is busy, so the reaction's own restart doesn't immediately re-trip the beacon.
+
+## Worked Example: Deploy-Finished Notification
+
+The deploy pipeline (or an operator) announces completion:
+
+```bash
+zester event send myco/deploy/finished version=1.2.3      # publishes as _admin
+# or from a peel-side hook:
+zester 'web-01' event.send myco/deploy/finished version=1.2.3
+```
+
+```yaml
+# top.zy — match both origins explicitly
+reactor:
+  - '_admin/myco/deploy/finished':
+      - reactor.deploy.notify
+  - 'web-*/myco/deploy/finished':
+      - reactor.deploy.notify
+```
+
+```yaml
+# deploy/notify.zy
+record:
+  log: "deploy {{ data.version }} finished (origin {{ event.origin }})"
+
+refresh-lb:
+  dispatch.state:
+    target: 'G@role:loadbalancer'
+    sls: haproxy
+```
+
+## Testing Rules
+
+Dry-run a match key against the live rule set — matching, rendering, and validation run on a master, but **nothing executes**:
+
+```bash
+zester reactor test '_master/enroll/pending/enr-1' --data id=enr-1
+zester reactor test 'web-01/beacon/web-01/service' \
+    --event-json '{"service":"nginx","running":false,"previous":true}'
+```
+
+The output lists every matched rule with its normalized action summaries and any render/validation errors. Then exercise the real path:
+
+```bash
+zester event watch                          # live event feed (Ctrl-C to stop)
+zester event watch 'web-*/beacon/*'         # filtered by match-key glob
+zester event send myco/test/go path=/tmp/x  # inject an _admin event
+zester job list                             # reaction jobs appear with USER reactor:<rule>
+```
+
+Reaction jobs are fully attributed: `zester job show <jid>` reveals `user: reactor:<rule>` and metadata `source: reactor`, `rule`, `event_id`, `event_tag`, `reactor_depth`.
+
+## Salt Migration Notes
+
+| Salt | Zester |
+|---|---|
+| `reactor:` section in master config mapping tags to SLS files | `reactor/top.zy` in the reactor dir (hot-reloaded, no master restart) |
+| Match on event tag (`salt/beacon/<minion>/<beacon>`) | Match on `<origin>/<tag>` — the origin (peel ID / `_master` / `_admin`) is part of the key; beacon tags keep Salt's shape as `beacon/<peel-id>/<name>` |
+| `local.<mod.func>` with `tgt`/`tgt_type`/`arg`/`kwarg` | Works verbatim (`local.*` sugar); only one positional `arg` |
+| `runner.*` / `wrapper.*` / orchestrate reactions | Not in v1 (planned) — use `dispatch.state` / chained `event.send` instead |
+| `{{ data }}`, `{{ tag }}` in reaction templates | Same aliases; plus structured `event.*` and `origin_facts` |
+| `salt-run state.event pretty=True` | `zester event watch` |
+| Reactor fires unauthenticated on any event matching the tag | Enrollment actions are `_master`-origin-gated + `require_peel`; dispatch blocks are post-render validated |
+| No built-in loop protection | Depth cap, per-(rule,source) throttle, per-rule storm breaker, per-source rate limit |
+
+Unlike Salt's reactor — which parses reactions on the event loop and is notorious for stalling under load — rendering and execution run in a bounded worker pool with hard timeouts, and events are durable in JetStream, so reactions survive master restarts and are retried with exactly-once side effects.

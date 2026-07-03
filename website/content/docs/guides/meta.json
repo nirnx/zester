@@ -1,4 +1,4 @@
 {
   "title": "Guides",
-  "pages": ["states", "modules", "settings", "facts", "templating", "targeting", "basket", "jobs", "scheduling"]
+  "pages": ["states", "modules", "settings", "facts", "templating", "targeting", "basket", "jobs", "scheduling", "reactor"]
 }

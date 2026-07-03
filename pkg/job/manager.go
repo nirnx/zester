@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -12,8 +13,26 @@ import (
 	"time"
 
 	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/proto"
 )
+
+// ErrJIDConflict marks a Dispatch rejected because the JID is already
+// claimed by a job with DIFFERENT dispatch intent (function, args, targets,
+// timeout, user, or metadata differ). Callers that mint deterministic,
+// content-addressed JIDs on an exclusive keyspace — the reactor's "rxn-"
+// jobs — classify errors.Is(err, ErrJIDConflict) as duplicate-suppressed
+// success: an existing job under such a JID IS the same logical dispatch by
+// construction, even when resolved targets drifted between redeliveries.
+var ErrJIDConflict = errors.New("job: jid conflict")
+
+// ErrJobClaimPending marks a Dispatch that collided with a job record still
+// in StatusClaimed and owned by ANOTHER master. A claimed record is provably
+// never-published, but its owner only resumes it if its own Dispatch call
+// retries — a live master whose Dispatch already returned will never publish
+// it, and the orphan scanner ignores jobs whose owner is alive. The
+// collision is therefore neither a success nor a permanent conflict: callers
+// on retryable transports (the reactor Naks the triggering event) retry
+// until the owner resumes the claim or the orphan scanner reclaims it.
+var ErrJobClaimPending = errors.New("job: claim pending")
 
 // Manager dispatches jobs to peels, collects returns, and tracks job status.
 // It uses NATS for pub/sub communication, KV buckets for persistence, and
@@ -88,9 +107,12 @@ func (m *Manager) MasterID() string {
 }
 
 // Dispatch claims and sends a job to the targeted peels.
-// It uses KV CAS to claim ownership, preventing duplicate dispatch
-// across multiple masters. If another master already claimed the JID,
-// Dispatch returns nil and the job's existing JID (idempotent).
+// It uses KV CAS to claim ownership, preventing duplicate dispatch across
+// multiple masters. A JID collision resolves by the existing record's state:
+// our own still-claimed record resumes the interrupted dispatch, another
+// master's still-claimed record returns ErrJobClaimPending (retryable — see
+// the sentinel), a past-claimed record with matching intent is an idempotent
+// no-op, and one with different intent returns ErrJIDConflict.
 //
 // Ordering invariant (architecture review finding 17): intent is persisted
 // BEFORE anything is published — Create(claimed) → CAS to StatusRunning →
@@ -134,24 +156,35 @@ func (m *Manager) Dispatch(ctx context.Context, j *Job) error {
 		if decErr := bus.Decode(existing.Value(), &existingJob); decErr != nil {
 			return fmt.Errorf("job: decode existing job %s: %w", j.JID, decErr)
 		}
-		// Idempotent only if request intent matches exactly.
-		if ok, reason := sameDispatchIntent(&existingJob, j); !ok {
-			return fmt.Errorf("job: jid %s conflict: existing job differs (%s)", j.JID, reason)
-		}
-		if existingJob.Status == StatusClaimed && existingJob.Owner == m.masterID {
+		switch {
+		case existingJob.Status == StatusClaimed && existingJob.Owner == m.masterID:
 			// Our own earlier attempt persisted the claim but died (or
-			// errored) before the running CAS. Claimed records are
-			// provably unpublished, so resume from the running-CAS step.
+			// errored) before the running CAS. Claimed records are provably
+			// unpublished, so resume from the running-CAS step — BEFORE any
+			// intent comparison: deterministic-JID dispatches (the reactor's
+			// rxn- keyspace) legitimately re-render with drifted args or
+			// targets between attempts, and the unpublished claim makes
+			// adopting the requested intent safe.
 			m.logger.Info("resuming interrupted dispatch of claimed job", "jid", j.JID)
 			rev = existing.Revision()
 			// Re-ensure the active-index key (the crash may have hit the
 			// window between the record Create and the index Create).
 			writeActiveKey(ctx, jobsBucket, j.JID, m.masterID, false, m.logger)
-		} else {
-			// Another master owns the claim (it will publish or the
-			// orphan scanner will safely re-dispatch), or the job already
-			// progressed past claimed. Idempotent no-op.
-			m.logger.Info("job already claimed", "jid", j.JID, "owner", existingJob.Owner)
+		case existingJob.Status == StatusClaimed:
+			// Another master's claim, provably never-published — and its
+			// owner may never publish it (a live master whose Dispatch call
+			// already failed leaves the claim wedged until the scanner
+			// reclaims it). Not a success: return the typed retryable
+			// sentinel so the caller retries instead of assuming dispatch.
+			m.logger.Info("job claim pending on another master", "jid", j.JID, "owner", existingJob.Owner)
+			return fmt.Errorf("job: jid %s claimed by %s but not yet published: %w", j.JID, existingJob.Owner, ErrJobClaimPending)
+		default:
+			// The job progressed past claimed: idempotent no-op when the
+			// intent matches exactly, typed conflict when it differs.
+			if ok, reason := sameDispatchIntent(&existingJob, j); !ok {
+				return fmt.Errorf("job: jid %s conflict: existing job differs (%s): %w", j.JID, reason, ErrJIDConflict)
+			}
+			m.logger.Info("job already dispatched", "jid", j.JID, "owner", existingJob.Owner)
 			return nil
 		}
 	} else {
@@ -196,15 +229,7 @@ func (m *Manager) Dispatch(ctx context.Context, j *Job) error {
 
 	// Publish ExecRequest to each target peel via CmdSubject.
 	for _, target := range j.Targets {
-		req := proto.ExecRequest{
-			JID:    j.JID,
-			Module: j.Function,
-			ID:     j.StateID,
-			Args:   j.Args,
-			Epoch:  j.Epoch,
-			V:      proto.ProtocolVersion,
-		}
-		reqData, err := bus.Encode(req)
+		reqData, err := bus.Encode(execRequestForJob(j))
 		if err != nil {
 			m.logger.Error("failed to encode exec request", "jid", j.JID, "target", target, "error", err)
 			continue
@@ -294,15 +319,7 @@ func (m *Manager) ReclaimJob(ctx context.Context, j *Job) {
 		j.Epoch = newRev
 
 		for _, target := range j.Targets {
-			req := proto.ExecRequest{
-				JID:    j.JID,
-				Module: j.Function,
-				ID:     j.StateID,
-				Args:   j.Args,
-				Epoch:  j.Epoch,
-				V:      proto.ProtocolVersion,
-			}
-			reqData, err := bus.Encode(req)
+			reqData, err := bus.Encode(execRequestForJob(j))
 			if err != nil {
 				m.logger.Error("reclaim: encode exec request", "jid", j.JID, "target", target, "error", err)
 				continue

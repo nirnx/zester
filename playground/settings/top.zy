@@ -4,5 +4,7 @@ base:
     - common.users
   'web*':
     - webservers.nginx
+  'web-01':
+    - webservers.beacons
   'db*':
     - databases.postgres

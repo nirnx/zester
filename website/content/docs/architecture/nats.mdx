@@ -56,7 +56,7 @@ graph TD
     ROOT --> FACT["fact"]
     ROOT --> BASKET["basket"]
     ROOT --> JOB["job"]
-    ROOT --> REACTOR["reactor"]
+    ROOT --> REACTOR["reactor.test"]
     ROOT --> UPDATE["update"]
     ROOT --> TARGET["target.resolve"]
     ROOT --> ADMIN["admin.enroll"]
@@ -68,8 +68,11 @@ graph TD
     CMD --> CMD_T["&lt;peel-id&gt;"]
 
     EVENT --> EVT_P["&lt;peel-id&gt;"]
+    EVENT --> EVT_M["_master.&lt;tag&gt;"]
+    EVENT --> EVT_A["_admin.send.&lt;tag&gt;"]
     EVT_P --> EVT_B["beacon"]
     EVT_B --> EVT_BN["&lt;name&gt;"]
+    EVT_P --> EVT_S["send.&lt;tag&gt;"]
 
     FACT --> FACT_P["&lt;peel-id&gt;"]
 
@@ -97,9 +100,11 @@ graph TD
 |----------------|-----------|---------|---------|
 | `zester.cmd.<peel-id>` | Master -> Peel | Direct command dispatch | `zester.cmd.web-01` |
 | `zester.cmd.*` | Master (subscribe) | Wildcard for all commands | Monitoring |
-| `zester.event.<peel-id>` | Peel -> Master | Peel events (general) | `zester.event.web-01` |
-| `zester.event.<peel-id>.beacon.<name>` | Peel -> Master | Named beacon data | `zester.event.web-01.beacon.disk` |
-| `zester.event.>` | Master (subscribe) | All peel events wildcard | Event aggregation |
+| `zester.event.<peel-id>.send.<tag...>` | Peel -> events stream | Custom peel events (`event.send` module); tag tokens are dotted (`myco.deploy.finished` = tag `myco/deploy/finished`) | `zester.event.web-01.send.myco.deploy.finished` |
+| `zester.event.<peel-id>.beacon.<name>` | Peel -> events stream | Beacon events (v1: the `service` beacon) | `zester.event.web-01.beacon.service` |
+| `zester.event._master.<tag...>` | Master -> events stream | Master-synthesized events (enrollment pending, reactor-derived `reaction.<tag>` chains) | `zester.event._master.enroll.pending.enr-1` |
+| `zester.event._admin.send.<tag...>` | CLI -> events stream | Operator events (`zester event send`) | `zester.event._admin.send.maintenance.start` |
+| `zester.event.>` | events stream / admin (subscribe) | Captured durably by the `events` stream feeding the reactor; `zester event watch` subscribes live | Event aggregation |
 | `zester.fact.<peel-id>` | Peel -> Master | Fact data publication | `zester.fact.web-01` |
 | `zester.basket.<peel-id>.<function>` | Peel -> Peel | Cross-peel data sharing | `zester.basket.web-01.network.ip_addrs` |
 | `zester.dispatch` | CLI -> Master | Job dispatch request (request/reply, queue group: `zester.masters`) | `zester.dispatch` |
@@ -114,7 +119,7 @@ graph TD
 | `zester.job.<jid>.cancel` | CLI -> Master -> Peels | Job cancellation (stops peel execution) | `zester.job.abc123.cancel` |
 | `zester.job.<jid>.schedule.<peel-id>` | Peel -> JetStream | Scheduler `return_job` result (peel identity enforced by NATS permissions) | `zester.job.abc123.schedule.web-01` |
 | `zester.job.<jid>.>` | Any (subscribe) | All events for a job | Job monitoring |
-| `zester.reactor` | Internal | Event-driven reactions | Reactor engine |
+| `zester.reactor.test` | CLI -> Master | Reactor rule dry-run (request/reply, queue group: `zester-reactor-testers`) | `zester reactor test '_master/enroll/pending/*'` |
 | `zester.update.cmd.<id>` | Master -> Watchdog | Node-local update commands (request/reply) | `zester.update.cmd.web-01` |
 | `zester.update.rollout.start` | CLI -> Master | Start rollout request (queue group: `zester.masters`) | `zester.update.rollout.start` |
 | `zester.update.rollout.abort` | CLI -> Master | Abort rollout request (queue group: `zester.masters`) | `zester.update.rollout.abort` |
@@ -134,6 +139,7 @@ nc.QueueSubscribe("zester.dispatch", "zester.masters", handler)
 | `zester.masters` | `zester.update.rollout.abort` | Ensure a single master instance handles each rollout abort request |
 | `zester-target-resolvers` | `zester.target.resolve` | Every master joins; exactly one answers each target-resolution request from the CLI or a peel's `basket()` query. Callers fall back to a facts-KV scan when no master responds |
 | `zester-masters-admin` | `zester.admin.enroll.approve` / `.reject` / `.revoke` | Exactly one master applies each enrollment admin request (`enroll.AdminRequest` -> `enroll.AdminResponse`) |
+| `zester-reactor-testers` | `zester.reactor.test` | Every reactor-enabled master joins; exactly one answers each `zester reactor test` dry-run against its live rule snapshot |
 
 Queue groups provide automatic load balancing and failover with no external coordination. When a master disconnects, NATS removes it from the group and redistributes to surviving members. When a new master starts, it automatically joins by subscribing with the same group name.
 
@@ -170,6 +176,10 @@ The `pkg/bus/subjects.go` file provides type-safe helper functions for construct
 | `JobScheduleSubject("abc123", "web-01")` | `string` | `zester.job.abc123.schedule.web-01` |
 | `JobScheduleWildcard()` | `string` | `zester.job.*.schedule.*` |
 | `JobAllSubject("abc123")` | `string` | `zester.job.abc123.>` |
+| `PeelEventSendSubject("web-01", "myco.deploy.finished")` | `string` | `zester.event.web-01.send.myco.deploy.finished` |
+| `MasterEventSubject("enroll.pending.enr-1")` | `string` | `zester.event._master.enroll.pending.enr-1` |
+| `AdminEventSendSubject("myco.deploy.finished")` | `string` | `zester.event._admin.send.myco.deploy.finished` |
+| `EventSubjectAll()` | `string` | `zester.event.>` |
 | `UpdateCmdSubject("web-01")` | `string` | `zester.update.cmd.web-01` |
 | `UpdateCmdSubjectAll()` | `string` | `zester.update.cmd.*` |
 
@@ -212,6 +222,7 @@ Zester uses NATS JetStream KV buckets as its primary persistence layer. All buck
 | `update-manifests` | `<component>.<goos>.<goarch>.<version>` | Published update manifests | None | 5 | critical |
 | `update-status` | `<component>.<id>` | Watchdog status heartbeats | 60 seconds | 1 | ephemeral |
 | `update-rollouts` | `<rollout-id>` | Rollout state and progress | None | 10 | critical |
+| `reactor-files` | `reactor/<relative-path>`, `_manifest`, `_revision` | Reactor rule files (`top.zy` + reaction files), master-only — peel JWTs carry no grants for it | None | 3 | critical |
 
 ### Replica Tiering
 
@@ -232,10 +243,10 @@ sequenceDiagram
 
     Master->>JS: InitializeStorage(ctx, js)
     JS->>KV: CreateDefaultBuckets()
-    Note over KV: facts, settings-files, secrets,<br/>basket, jobs, job-returns,<br/>master-heartbeat, peel-heartbeat,<br/>leases, enrollments,<br/>enroll-challenges, state-files, update-*
+    Note over KV: facts, settings-files, secrets,<br/>basket, jobs, job-returns,<br/>master-heartbeat, peel-heartbeat,<br/>leases, enrollments,<br/>enroll-challenges, state-files,<br/>reactor-files, update-*
 
     JS->>KV: CreateDefaultStreams()
-    Note over KV: job-events stream
+    Note over KV: job-events + events streams
 
     Master->>KV: KV ready for operations
 ```
@@ -318,6 +329,22 @@ graph LR
     Stream --> JM
     Stream --> AUD
 ```
+
+### events Stream
+
+| Property | Value |
+|----------|-------|
+| **Name** | `events` |
+| **Subjects** | `zester.event.>` |
+| **Max age** | 7 days |
+| **Max bytes / msgs** | 1 GiB / 1,000,000 |
+| **Duplicate (MsgID) window** | 2 minutes |
+| **Retention** | Limits policy |
+| **Storage** | File |
+| **Replicas** | `EffectiveReplicas` (scales with cluster size, capped at 3) |
+| **Description** | Reactor event log |
+
+The `events` stream captures every publish under `zester.event.>` — peel `event.send` events, beacons, operator events, and master-synthesized events — durably. The masters' shared durable consumer `reactor` (DeliverNew, explicit ack, AckWait 60s, MaxDeliver 5) delivers each event to exactly one master fleet-wide and replays events published while all masters were down. The size caps bound flood damage from a compromised peel; the duplicate window collapses redelivered reactor-derived events published with deterministic message IDs. See [Reactor architecture](/docs/architecture/reactor).
 
 ## Deployment Topologies
 

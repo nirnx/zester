@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Index is a radix-tree-style index that maps flattened fact key-value pairs
@@ -16,6 +17,10 @@ type Index struct {
 	entries map[string]map[string]struct{} // "key\x00value" -> set{peelID}
 	peels   map[string]map[string]string   // peelID -> flattened facts snapshot
 	raw     map[string]map[string]any      // peelID -> nested facts snapshot
+
+	// seeded flips once the initial KV replay has been fully applied
+	// (WatchIntoIndex marks it at the end-of-replay sentinel).
+	seeded atomic.Bool
 }
 
 const keySep = "\x00"
@@ -63,6 +68,18 @@ func (idx *Index) Update(peelID string, facts Facts) {
 	idx.peels[peelID] = flat
 	idx.raw[peelID] = map[string]any(facts)
 }
+
+// MarkSeeded records that the index has been seeded with a complete replay
+// of the facts bucket (WatchIntoIndex calls it at the initial end-of-replay
+// sentinel).
+func (idx *Index) MarkSeeded() { idx.seeded.Store(true) }
+
+// Seeded reports whether the initial replay completed. Consumers that must
+// not act on a partially-populated index — the reactor's in-process target
+// resolution, which would otherwise silently no-target boot-replay reactions
+// — gate on it. The request/reply resolve service deliberately does not: its
+// CLI/peel callers carry a facts-KV-scan fallback.
+func (idx *Index) Seeded() bool { return idx.seeded.Load() }
 
 // Remove deletes all index entries for a peel.
 func (idx *Index) Remove(peelID string) {

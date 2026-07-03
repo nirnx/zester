@@ -1,0 +1,24 @@
+# Reactor top file for the Docker playground / integration tests.
+#
+# Entries map fnmatch globs (matched against "<origin>/<slash-tag>" keys,
+# '*' crosses '/') to dotted reaction refs relative to this directory:
+# "reactor.itest_echo" -> itest_echo.zy. Every matching entry fires, in
+# file order.
+reactor:
+  # Integration test: operator events dispatch test.echo at web-01 with the
+  # event data interpolated into the job.
+  - '_admin/itest/ping/*':
+      - reactor.itest_echo
+
+  # Integration test: chain start (operator event) emits a derived event...
+  - '_admin/itest/chain/start/*':
+      - reactor.itest_chain_start
+
+  # ...and the derived-event rule re-emits the SAME tag (self-chain). The
+  # reactor's max_chain_depth cap (default 3) is what stops this loop.
+  - '_master/reaction/itest/chain/next/*':
+      - reactor.itest_chain_next
+
+  # Self-heal: restart a service the web-01 service beacon reports down.
+  - 'web-01/beacon/*/service':
+      - reactor.heal_service

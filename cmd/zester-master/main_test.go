@@ -40,6 +40,17 @@ func TestMasterFlagParity(t *testing.T) {
 		// New in the flag-binder migration:
 		"log-level":  "info",
 		"log-format": "json",
+		// Reactor (event-driven reactions):
+		"reactor":                   "true",
+		"reactor-dir":               "/data/reactor",
+		"reactor-workers":           "4",
+		"reactor-max-chain-depth":   "3",
+		"reactor-enable-chaining":   "true",
+		"reactor-default-throttle":  "0s",
+		"reactor-source-rate-limit": "120",
+		"reactor-max-event-age":     time.Hour.String(),
+		"reactor-storm-rate":        "60",
+		"reactor-breaker-cooldown":  (5 * time.Minute).String(),
 	}
 
 	got := map[string]*flag.Flag{}

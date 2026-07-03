@@ -367,12 +367,14 @@ All Zester communication follows a structured NATS subject hierarchy:
 
 ```
 zester.cmd.<target>              # Master -> Peel commands
-zester.event.<peel-id>           # Peel -> Master events
+zester.event.<peel-id>.>         # Peel -> Master events (event.send, beacons)
+zester.event._master.>           # Master-synthesized events
+zester.event._admin.send.>       # Operator events (zester event send)
 zester.fact.<peel-id>            # Fact data publish/sync
 zester.dispatch                  # CLI -> Master job dispatch
 zester.basket.<key>              # Basket data sharing
 zester.job.<jid>                 # Job tracking and returns
-zester.reactor                   # Event-driven reactions (planned)
+zester.reactor.test              # Reactor rule dry-runs (request/reply)
 ```
 
 ---
@@ -417,15 +419,15 @@ Unlike Salt, where the master stores every minion's public key in `/etc/salt/pki
 
 ---
 
-## Beacons and Reactor (Planned)
+## Beacons and Reactor
 
-<Callout type="info" title="Not yet implemented">
-Beacons and Reactor are planned features. The package stubs exist (`pkg/beacon/`, `pkg/reactor/`) but contain no implementation yet.
-</Callout>
+**Salt equivalent:** Beacons and the Reactor system
 
-**Beacons** will monitor local conditions on peels (disk usage, file changes, etc.) and emit events to `zester.event.<peel-id>.beacon.<name>`.
+**Beacons** monitor local conditions on peels and emit events to `zester.event.<peel-id>.beacon.<name>`. v1 ships the **service** beacon (running-state transitions of configured services, set up via the settings pipeline's `beacons:` key); the full Salt beacon set (disk usage, file watch, load, ...) is planned.
 
-**Reactor** will watch for events on the master and trigger automated responses. Events will be persisted in JetStream for replay after master restart.
+**Reactor** consumes events on the master and triggers automated responses: rules in `reactor/top.zy` match events by `<origin>/<tag>` keys and run Jinja-rendered reaction files that dispatch jobs, approve enrollments, chain further events, or log. Events are persisted in the `events` JetStream stream, so they replay after master downtime, and all reaction side effects are deduplicated (deterministic reaction job IDs) so redeliveries are exactly-once.
+
+Peels and operators can also emit custom events: `zester 'web-01' event.send myco/deploy/finished version=1.2.3` (peel origin) or `zester event send myco/deploy/finished` (operator origin). See the [Reactor guide](/docs/guides/reactor).
 
 ---
 
@@ -440,8 +442,8 @@ Beacons and Reactor are planned features. The package stubs exist (`pkg/beacon/`
 | **States** | States | Desired-state definitions | Filesystem (`.zy` files) |
 | **Jobs** | Jobs | Command tracking | NATS KV (`jobs`, `job-returns`) |
 | **Basket** | Mine | Peel-to-peel data | NATS KV (`basket`) |
-| **Beacons** | Beacons | Peel-side monitoring (planned) | Events via JetStream |
-| **Reactor** | Reactor | Event-driven automation (planned) | JetStream streams |
+| **Beacons** | Beacons | Peel-side monitoring (v1: service beacon) | Events via JetStream (`events` stream) |
+| **Reactor** | Reactor | Event-driven automation | JetStream (`events` stream, `reactor-files` KV) |
 
 ---
 

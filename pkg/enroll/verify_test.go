@@ -2,6 +2,7 @@ package enroll_test
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/ptorbus/zester/pkg/auth"
@@ -253,6 +254,9 @@ func TestVerifyCredsSignature_MalformedHeader(t *testing.T) {
 }
 
 func TestValidatePeelID(t *testing.T) {
+	// Peel IDs become NATS subject tokens in fixed positions
+	// (zester.event.<peelID>.>, zester.job.*.return.<peelID>, ...): no dots,
+	// no wildcards, no leading '_' (reserves the _master/_admin origins).
 	tests := []struct {
 		name    string
 		peelID  string
@@ -263,15 +267,34 @@ func TestValidatePeelID(t *testing.T) {
 		{"valid with hyphens", "web-server-01", false},
 		{"valid alphanumeric", "webserver123", false},
 		{"valid two chars", "w1", false},
+		{"valid single char", "w", false},
+		{"valid trailing hyphen", "web01-", false},
+		{"valid trailing underscore", "web01_", false},
+		{"valid interior underscore not leading", "web_01", false},
+		{"valid uppercase", "WEB-01", false},
+		{"valid max length", strings.Repeat("a", 128), false},
 		{"empty", "", true},
-		{"too long", string(make([]byte, 256)), true},
+		{"too long", strings.Repeat("a", 129), true},
+		{"dotted", "web.01", true},
+		{"dotted fqdn", "web01.example.com", true},
+		{"leading dot", ".web01", true},
+		{"trailing dot", "web01.", true},
+		{"only dot", ".", true},
+		{"leading underscore", "_web01", true},
+		{"reserved master origin", "_master", true},
+		{"reserved admin origin", "_admin", true},
+		{"wildcard star", "web*", true},
+		{"only star", "*", true},
+		{"wildcard gt", "web>", true},
+		{"only gt", ">", true},
+		{"embedded star", "we*b01", true},
 		{"starts with hyphen", "-web01", true},
-		{"ends with hyphen", "web01-", true},
-		{"starts with underscore", "_web01", true},
-		{"ends with underscore", "web01_", true},
 		{"special chars", "web@01", true},
 		{"spaces", "web 01", true},
-		{"single char", "w", true},
+		{"unicode letters", "wéb-01", true},
+		{"unicode cyrillic", "узел-01", true},
+		{"unicode emoji", "web-01-🔥", true},
+		{"nul byte", "web\x0001", true},
 	}
 
 	for _, tt := range tests {

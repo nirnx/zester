@@ -32,7 +32,7 @@ func (d *Daemon) natsCheck(context.Context) health.CheckResult {
 //   - /healthz — static liveness probe (200 while the process serves HTTP)
 //   - /readyz  — readiness: internal/health checker, 503 unless all
 //     subsystem checks (nats, gitfs, sched-consumer, enroll-server,
-//     target-service) are OK (degraded stays 200)
+//     target-service, reactor) are OK (degraded stays 200)
 //   - /metrics — Prometheus scrape endpoint for the master registry
 func startLocalHealthServer(logger *slog.Logger, component, addr string, readyz, metricsHandler http.Handler) (func(), error) {
 	mux := http.NewServeMux()

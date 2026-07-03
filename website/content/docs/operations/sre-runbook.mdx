@@ -68,9 +68,9 @@ Zester compiles to single static Go binaries with zero runtime dependencies. Rec
 /etc/zester/master.yaml         # main config
 /etc/zester/peel.yaml
 /etc/zester/facts/            # custom fact definitions
-/etc/zester/beacons.d/          # beacon configs
 /srv/zester/states/             # state tree (master only)
 /srv/zester/settings/           # settings tree (master only)
+/srv/zester/reactor/            # reactor rules (master only; beacons configure via settings)
 /var/lib/zester/nats/           # JetStream storage (master only)
 /var/log/zester/                # log directory
 ```
@@ -209,7 +209,7 @@ states_cache: /data/states-cache
 
 ### 1. Prometheus Metrics
 
-Prometheus metrics and health endpoints are planned but not yet implemented. The metric names below describe the target design. Currently, use NATS server monitoring (`http://<nats-host>:8222/`) for observability.
+Both daemons serve `/metrics` on their `health_addr` listener. The tables below are a design-era summary and include some series that are defined but not yet wired; the wired set — including the reactor metrics (`zester_reactor_*`) and the peel beacon counter (`zester_peel_beacon_events_total`) — is documented authoritatively in [Monitoring](/docs/operations/monitoring) and [Reactor operations](/docs/operations/reactor). NATS server monitoring (`http://<nats-host>:8222/`) complements them.
 
 **Master metrics:**
 
@@ -244,7 +244,7 @@ Prometheus metrics and health endpoints are planned but not yet implemented. The
 
 ### 2. Health Check Endpoints
 
-Health check endpoints are planned but not yet implemented. The design below describes the target behavior.
+Both daemons serve `/healthz` (liveness) and `/readyz` (readiness) — see [Monitoring](/docs/operations/monitoring) for the implemented per-check semantics (including the master's `reactor` check). The design notes below describe the original target behavior.
 
 **Master health checks:**
 - NATS server accepting connections

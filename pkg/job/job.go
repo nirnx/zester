@@ -4,6 +4,7 @@
 package job
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/segmentio/ksuid"
@@ -164,6 +165,47 @@ func normalizeDeadline(j *Job) {
 		base = time.Now().UTC()
 	}
 	j.Deadline = base.Add(effective)
+}
+
+// MetadataReactorDepth is the Job.Metadata key through which the reactor
+// threads its reaction chain depth into dispatched ExecRequests: the reactor
+// stamps the parent event's depth+1 as a base-10 int string, and every
+// ExecRequest built from the job carries it as proto.ExecRequest.ReactorDepth
+// (see execRequestForJob). A conventional metadata entry, not schema —
+// absent or non-integer values mean depth 0 (not reactor-spawned).
+const MetadataReactorDepth = "reactor_depth"
+
+// execRequestForJob builds the wire ExecRequest for one dispatch of j.
+// All publish sites (Dispatch, the claimed-job reclaim re-dispatch, and the
+// watcher's silent-target re-send) go through this single constructor so
+// every copy of the request carries identical identity, fencing, and reactor
+// provenance.
+func execRequestForJob(j *Job) proto.ExecRequest {
+	return proto.ExecRequest{
+		JID:          j.JID,
+		Module:       j.Function,
+		ID:           j.StateID,
+		Args:         j.Args,
+		Epoch:        j.Epoch,
+		V:            proto.ProtocolVersion,
+		ReactorDepth: reactorDepth(j),
+	}
+}
+
+// reactorDepth extracts the reactor chain depth from j.Metadata
+// (MetadataReactorDepth). Absent, non-integer, or negative values yield 0:
+// a malformed depth must degrade to "not reactor-spawned", never block a
+// dispatch.
+func reactorDepth(j *Job) int {
+	raw, ok := j.Metadata[MetadataReactorDepth]
+	if !ok {
+		return 0
+	}
+	depth, err := strconv.Atoi(raw)
+	if err != nil || depth < 0 {
+		return 0
+	}
+	return depth
 }
 
 // TargetCount returns the number of targeted peels.

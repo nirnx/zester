@@ -1,0 +1,12 @@
+# Service beacon for the reactor self-heal integration test: web-01 polls
+# nginx every 2 seconds and emits transition events on
+# zester.event.web-01.beacon.service (tag "beacon/web-01/service"). The
+# reactor's heal_service rule restarts the service when a "running: false"
+# transition arrives. Scoped to web-01 only (settings top.zy) so beacon
+# traffic never interferes with the other peels' service tests.
+beacons:
+  service:
+    services:
+      nginx: {}
+    interval: 2
+    onchangeonly: true

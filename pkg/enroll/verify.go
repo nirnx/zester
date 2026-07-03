@@ -11,8 +11,13 @@ import (
 	"github.com/ptorbus/zester/pkg/auth"
 )
 
-// peel ID validation: alphanumeric, hyphens, underscores, 2-255 chars.
-var peelIDRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,253}[a-zA-Z0-9]$`)
+// maxPeelIDLength bounds peel IDs; they are embedded in NATS subjects and
+// KV keys, so 128 keeps every derived subject comfortably within limits.
+const maxPeelIDLength = 128
+
+// peel ID validation: leading alphanumeric, then alphanumerics, underscores,
+// or hyphens (ASCII only). See ValidatePeelID for why the charset is strict.
+var peelIDRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
 
 // VerifyEnrollSignature verifies that the provided signature is a valid
 // Ed25519 signature of (challenge || curvePublicKey), using the given
@@ -75,16 +80,40 @@ func ValidatePublicKey(pub string) error {
 	return auth.ValidatePublicKey(pub, auth.RoleUser)
 }
 
-// ValidatePeelID checks that a peel ID is well-formed.
+// ValidatePeelID checks that a peel ID is well-formed. It is enforced at the
+// enrollment submit path — the only place a Record is created from a request —
+// so no ID violating these rules can ever enter the fleet.
+//
+// Peel IDs become NATS subject tokens in FIXED positions (for example
+// zester.event.<peelID>.send.<tag...>, zester.job.*.return.<peelID>, and
+// $KV.facts.<peelID>), so the charset must keep subject parsing unambiguous
+// and forgery-resistant:
+//
+//   - no dots: '.' is the NATS token separator — a dotted ID would split into
+//     several tokens and shift every fixed-position subject parse;
+//   - no '*' or '>': NATS wildcards must never appear inside a literal token
+//     (a wildcard ID could match or mask other peels' subjects);
+//   - no leading '_': underscore-prefixed origin tokens (_master, _admin, and
+//     any future _x source) are reserved for trusted master/operator
+//     publishers that peels must never be able to impersonate.
+//
+// A peel ID must be non-empty, at most 128 characters, and match
+// ^[a-zA-Z0-9][a-zA-Z0-9_-]*$.
 func ValidatePeelID(peelID string) error {
 	if peelID == "" {
 		return fmt.Errorf("enroll: peel ID is required")
 	}
-	if len(peelID) > 255 {
-		return fmt.Errorf("enroll: peel ID exceeds maximum length")
+	if len(peelID) > maxPeelIDLength {
+		return fmt.Errorf("enroll: peel ID exceeds maximum length of %d characters", maxPeelIDLength)
+	}
+	if strings.HasPrefix(peelID, "_") {
+		return fmt.Errorf("enroll: peel ID must not start with '_' (reserved for trusted event origins such as _master and _admin)")
+	}
+	if strings.ContainsAny(peelID, ".*>") {
+		return fmt.Errorf("enroll: peel ID must not contain '.', '*', or '>' (peel IDs become NATS subject tokens)")
 	}
 	if !peelIDRegex.MatchString(peelID) {
-		return fmt.Errorf("enroll: peel ID contains invalid characters")
+		return fmt.Errorf("enroll: peel ID contains invalid characters (must match ^[a-zA-Z0-9][a-zA-Z0-9_-]*$)")
 	}
 	return nil
 }

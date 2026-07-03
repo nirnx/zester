@@ -127,7 +127,7 @@ This sets the following permissions:
 
 | Subject Pattern | Purpose |
 |-|-|
-| `zester.event.<peelID>.>` | Emit events |
+| `zester.event.<peelID>.>` | Emit events (`event.send` module and beacons; captured by the `events` stream that feeds the reactor — the subject token is the trust anchor for event origin) |
 | `zester.fact.<peelID>` | Report facts |
 | `zester.job.*.ack.<peelID>` | Acknowledge job receipt |
 | `zester.job.*.return.<peelID>` | Return job results |

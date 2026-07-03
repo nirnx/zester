@@ -4,15 +4,17 @@ A SaltStack alternative built in pure Go, powered by **NATS JetStream** for mess
 
 State files stay Salt-compatible: requisites (`require`/`watch`/`onchanges`/`onfail`/`prereq`/`listen` plus the `_in` inverses), `onlyif`/`unless` guards, `order`/`retry`/`failhard`/`names`, `test=True` dry runs, and the `salt['mod.func'](...)` template accessor all work, and `zester-migrate` converts existing `.sls` trees.
 
+Event-driven automation is built in (Salt's beacons + reactor): peels emit events and service-state beacons onto a durable JetStream stream, and master-side reactor rules dispatch jobs, auto-approve enrollments, or chain further events — with exactly-once reactions, loop guards, and hot-reloaded rules.
+
 **📖 Documentation: [nirnx.github.io/zester](https://nirnx.github.io/zester/)** — sources live in [`website/`](website/) (Fumadocs; run `pnpm dev` inside `website/` to browse locally).
 
 ## Binaries
 
 | Binary | Purpose |
 |---|---|
-| `zester-master` | Dispatches jobs, compiles settings, watches facts, serves the enrollment + REST API on one TLS listener, persists scheduler results, coordinates self-update rollouts |
+| `zester-master` | Dispatches jobs, compiles settings, watches facts, serves the enrollment + REST API on one TLS listener, persists scheduler results, runs the event reactor, coordinates self-update rollouts |
 | `zester-peel` | Agent on managed nodes: collects facts, executes jobs and states, resolves settings locally, runs the peel-side scheduler |
-| `zester` | Operator CLI: `zester '<target>' <module.function> [args...]` (`--test` for Salt-style `test=True` dry runs), plus `job`, `enroll`, `basket`, `update` subcommands |
+| `zester` | Operator CLI: `zester '<target>' <module.function> [args...]` (`--test` for Salt-style `test=True` dry runs), plus `job`, `enroll`, `basket`, `update`, `event`, `reactor` subcommands |
 | `zester-watchdog` | Process supervisor for self-updates: manages binary slots, health-monitors the child process, applies update commands via NATS |
 | `zester-migrate` | Standalone converter for Salt `.sls` files to Zester `.zy` format |
 

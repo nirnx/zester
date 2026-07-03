@@ -1,0 +1,10 @@
+# Reaction for '_admin/itest/chain/start/*' events: kick off a derived-event
+# chain. The derived event publishes on
+# zester.event._master.reaction.itest.chain.next.<run>, so it matches rules
+# under the '_master/reaction/itest/chain/next/*' key.
+{% set run = event.data.get('run', 'default') %}
+itest-chain-start:
+  event.send:
+    - tag: itest/chain/next/{{ run }}
+    - data:
+        run: "{{ run }}"

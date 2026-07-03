@@ -28,6 +28,13 @@ func (d *Daemon) startTargetService(ctx context.Context) func() {
 	d.checker.Register("target-service", d.targetServiceCheck)
 
 	idx := facts.NewIndex()
+	// Retain the index on the daemon: the reactor resolves targets and
+	// serves origin_facts from it in-process (zero NATS hops). The reactor
+	// gates on idx.Seeded() (set by WatchIntoIndex at end-of-replay), so
+	// storing the empty index up front is safe — including on the failure
+	// path below, where it stays unseeded and reactor dispatches keep
+	// redelivering instead of resolving against a permanently empty index.
+	d.factsIndex.Store(idx)
 	cancelIdx, err := facts.WatchIntoIndex(ctx, d.js, idx, d.logger)
 	if err != nil {
 		d.logger.Warn("target resolution service failed to start; targeting falls back to facts KV scans", "error", err)

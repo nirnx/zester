@@ -1,0 +1,18 @@
+# Reaction for '_master/reaction/itest/chain/next/*' events: dispatch a
+# traceable job AND re-emit the same tag (deliberate self-chain). Without
+# the reactor's max_chain_depth cap this file would loop forever — the
+# integration suite asserts the chain stops after exactly two hops
+# (derived events at depth 1 and 2; the depth-3 emission is refused).
+{% set run = event.data.get('run', 'default') %}
+itest-chain-hop:
+  dispatch.module:
+    - target: web-01
+    - function: test.echo
+    - state_id: "chain-{{ run }}-depth-{{ event.depth }}"
+    - timeout: 60
+
+itest-chain-again:
+  event.send:
+    - tag: itest/chain/next/{{ run }}
+    - data:
+        run: "{{ run }}"

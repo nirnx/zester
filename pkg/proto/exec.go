@@ -31,6 +31,17 @@ type ExecRequest struct {
 	// Peels reject requests with a stale epoch for the same JID,
 	// preventing duplicate execution during master failover.
 	Epoch uint64 `msgpack:"epoch,omitempty"`
+
+	// ReactorDepth propagates the reactor's reaction chain depth through
+	// the job hop: when the master's reactor dispatches a job in response
+	// to an event, it records the chain depth in the job's metadata and
+	// the dispatch path stamps it here, so an event.send executed BY that
+	// job on the peel emits its event with Depth = ReactorDepth. This
+	// keeps explicit reaction chains counted across the master→peel hop
+	// and bounded by the reactor's max chain depth. 0 means the request
+	// was not reactor-spawned (or predates this field) and is always
+	// compatible.
+	ReactorDepth int `msgpack:"rdepth,omitempty"`
 }
 
 // ExecResponse is returned from a peel to the CLI after executing a module.

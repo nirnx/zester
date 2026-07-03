@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -1105,5 +1106,139 @@ func BenchmarkHandleNonce(b *testing.B) {
 		req := httptest.NewRequest("GET", url, nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
+	}
+}
+
+// invalidPeelIDCases are peel IDs the enrollment endpoints must reject with
+// HTTP 400: peel IDs become NATS subject tokens in fixed positions, so dots,
+// wildcards, leading underscores (reserved _master/_admin origins), and
+// non-ASCII characters are banned at the submit path.
+var invalidPeelIDCases = []struct {
+	name   string
+	peelID string
+}{
+	{"empty", ""},
+	{"dotted", "web.01"},
+	{"dotted fqdn", "web01.example.com"},
+	{"leading underscore", "_web01"},
+	{"reserved master origin", "_master"},
+	{"reserved admin origin", "_admin"},
+	{"wildcard star", "web*"},
+	{"wildcard gt", "web>"},
+	{"only star", "*"},
+	{"only gt", ">"},
+	{"unicode", "wéb-01"},
+	{"spaces", "web 01"},
+	{"too long", strings.Repeat("a", 129)},
+}
+
+func TestHandleNonce_PeelIDValidation(t *testing.T) {
+	handler, _, _, _ := testHandlerSetup(t)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	userKB, err := auth.GenerateKeyBundle(auth.RoleUser)
+	if err != nil {
+		t.Fatalf("GenerateKeyBundle: %v", err)
+	}
+
+	for _, tt := range invalidPeelIDCases {
+		t.Run("invalid/"+tt.name, func(t *testing.T) {
+			target := "/api/v1/enroll/nonce?peel_id=" + url.QueryEscape(tt.peelID) +
+				"&public_key=" + userKB.PublicKey
+			req := httptest.NewRequest("GET", target, nil)
+			rec := httptest.NewRecorder()
+
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("Status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "peel_id") {
+				t.Errorf("error body %q does not mention peel_id", rec.Body.String())
+			}
+		})
+	}
+
+	// Sanity: a conforming ID gets a nonce.
+	t.Run("valid/simple", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/enroll/nonce?peel_id=web-01&public_key="+userKB.PublicKey, nil)
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("Status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+		}
+	})
+}
+
+func TestHandleEnroll_PeelIDValidation(t *testing.T) {
+	handler, _, _, _ := testHandlerSetup(t)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	userKB, err := auth.GenerateKeyBundle(auth.RoleUser)
+	if err != nil {
+		t.Fatalf("GenerateKeyBundle: %v", err)
+	}
+	curveKey, err := auth.CurvePublicKeyFromSeed(userKB.Seed)
+	if err != nil {
+		t.Fatalf("CurvePublicKeyFromSeed: %v", err)
+	}
+
+	submit := func(t *testing.T, peelID string) *httptest.ResponseRecorder {
+		t.Helper()
+		enrollReq := enroll.EnrollRequest{
+			PeelID:         peelID,
+			PublicKey:      userKB.PublicKey,
+			CurvePublicKey: curveKey,
+			Hostname:       "host.example.com",
+			ChallengeID:    "chl-nonexistent",
+			Signature:      []byte("sig"),
+		}
+		body, _ := json.Marshal(enrollReq)
+		req := httptest.NewRequest("POST", "/api/v1/enroll", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for _, tt := range invalidPeelIDCases {
+		t.Run("invalid/"+tt.name, func(t *testing.T) {
+			rec := submit(t, tt.peelID)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("Status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "peel_id") {
+				t.Errorf("error body %q does not mention peel_id", rec.Body.String())
+			}
+		})
+	}
+
+	// Valid IDs must pass the peel-ID gate: with a bogus challenge the request
+	// proceeds to challenge verification and fails 401 there — NOT 400.
+	validIDs := []struct {
+		name   string
+		peelID string
+	}{
+		{"simple", "web-01"},
+		{"underscores", "web_server_01"},
+		{"single char", "w"},
+		{"max length", strings.Repeat("a", 128)},
+	}
+	for _, tt := range validIDs {
+		t.Run("valid/"+tt.name, func(t *testing.T) {
+			rec := submit(t, tt.peelID)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("Status = %d, want %d — a valid peel ID must clear validation and fail at the challenge step (body: %s)",
+					rec.Code, http.StatusUnauthorized, rec.Body.String())
+			}
+		})
 	}
 }

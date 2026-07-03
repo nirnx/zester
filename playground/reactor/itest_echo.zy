@@ -1,0 +1,9 @@
+# Reaction for '_admin/itest/ping/*' events: dispatch test.echo at web-01,
+# interpolating the event's "msg" data entry as the bare positional
+# (state_id -> ExecRequest.ID -> execmod "name").
+itest-echo:
+  dispatch.module:
+    - target: web-01
+    - function: test.echo
+    - state_id: "{{ event.data.get('msg', 'no-message') }}"
+    - timeout: 60

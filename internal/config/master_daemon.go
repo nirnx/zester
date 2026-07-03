@@ -16,18 +16,40 @@ const defaultMasterConfigPath = "/etc/zester/master.yaml"
 // tagged field becomes a CLI flag whose default is the field's value from
 // MasterDaemonDefaults, with precedence flag > YAML config file > default.
 type MasterDaemonConfig struct {
-	NatsURL           string       `yaml:"nats_url" flag:"nats-url" usage:"NATS server URL"`
-	NatsCA            string       `yaml:"nats_ca" flag:"nats-ca" usage:"CA certificate for NATS TLS server verification"`
-	AuthDir           string       `yaml:"auth_dir" flag:"auth-dir" usage:"Directory containing auth files (master.creds, account.seed)"`
-	StatesDir         string       `yaml:"states_dir" flag:"states-dir" usage:"Root directory for state files"`
-	SettingsDir       string       `yaml:"settings_dir" flag:"settings-dir" usage:"Root directory for settings files"`
-	JetStreamReplicas int          `yaml:"jetstream_replicas" flag:"jetstream-replicas" usage:"JetStream replication factor (0 = auto: min(3, detected cluster size); explicit count overrides)"`
-	HealthAddr        string       `yaml:"health_addr" flag:"health-addr" usage:"Local /healthz listen address"`
-	LogLevel          string       `yaml:"log_level" flag:"log-level" usage:"Log level (debug, info, warn, error)"`
-	LogFormat         string       `yaml:"log_format" flag:"log-format" usage:"Log format (json, text)"`
-	Enroll            MasterEnroll `yaml:"enroll"`
-	API               MasterAPI    `yaml:"api"`
-	GitFS             GitFSConfig  `yaml:"gitfs"`
+	NatsURL           string        `yaml:"nats_url" flag:"nats-url" usage:"NATS server URL"`
+	NatsCA            string        `yaml:"nats_ca" flag:"nats-ca" usage:"CA certificate for NATS TLS server verification"`
+	AuthDir           string        `yaml:"auth_dir" flag:"auth-dir" usage:"Directory containing auth files (master.creds, account.seed)"`
+	StatesDir         string        `yaml:"states_dir" flag:"states-dir" usage:"Root directory for state files"`
+	SettingsDir       string        `yaml:"settings_dir" flag:"settings-dir" usage:"Root directory for settings files"`
+	JetStreamReplicas int           `yaml:"jetstream_replicas" flag:"jetstream-replicas" usage:"JetStream replication factor (0 = auto: min(3, detected cluster size); explicit count overrides)"`
+	HealthAddr        string        `yaml:"health_addr" flag:"health-addr" usage:"Local /healthz listen address"`
+	LogLevel          string        `yaml:"log_level" flag:"log-level" usage:"Log level (debug, info, warn, error)"`
+	LogFormat         string        `yaml:"log_format" flag:"log-format" usage:"Log format (json, text)"`
+	Enroll            MasterEnroll  `yaml:"enroll"`
+	API               MasterAPI     `yaml:"api"`
+	GitFS             GitFSConfig   `yaml:"gitfs"`
+	Reactor           MasterReactor `yaml:"reactor"`
+}
+
+// MasterReactor holds reactor engine configuration (event-driven reactions).
+// Zero values in YAML mean "disabled" for the gates that support it:
+// default_throttle 0 = no default refractory period, max_event_age 0 = no
+// staleness gate, source_rate_limit 0 = no per-source rate limit, and
+// storm_rate 0 = no circuit breaker (masterd translates these to the
+// pkg/reactor knob conventions). The duration knobs use config.Duration so
+// the documented bare-`0` YAML form parses (yaml.v3 rejects bare integers
+// for plain time.Duration fields).
+type MasterReactor struct {
+	Enabled         bool     `yaml:"enabled" flag:"reactor" usage:"Enable the reactor engine (event-driven reactions)"`
+	Dir             string   `yaml:"dir" flag:"reactor-dir" usage:"Local directory holding reactor rule files (top.zy + reaction .zy files)"`
+	Workers         int      `yaml:"workers" flag:"reactor-workers" usage:"Reactor render/execute worker pool size"`
+	MaxChainDepth   int      `yaml:"max_chain_depth" flag:"reactor-max-chain-depth" usage:"Maximum reaction chain depth before events are dropped"`
+	EnableChaining  bool     `yaml:"enable_chaining" flag:"reactor-enable-chaining" usage:"Allow reaction rules to emit derived events (event.send)"`
+	DefaultThrottle Duration `yaml:"default_throttle" flag:"reactor-default-throttle" usage:"Default per-(rule,source) refractory period (0 = none)"`
+	SourceRateLimit int      `yaml:"source_rate_limit" flag:"reactor-source-rate-limit" usage:"Per-source event rate limit in events/minute (0 = unlimited)"`
+	MaxEventAge     Duration `yaml:"max_event_age" flag:"reactor-max-event-age" usage:"Drop events older than this at consume time (0 = full replay)"`
+	StormRate       int      `yaml:"storm_rate" flag:"reactor-storm-rate" usage:"Per-rule fires/minute that trips the circuit breaker (0 = no breaker)"`
+	BreakerCooldown Duration `yaml:"breaker_cooldown" flag:"reactor-breaker-cooldown" usage:"How long a tripped reaction circuit breaker stays open"`
 }
 
 // MasterEnroll holds enrollment HTTP API configuration.
@@ -80,6 +102,18 @@ func MasterDaemonDefaults() MasterDaemonConfig {
 		},
 		GitFS: GitFSConfig{
 			Interval: 5 * time.Minute,
+		},
+		Reactor: MasterReactor{
+			Enabled:         true,
+			Dir:             "/data/reactor",
+			Workers:         4,
+			MaxChainDepth:   3,
+			EnableChaining:  true,
+			DefaultThrottle: 0,
+			SourceRateLimit: 120,
+			MaxEventAge:     Duration(time.Hour),
+			StormRate:       60,
+			BreakerCooldown: Duration(5 * time.Minute),
 		},
 	}
 }

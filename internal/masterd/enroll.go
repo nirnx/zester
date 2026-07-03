@@ -35,6 +35,10 @@ func (d *Daemon) startEnrollment(ctx context.Context) (func(), error) {
 		Challenges: challengeStore,
 		Issuer:     credIssuer,
 		Logger:     d.logger,
+		// Emit zester.event._master.enroll.pending.<id> for every newly
+		// created enrollment so reactor rules (e.g. auto-approve) can react.
+		// Best-effort by contract: emit failures are Debug-logged.
+		OnPending: d.emitEnrollPendingEvent,
 	})
 
 	enrollServerCfg := enroll.ServerConfig{

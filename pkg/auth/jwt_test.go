@@ -347,6 +347,33 @@ func TestPeelUserJWTOptions_CancelIsWildcard(t *testing.T) {
 	}
 }
 
+func TestPeelUserJWTOptions_EventGrantsScopedToOwnOrigin(t *testing.T) {
+	opts := PeelUserJWTOptions("web-01", "AXXXX")
+
+	// The peel-scoped event pub grant must exist (event.send publishes on
+	// zester.event.<ownPeelID>.>; the events stream captures it server-side).
+	if !containsStr(opts.AllowPub, "zester.event.web-01.>") {
+		t.Error("AllowPub missing zester.event.web-01.> — peel cannot emit events")
+	}
+
+	// A peel must NEVER get trusted-origin publishing, reactor control-plane
+	// access, or fleet-wide event snooping.
+	forbiddenPub := []string{
+		"zester.event.>",
+		"zester.event._master.>",
+		"zester.event._admin.>",
+		"zester.reactor.>",
+	}
+	for _, subj := range forbiddenPub {
+		if containsStr(opts.AllowPub, subj) {
+			t.Errorf("AllowPub must not contain %q — peels publish events only on their own origin", subj)
+		}
+	}
+	if containsStr(opts.AllowSub, "zester.event.>") {
+		t.Error("AllowSub must not contain zester.event.> — no cross-peel event snooping")
+	}
+}
+
 func TestAdminUserJWTOptions(t *testing.T) {
 	opts := AdminUserJWTOptions("AXXXX")
 
@@ -357,11 +384,15 @@ func TestAdminUserJWTOptions(t *testing.T) {
 		t.Errorf("issuer account = %s, want AXXXX", opts.IssuerAccount)
 	}
 
-	// Publish: admin must be able to dispatch jobs and send commands to peels.
+	// Publish: admin must be able to dispatch jobs, send commands to peels,
+	// emit operator events on the _admin origin, and reach the reactor
+	// control plane.
 	wantPub := []string{
 		"zester.cmd.>",
 		"zester.dispatch",
 		"zester.job.>",
+		"zester.event._admin.>",
+		"zester.reactor.>",
 		"$JS.API.>",
 		"_INBOX.>",
 	}
@@ -371,9 +402,11 @@ func TestAdminUserJWTOptions(t *testing.T) {
 		}
 	}
 
-	// Subscribe: admin must be able to watch job events and read KV data.
+	// Subscribe: admin must be able to watch job events, watch the event
+	// stream, and read KV data.
 	wantSub := []string{
 		"zester.job.>",
+		"zester.event.>",
 		"$JS.API.>",
 		"$KV.>",
 		"_INBOX.>",
@@ -381,6 +414,37 @@ func TestAdminUserJWTOptions(t *testing.T) {
 	for _, subj := range wantSub {
 		if !containsStr(opts.AllowSub, subj) {
 			t.Errorf("AllowSub missing %q", subj)
+		}
+	}
+}
+
+func TestAdminUserJWTOptions_EventAndReactorGrants(t *testing.T) {
+	opts := AdminUserJWTOptions("AXXXX")
+
+	// `zester event send` publishes on the trusted _admin origin.
+	if !containsStr(opts.AllowPub, "zester.event._admin.>") {
+		t.Error("AllowPub missing zester.event._admin.> — admin cannot send operator events")
+	}
+
+	// `zester reactor test` is request/reply on zester.reactor.>.
+	if !containsStr(opts.AllowPub, "zester.reactor.>") {
+		t.Error("AllowPub missing zester.reactor.> — admin cannot reach the reactor control plane")
+	}
+
+	// `zester event watch` subscribes to the whole event namespace.
+	if !containsStr(opts.AllowSub, "zester.event.>") {
+		t.Error("AllowSub missing zester.event.> — admin cannot watch events")
+	}
+
+	// Admins publish ONLY on the _admin origin: a broad zester.event.> pub
+	// grant would let an operator credential forge peel or _master origins.
+	forbiddenPub := []string{
+		"zester.event.>",
+		"zester.event._master.>",
+	}
+	for _, subj := range forbiddenPub {
+		if containsStr(opts.AllowPub, subj) {
+			t.Errorf("AllowPub must not contain %q — admins publish events only on the _admin origin", subj)
 		}
 	}
 }

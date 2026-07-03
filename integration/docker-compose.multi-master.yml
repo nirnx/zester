@@ -9,4 +9,5 @@ services:
       - auth-data:/data/auth:ro
       - state-data:/data/states
       - settings-data:/data/settings:ro
+      - reactor-data:/data/reactor:ro
       - nats-config:/data/nats:ro

@@ -50,6 +50,7 @@ const (
 	BucketUpdateRollouts   = "update-rollouts"
 	BucketPeelHeartbeat    = "peel-heartbeat"
 	BucketLeases           = "leases"
+	BucketReactorFiles     = "reactor-files"
 )
 
 // Object Store bucket names used by Zester.
@@ -60,6 +61,7 @@ const (
 // Standard JetStream stream names used by Zester.
 const (
 	StreamJobEvents = "job-events"
+	StreamEvents    = "events"
 )
 
 // DurabilityTier classifies a JetStream asset by the cost of losing it.
@@ -408,6 +410,13 @@ func DefaultBuckets() []BucketConfig {
 			Replicas:    1,
 			Tier:        TierEphemeral,
 		},
+		{
+			Bucket:      BucketReactorFiles,
+			Description: "Reactor rule files (master-only; no peel JWT grants)",
+			History:     3,
+			Replicas:    1,
+			Tier:        TierCritical,
+		},
 	}
 }
 
@@ -455,6 +464,11 @@ type StreamConfig struct {
 	// Storage is the storage type. Defaults to FileStorage.
 	Storage jetstream.StorageType
 
+	// Duplicates is the message-ID deduplication window: publishes carrying
+	// the same Nats-Msg-Id header within this window are dropped by the
+	// server. 0 = server default.
+	Duplicates time.Duration
+
 	// Tier is the durability tier used by InitializeStorageOpts to decide
 	// when to warn about under-replication. Defaults to TierCritical.
 	Tier DurabilityTier
@@ -480,6 +494,7 @@ func CreateStream(ctx context.Context, js JetStreamAPI, cfg StreamConfig) (jetst
 		Replicas:    cfg.Replicas,
 		Retention:   cfg.Retention,
 		Storage:     cfg.Storage,
+		Duplicates:  cfg.Duplicates,
 	}
 
 	s, err := js.CreateStream(ctx, sCfg)
@@ -503,17 +518,49 @@ func DefaultJobEventsStream() StreamConfig {
 	}
 }
 
+// DefaultEventsStream returns the configuration for the reactor events
+// stream. It captures every publish under zester.event.> durably so the
+// masters' shared reactor consumer processes each event exactly once
+// fleet-wide and replays events published during master downtime. MaxBytes
+// and MaxMsgs bound flood damage from a compromised peel; the Duplicates
+// window collapses redelivered derived-event emissions published with a
+// deterministic message ID.
+func DefaultEventsStream() StreamConfig {
+	return StreamConfig{
+		Name:        StreamEvents,
+		Description: "Reactor event log",
+		Subjects:    []string{EventSubjectAll()},
+		MaxAge:      7 * 24 * time.Hour,
+		MaxBytes:    1 << 30, // 1 GiB
+		MaxMsgs:     1_000_000,
+		Replicas:    1,
+		Retention:   jetstream.LimitsPolicy,
+		Storage:     jetstream.FileStorage,
+		Duplicates:  2 * time.Minute,
+		Tier:        TierCritical,
+	}
+}
+
+// DefaultStreams returns the configurations for all standard Zester
+// JetStream streams.
+func DefaultStreams() []StreamConfig {
+	return []StreamConfig{
+		DefaultJobEventsStream(),
+		DefaultEventsStream(),
+	}
+}
+
 // CreateDefaultStreams creates all standard Zester JetStream streams.
 func CreateDefaultStreams(ctx context.Context, js JetStreamAPI) (map[string]jetstream.Stream, error) {
 	streams := make(map[string]jetstream.Stream)
 
-	cfg := DefaultJobEventsStream()
-	s, err := CreateStream(ctx, js, cfg)
-	if err != nil {
-		return nil, err
+	for _, cfg := range DefaultStreams() {
+		s, err := CreateStream(ctx, js, cfg)
+		if err != nil {
+			return nil, err
+		}
+		streams[cfg.Name] = s
 	}
-	streams[cfg.Name] = s
-
 	return streams, nil
 }
 
@@ -603,18 +650,19 @@ func InitializeStorageOpts(ctx context.Context, js JetStreamAPI, opts StorageOpt
 		}
 	}
 
-	streamCfg := DefaultJobEventsStream()
-	warnIfUnderReplicated(logger, "stream", streamCfg.Name, streamCfg.Tier, effective, recommended)
-	streamCfg.Replicas = effective
-	if _, err := CreateStream(ctx, js, streamCfg); err != nil {
-		if effective <= 1 {
-			return fmt.Errorf("bus: initialize streams: %w", err)
+	for _, streamCfg := range DefaultStreams() {
+		warnIfUnderReplicated(logger, "stream", streamCfg.Name, streamCfg.Tier, effective, recommended)
+		streamCfg.Replicas = effective
+		if _, err := CreateStream(ctx, js, streamCfg); err != nil {
+			if effective <= 1 {
+				return fmt.Errorf("bus: initialize streams: %w", err)
+			}
+			streamCfg.Replicas = 1
+			if _, retryErr := CreateStream(ctx, js, streamCfg); retryErr != nil {
+				return fmt.Errorf("bus: initialize streams: replicas=%d failed (%v); replicas=1 failed: %w", effective, err, retryErr)
+			}
+			warnReplicaFallback(logger, "stream", streamCfg.Name, streamCfg.Name, effective, err)
 		}
-		streamCfg.Replicas = 1
-		if _, retryErr := CreateStream(ctx, js, streamCfg); retryErr != nil {
-			return fmt.Errorf("bus: initialize streams: replicas=%d failed (%v); replicas=1 failed: %w", effective, err, retryErr)
-		}
-		warnReplicaFallback(logger, "stream", streamCfg.Name, streamCfg.Name, effective, err)
 	}
 
 	return nil

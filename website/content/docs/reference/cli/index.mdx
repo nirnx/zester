@@ -286,6 +286,8 @@ zester --master nats://master1:4222,nats://master2:4222 peel list
 | [`basket`](/docs/reference/cli/basket) | Query basket (peel-to-peel shared data) |
 | [`enroll`](/docs/operations/enrollment) | Manage peel enrollment (list, approve, reject, revoke) — approve/reject/revoke are request/reply admin calls answered by a running master; `--direct-kv` is the break-glass fallback that writes the enrollment KV directly (suggested in the error when no master responds) |
 | [`update`](/docs/reference/cli/update) | Self-update: publish, rollout, status, abort, rollback, versions; `update status` includes `DEGRADED` and `PROTO` columns (`-` = pre-protocol watchdog) |
+| [`event`](/docs/reference/events) | Send operator events into the reactor stream (`event send <tag> [k=v...]`) and watch live event traffic (`event watch [match-glob]`) |
+| [`reactor`](/docs/reference/events) | Dry-run reactor rules (`reactor test <match-key> [--data k=v] [--event-json ...]`) — a reactor-enabled master reports matched rules and rendered actions without executing |
 | `version` | Print the Zester CLI version |
 
 ### Standalone Tools

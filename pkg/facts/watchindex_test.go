@@ -45,6 +45,9 @@ func TestWatchIntoIndex(t *testing.T) {
 	}
 
 	idx := NewIndex()
+	if idx.Seeded() {
+		t.Fatal("a fresh index must not report seeded")
+	}
 	cancel, err := WatchIntoIndex(ctx, js, idx, slog.Default())
 	if err != nil {
 		t.Fatalf("watch into index: %v", err)
@@ -54,6 +57,11 @@ func TestWatchIntoIndex(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		return len(idx.PeelIDs()) == 1
 	}, "initial replay to seed index")
+
+	// The end-of-replay sentinel marks the index seeded — the signal the
+	// reactor's resolve gate relies on to distinguish "empty because the
+	// fleet is empty" from "empty because the replay has not landed yet".
+	waitFor(t, 2*time.Second, idx.Seeded, "index to be marked seeded after the initial replay")
 
 	// A put after the watch started must be applied.
 	if _, err := bus.KVPut(ctx, kv, "db-01", Facts{

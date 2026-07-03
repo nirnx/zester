@@ -6,6 +6,7 @@ services:
       - auth-data:/data/auth
       - state-data:/data/states
       - settings-data:/data/settings
+      - reactor-data:/data/reactor
       - nats-config:/data/nats
 
   nats:
@@ -31,6 +32,7 @@ services:
       - auth-data:/data/auth:ro
       - state-data:/data/states
       - settings-data:/data/settings:ro
+      - reactor-data:/data/reactor:ro
       - nats-config:/data/nats:ro
 
   web-01:
@@ -124,5 +126,6 @@ volumes:
   auth-data:
   state-data:
   settings-data:
+  reactor-data:
   jetstream-data:
   nats-config:

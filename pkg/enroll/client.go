@@ -98,8 +98,10 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("enroll: master URL is required")
 	}
-	if cfg.PeelID == "" {
-		return nil, fmt.Errorf("enroll: peel ID is required")
+	// Fail fast on IDs the master would reject at submit anyway (subject-token
+	// charset rules — see ValidatePeelID).
+	if err := ValidatePeelID(cfg.PeelID); err != nil {
+		return nil, err
 	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 10 * time.Second

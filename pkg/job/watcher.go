@@ -3,11 +3,11 @@ package job
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/proto"
 )
 
 const (
@@ -181,19 +181,31 @@ func (w *Watcher) Watch(ctx context.Context) {
 		}
 	}
 
-	// Subscribe to acks.
+	// Subscribe to acks. The peel's identity comes from the subject token
+	// (NATS-permission-enforced), never the payload: a mismatching payload
+	// PeelID is a forgery attempt and the message is dropped.
 	ackSubject := bus.JobSubject(w.job.JID) + "." + bus.SubjectJobAck + ".*"
 	ackSub, err := w.nc.Subscribe(ackSubject, func(msg *bus.Msg) {
+		peelID, ok := subjectPeelID(msg.Subject)
+		if !ok {
+			w.logger.Warn("ack on malformed subject, dropping", "jid", w.job.JID, "subject", msg.Subject)
+			return
+		}
 		var ack Ack
 		if err := bus.Decode(msg.Data, &ack); err != nil {
 			w.logger.Error("decode ack", "jid", w.job.JID, "error", err)
 			return
 		}
+		if ack.PeelID != peelID {
+			w.logger.Warn("ack payload peel does not match subject token, dropping",
+				"jid", w.job.JID, "subject_peel", peelID, "payload_peel", ack.PeelID)
+			return
+		}
 		w.mu.Lock()
-		w.acks[ack.PeelID] = ack
+		w.acks[peelID] = ack
 		w.mu.Unlock()
 
-		w.logger.Debug("job ack received", "jid", w.job.JID, "peel", ack.PeelID)
+		w.logger.Debug("job ack received", "jid", w.job.JID, "peel", peelID)
 	})
 	if err != nil {
 		w.logger.Error("subscribe acks", "jid", w.job.JID, "error", err)
@@ -204,21 +216,34 @@ func (w *Watcher) Watch(ctx context.Context) {
 
 	// Subscribe to returns. The callback only records in-memory state and
 	// enqueues a persist signal; the writer goroutine does the KV write.
+	// Identity is the subject token, same as acks: a payload PeelID that
+	// mismatches it would let one compromised peel overwrite another peel's
+	// collected return, so the message is dropped instead.
 	returnSubject := bus.JobSubject(w.job.JID) + "." + bus.SubjectJobReturn + ".*"
 	returnSub, err := w.nc.Subscribe(returnSubject, func(msg *bus.Msg) {
+		peelID, ok := subjectPeelID(msg.Subject)
+		if !ok {
+			w.logger.Warn("return on malformed subject, dropping", "jid", w.job.JID, "subject", msg.Subject)
+			return
+		}
 		var ret Return
 		if err := bus.Decode(msg.Data, &ret); err != nil {
 			w.logger.Error("decode return", "jid", w.job.JID, "error", err)
 			return
 		}
+		if ret.PeelID != peelID {
+			w.logger.Warn("return payload peel does not match subject token, dropping",
+				"jid", w.job.JID, "subject_peel", peelID, "payload_peel", ret.PeelID)
+			return
+		}
 		w.mu.Lock()
-		w.returns[ret.PeelID] = ret
+		w.returns[peelID] = ret
 		count := len(w.returns)
-		w.newReturns = append(w.newReturns, ret.PeelID)
+		w.newReturns = append(w.newReturns, peelID)
 		shouldPersist := len(w.newReturns) >= returnPersistThreshold
 		w.mu.Unlock()
 
-		w.logger.Debug("job return received", "jid", w.job.JID, "peel", ret.PeelID, "success", ret.Success)
+		w.logger.Debug("job return received", "jid", w.job.JID, "peel", peelID, "success", ret.Success)
 
 		// Incremental persist per HA-R4, handed to the writer goroutine.
 		// A full queue falls back to a synchronous persist: never drop a
@@ -366,15 +391,7 @@ func (w *Watcher) redispatchSilent() {
 		return
 	}
 
-	req := proto.ExecRequest{
-		JID:    w.job.JID,
-		Module: w.job.Function,
-		ID:     w.job.StateID,
-		Args:   w.job.Args,
-		Epoch:  w.job.Epoch,
-		V:      proto.ProtocolVersion,
-	}
-	data, err := bus.Encode(req)
+	data, err := bus.Encode(execRequestForJob(w.job))
 	if err != nil {
 		w.logger.Error("redispatch: encode exec request", "jid", w.job.JID, "error", err)
 		return
@@ -705,6 +722,20 @@ func (w *Watcher) finalizeJob(ctx context.Context, status Status) {
 
 	w.logger.Info("job finalized", "jid", w.job.JID, "status", status,
 		"returns", returnCount, "success", successCount, "targets", w.job.TargetCount())
+}
+
+// subjectPeelID extracts the trailing peel-id token(s) from a job ack or
+// return subject ("zester.job.<jid>.<ack|return>.<peel-id>"). The trailing
+// token is enforced by the peel's NATS publish permissions, so the subject —
+// never the payload — is the authoritative source of the sender's identity
+// (the same technique as the stream replayer and the scheduled-result
+// consumer). ok is false for a subject with missing or empty tokens.
+func subjectPeelID(subject string) (string, bool) {
+	parts := strings.SplitN(subject, ".", 5)
+	if len(parts) != 5 || parts[4] == "" {
+		return "", false
+	}
+	return parts[4], true
 }
 
 // sinceCreated returns the elapsed time since the job was created, or

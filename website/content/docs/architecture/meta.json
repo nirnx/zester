@@ -5,6 +5,7 @@
     "nats",
     "security",
     "ha",
+    "reactor",
     "enrollment",
     "enrollment-design",
     "enrollment-security",

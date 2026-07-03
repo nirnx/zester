@@ -6,6 +6,7 @@ import (
 
 	"github.com/ptorbus/zester/internal/version"
 	"github.com/ptorbus/zester/pkg/basket"
+	"github.com/ptorbus/zester/pkg/beacon"
 	"github.com/ptorbus/zester/pkg/bus"
 	"github.com/ptorbus/zester/pkg/facts"
 	"github.com/ptorbus/zester/pkg/proto"
@@ -57,6 +58,9 @@ func (a *Agent) runConnectedPhase(ctx context.Context) {
 
 	// Initialize state file cache from KV and watch for changes.
 	a.startStateFileCache(ctx)
+
+	// Beacon engine (v1: the service beacon, reactor amendment 22).
+	a.startBeacons(ctx)
 
 	// Peel presence heartbeat (finding 24 / roadmap B11).
 	go a.runHeartbeat(ctx)
@@ -264,6 +268,44 @@ func (a *Agent) startStateFileCache(ctx context.Context) {
 		a.addCleanup(cancelStateWatch)
 	}
 	a.logger.Info("state file distribution initialized", "peel", a.peelID, "cache_dir", a.cfg.StatesCache)
+}
+
+// startBeacons constructs the beacon manager (v1: the service beacon) from
+// the currently cached settings — live-resolved when NATS was up in time,
+// otherwise the snapshot warm-start — and runs its poll loop on the
+// connected phase's context (publishing needs NATS; the manager's bounded
+// buffer covers transient disconnects afterwards). Settings changes hot-swap
+// the config via applyResolvedSettings, the same pattern as the basket_scope
+// and schedule reloads. Beacon events ride the same core-NATS PubSub as
+// scheduled results; the events JetStream stream captures them server-side.
+func (a *Agent) startBeacons(ctx context.Context) {
+	a.basketScopeMu.RLock()
+	cached := a.cachedSettings
+	a.basketScopeMu.RUnlock()
+
+	cfg, err := beacon.ParseConfig(cached)
+	if err != nil {
+		a.logger.Warn("beacon settings parse error", "error", err)
+	}
+
+	mgr := beacon.NewManager(beacon.ManagerConfig{
+		PeelID:  a.peelID,
+		Publish: a.publishEvent,
+		Service: a.mctx.Service,
+		BusyFn:  a.execBusy.Load,
+		OnEvent: func(name string) {
+			a.metrics.PeelBeaconEventsTotal.WithLabelValues(name).Inc()
+		},
+		Logger: a.logger,
+	})
+	mgr.UpdateConfig(cfg)
+	a.beaconPtr.Store(mgr)
+	go mgr.Run(ctx)
+
+	if cfg.Service != nil {
+		a.logger.Info("beacon manager started",
+			"services", len(cfg.Service.Services), "interval", cfg.Service.Interval)
+	}
 }
 
 // runHeartbeat writes a facts.Heartbeat under the peel's own ID every 10s

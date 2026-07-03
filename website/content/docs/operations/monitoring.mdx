@@ -56,6 +56,7 @@ The endpoint returns `503` **only** when at least one check is `down` — `degra
 | `sched-consumer` | `down` while the `schedule-results` consumer is not running; a startup failure is retried in the background every 60s and the check flips to `ok` on success (`scheduled-result consumer started after retry`) |
 | `gitfs` | Only registered when GitFS is enabled: `ok` while the last fully-successful sync is younger than 3× the GitFS interval, `degraded` before the first sync or when stale, `down` if the syncer exits |
 | `target-service` | `down` until the target-resolution service (in-memory fact index + `zester.target.resolve` responder) is running; while down, CLI/API targeting falls back to facts-KV scans — functional, just slower |
+| `reactor` | Only registered when the reactor is enabled: `down` while the shared durable `reactor` consumer is not running (a boot failure is retried every 60s), `degraded` while the engine runs on last-known-good rules after a failed rule load or while a rule's storm circuit breaker is open (the message lists the affected rules), `ok` otherwise — see [Reactor operations](/docs/operations/reactor) |
 
 ```bash
 $ curl -s http://127.0.0.1:9090/readyz | jq .
@@ -122,6 +123,15 @@ Both daemons serve Prometheus metrics (OpenMetrics format) at `/metrics` on the 
 | `zester_nats_reconnects_total` | counter | | NATS reconnection events |
 | `zester_nats_disconnects_total` | counter | | NATS disconnection events |
 | `zester_nats_slow_consumers_total` | counter | | NATS slow consumer events |
+| `zester_reactor_events_total` | counter | `origin_type` | Events consumed by the reactor (`peel`, `master`, `admin`) |
+| `zester_reactor_events_dropped_total` | counter | `reason` | Events dropped at the reactor's consume gates (`malformed`, `decode`, `spoof`, `depth`, `ratelimit`, `stale`, `backpressure`) |
+| `zester_reactor_events_unmatched_total` | counter | | Events that matched no reactor rule |
+| `zester_reactor_reactions_total` | counter | `rule`, `result` | Reaction executions per rule and outcome |
+| `zester_reactor_render_duration_seconds` | histogram | | Time to render one matched reaction rule |
+| `zester_reactor_breaker_open` | gauge | `rule` | `1` while a rule's storm circuit breaker is open |
+| `zester_reactor_lag` | gauge | | Pending events on the shared `reactor` consumer (polled every 15s) |
+| `zester_reactor_rule_errors_total` | counter | | Failed reactor rule loads (last-known-good rules stay active) |
+| `zester_reactor_rules_loaded` | gauge | | Rules in the active reactor rule set |
 
 ### Peel metrics
 
@@ -131,13 +141,14 @@ Both daemons serve Prometheus metrics (OpenMetrics format) at `/metrics` on the 
 | `zester_peel_uptime_seconds` | gauge | | Peel process uptime |
 | `zester_peel_state_apply_total` | counter | `state`, `result` | Executions per module (`state` = module name, e.g. `state.apply`; `result` = `success` or `error`) |
 | `zester_peel_state_apply_duration_seconds` | histogram | `state` | Execution duration per module |
+| `zester_peel_beacon_events_total` | counter | `beacon` | Beacon events generated (counted before publish, so offline-buffered events are included) |
 | `zester_nats_reconnects_total` | counter | | NATS reconnection events |
 | `zester_nats_slow_consumers_total` | counter | | NATS slow consumer events |
 
 Both registries also expose the standard Go runtime, process, and build-info collectors (`go_*`, `process_*`, `go_build_info`).
 
 <Callout type="info" title="Registered but not yet wired">
-The metric registries (`internal/metrics`) define additional series that no code path increments yet — notably `zester_job_active`, `zester_facts_sync_errors_total`, `zester_settings_render_duration_seconds`, `zester_targeting_resolution_duration_seconds`, and the `zester_nats_msgs_*`/`zester_nats_bytes_*` transport counters on the master, plus `zester_peel_facts_collect_duration_seconds` and `zester_peel_beacon_events_total` on the peel. They appear in scrape output at zero (or not at all, for labeled series) — don't alert on them yet.
+The metric registries (`internal/metrics`) define additional series that no code path increments yet — notably `zester_job_active`, `zester_facts_sync_errors_total`, `zester_settings_render_duration_seconds`, `zester_targeting_resolution_duration_seconds`, and the `zester_nats_msgs_*`/`zester_nats_bytes_*` transport counters on the master, plus `zester_peel_facts_collect_duration_seconds` on the peel. They appear in scrape output at zero (or not at all, for labeled series) — don't alert on them yet.
 </Callout>
 
 ### Scrape Configuration
@@ -272,7 +283,7 @@ Base alerts on Zester-native metrics where available, plus **NATS server metrics
 | Alert | PromQL | Threshold | Description |
 |---|---|---|---|
 | **Peel Disconnected** | `zester_peel_connected == 0` | 5 minutes | Peel process is up but has no NATS connection |
-| **Master Not Ready** | `probe_success{job="zester-master-readyz"} == 0` | 2 minutes | A master subsystem (NATS, enroll-server, sched-consumer, target-service) is `down` — probe `/readyz` with the blackbox exporter |
+| **Master Not Ready** | `probe_success{job="zester-master-readyz"} == 0` | 2 minutes | A master subsystem (NATS, enroll-server, sched-consumer, target-service, reactor) is `down` — probe `/readyz` with the blackbox exporter |
 | **NATS Down** | `up{job="nats"} == 0` | 1 minute | NATS server is not responding to scrapes |
 | **JetStream Storage Full** | `nats_server_jetstream_storage_used / nats_server_jetstream_storage_limit > 0.9` | Immediate | JetStream disk storage above 90% |
 

@@ -38,6 +38,12 @@ const (
 	// SubjectReactor is for event-driven reactions.
 	SubjectReactor = SubjectPrefix + ".reactor"
 
+	// SubjectReactorTest is for CLI -> master reactor rule dry-runs
+	// (request/reply): given a match key and optional event data, the
+	// masters return the matched rules and their rendered actions
+	// WITHOUT executing them.
+	SubjectReactorTest = SubjectReactor + ".test"
+
 	// SubjectUpdateCmd is for master -> watchdog update commands (request/reply).
 	// Pattern: zester.update.cmd.<id>
 	SubjectUpdateCmd = SubjectPrefix + ".update.cmd"
@@ -94,6 +100,25 @@ const (
 	// SubjectBeacon is appended to event subjects for beacon data.
 	// Pattern: zester.event.<peel-id>.beacon.<name>
 	SubjectBeacon = "beacon"
+
+	// SubjectEventSend is the event sub-token marking custom (non-beacon)
+	// events published via the event.send module or the admin CLI.
+	// Pattern: zester.event.<peel-id>.send.<dotted-tag>
+	SubjectEventSend = "send"
+)
+
+// Trusted-origin tokens occupying the third position of event subjects
+// (zester.event.<origin>....). Peel JWTs pin publishing to
+// zester.event.<ownPeelID>.>, and enrollment rejects peel IDs with a
+// leading underscore, so these origins can never be spoofed by a peel.
+const (
+	// OriginMaster marks master-synthesized events.
+	// Pattern: zester.event._master.<dotted-tag>
+	OriginMaster = "_master"
+
+	// OriginAdmin marks operator-sent events (zester event send).
+	// Pattern: zester.event._admin.send.<dotted-tag>
+	OriginAdmin = "_admin"
 )
 
 // Wildcard tokens used in NATS subject matching.
@@ -133,6 +158,34 @@ func EventSubjectAll() string {
 // Example: BeaconSubject("web-01", "disk") -> "zester.event.web-01.beacon.disk"
 func BeaconSubject(peelID, name string) string {
 	return fmt.Sprintf("%s.%s.%s.%s", SubjectEvent, peelID, SubjectBeacon, name)
+}
+
+// PeelEventSendSubject returns the custom-event subject for a peel and a
+// DOTTED tag (slash tags map 1:1 to dotted tags — see pkg/event.DottedTag).
+// The peel-id token is enforced by the peel's NATS publish permissions, so
+// a peel can only emit events as itself.
+// Example: PeelEventSendSubject("web-01", "myco.deploy.finished") ->
+// "zester.event.web-01.send.myco.deploy.finished"
+func PeelEventSendSubject(peelID, dottedTag string) string {
+	return fmt.Sprintf("%s.%s.%s.%s", SubjectEvent, peelID, SubjectEventSend, dottedTag)
+}
+
+// MasterEventSubject returns the subject for a master-synthesized event
+// with the given DOTTED tag. Only masters (zester.> grant) can publish
+// under the _master origin.
+// Example: MasterEventSubject("enroll.pending.enr-1") ->
+// "zester.event._master.enroll.pending.enr-1"
+func MasterEventSubject(dottedTag string) string {
+	return fmt.Sprintf("%s.%s.%s", SubjectEvent, OriginMaster, dottedTag)
+}
+
+// AdminEventSendSubject returns the subject for an operator-sent event with
+// the given DOTTED tag (the zester event send CLI). Requires the admin
+// JWT's zester.event._admin.> publish grant.
+// Example: AdminEventSendSubject("myco.deploy.finished") ->
+// "zester.event._admin.send.myco.deploy.finished"
+func AdminEventSendSubject(dottedTag string) string {
+	return fmt.Sprintf("%s.%s.%s.%s", SubjectEvent, OriginAdmin, SubjectEventSend, dottedTag)
 }
 
 // FactSubject returns the fact subject for a specific peel.

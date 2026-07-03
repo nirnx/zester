@@ -32,6 +32,18 @@ type Registry struct {
 
 	TargetResolutionDuration prometheus.Histogram
 
+	// -- Reactor metrics (master) --
+
+	ReactorEventsTotal     *prometheus.CounterVec
+	ReactorEventsDropped   *prometheus.CounterVec
+	ReactorEventsUnmatched prometheus.Counter
+	ReactorReactionsTotal  *prometheus.CounterVec
+	ReactorRenderDuration  prometheus.Histogram
+	ReactorBreakerOpen     *prometheus.GaugeVec
+	ReactorLag             prometheus.Gauge
+	ReactorRuleErrors      prometheus.Counter
+	ReactorRulesLoaded     prometheus.Gauge
+
 	// -- Peel metrics --
 
 	PeelConnected          prometheus.Gauge
@@ -131,6 +143,61 @@ func NewMasterRegistry() *Registry {
 		Buckets:   []float64{.0001, .0005, .001, .005, .01, .05, .1},
 	})
 
+	m.ReactorEventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "reactor_events_total",
+		Help:      "Total events consumed by the reactor, partitioned by origin type.",
+	}, []string{"origin_type"})
+
+	m.ReactorEventsDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "reactor_events_dropped_total",
+		Help:      "Total events the reactor dropped, partitioned by reason.",
+	}, []string{"reason"})
+
+	m.ReactorEventsUnmatched = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "reactor_events_unmatched_total",
+		Help:      "Total events that matched no reactor rule.",
+	})
+
+	m.ReactorReactionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "reactor_reactions_total",
+		Help:      "Total reaction executions, partitioned by rule and result.",
+	}, []string{"rule", "result"})
+
+	m.ReactorRenderDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Name:      "reactor_render_duration_seconds",
+		Help:      "Time to render one matched reaction rule.",
+		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30},
+	})
+
+	m.ReactorBreakerOpen = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "reactor_breaker_open",
+		Help:      "1 while a rule's storm circuit breaker is open, 0 otherwise.",
+	}, []string{"rule"})
+
+	m.ReactorLag = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "reactor_lag",
+		Help:      "Pending (undelivered) events on the shared reactor consumer.",
+	})
+
+	m.ReactorRuleErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "reactor_rule_errors_total",
+		Help:      "Total failed reactor rule loads (last-known-good rules stay active).",
+	})
+
+	m.ReactorRulesLoaded = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "reactor_rules_loaded",
+		Help:      "Number of reactor rules in the active rule set.",
+	})
+
 	m.NATSMsgsPublished = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "nats_msgs_published_total",
@@ -185,6 +252,15 @@ func NewMasterRegistry() *Registry {
 		m.StateApplyTotal,
 		m.StateApplyDuration,
 		m.TargetResolutionDuration,
+		m.ReactorEventsTotal,
+		m.ReactorEventsDropped,
+		m.ReactorEventsUnmatched,
+		m.ReactorReactionsTotal,
+		m.ReactorRenderDuration,
+		m.ReactorBreakerOpen,
+		m.ReactorLag,
+		m.ReactorRuleErrors,
+		m.ReactorRulesLoaded,
 		m.NATSMsgsPublished,
 		m.NATSMsgsReceived,
 		m.NATSBytesPublished,

@@ -123,12 +123,13 @@ func (d *Daemon) stopLeaderPublish() {
 
 // runLeaderPublish performs the leader-only KV writes for one lease
 // acquisition: the initial settings-files publish, the initial state-files
-// publish, and then the GitFS sync loop (which republishes state files
-// after every sync) until the acquisition context is cancelled — lease lost
-// or shutdown.
+// publish, the reactor-files publish, and then the GitFS sync loop (which
+// republishes state files after every sync) until the acquisition context
+// is cancelled — lease lost or shutdown.
 func (d *Daemon) runLeaderPublish(ctx context.Context) {
 	d.publishSettingsFiles(ctx)
 	d.publishStateFiles(ctx)
+	d.publishReactorFiles(ctx)
 
 	if d.gitfs == nil {
 		return

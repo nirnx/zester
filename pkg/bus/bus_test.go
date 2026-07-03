@@ -1031,3 +1031,168 @@ func TestKVGetAll(t *testing.T) {
 		}
 	})
 }
+
+// --- Reactor Event Subject Tests ---
+
+func TestEventOriginAndReactorConstants(t *testing.T) {
+	tests := []struct {
+		name     string
+		got      string
+		expected string
+	}{
+		{"origin_master", bus.OriginMaster, "_master"},
+		{"origin_admin", bus.OriginAdmin, "_admin"},
+		{"event_send_token", bus.SubjectEventSend, "send"},
+		{"reactor_test", bus.SubjectReactorTest, "zester.reactor.test"},
+		{"stream_events", bus.StreamEvents, "events"},
+		{"bucket_reactor_files", bus.BucketReactorFiles, "reactor-files"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.expected {
+				t.Errorf("got %q, want %q", tt.got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestEventSubjectHelpers(t *testing.T) {
+	tests := []struct {
+		name     string
+		got      string
+		expected string
+	}{
+		{"peel_send", bus.PeelEventSendSubject("web-01", "myco.deploy.finished"), "zester.event.web-01.send.myco.deploy.finished"},
+		{"peel_send_single", bus.PeelEventSendSubject("web-01", "ping"), "zester.event.web-01.send.ping"},
+		{"master", bus.MasterEventSubject("enroll.pending.enr-1"), "zester.event._master.enroll.pending.enr-1"},
+		{"master_reaction", bus.MasterEventSubject("reaction.chain.next"), "zester.event._master.reaction.chain.next"},
+		{"admin_send", bus.AdminEventSendSubject("myco.deploy.finished"), "zester.event._admin.send.myco.deploy.finished"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.expected {
+				t.Errorf("got %q, want %q", tt.got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestEventSubjectHelpersCoveredByStreamWildcard proves every event helper
+// publishes under the events stream's capture subject, so nothing an event
+// producer emits can bypass the durable log.
+func TestEventSubjectHelpersCoveredByStreamWildcard(t *testing.T) {
+	prefix := bus.SubjectEvent + "." // "zester.event." per EventSubjectAll()
+	for _, subject := range []string{
+		bus.PeelEventSendSubject("web-01", "myco.deploy"),
+		bus.MasterEventSubject("enroll.pending.enr-1"),
+		bus.AdminEventSendSubject("chain.next"),
+		bus.BeaconSubject("web-01", "service"),
+	} {
+		if len(subject) <= len(prefix) || subject[:len(prefix)] != prefix {
+			t.Errorf("subject %q not under %q", subject, prefix)
+		}
+	}
+}
+
+// --- Events Stream & Reactor Bucket Tests ---
+
+func TestDefaultEventsStream(t *testing.T) {
+	cfg := bus.DefaultEventsStream()
+
+	if cfg.Name != bus.StreamEvents {
+		t.Errorf("name: got %q, want %q", cfg.Name, bus.StreamEvents)
+	}
+	if len(cfg.Subjects) != 1 || cfg.Subjects[0] != "zester.event.>" {
+		t.Errorf("subjects: got %v, want [zester.event.>]", cfg.Subjects)
+	}
+	if cfg.MaxAge != 7*24*time.Hour {
+		t.Errorf("max age: got %v, want %v", cfg.MaxAge, 7*24*time.Hour)
+	}
+	if cfg.Duplicates != 2*time.Minute {
+		t.Errorf("duplicates window: got %v, want %v", cfg.Duplicates, 2*time.Minute)
+	}
+	if cfg.MaxBytes == 0 || cfg.MaxMsgs == 0 {
+		t.Errorf("flood bounds must be set: MaxBytes=%d MaxMsgs=%d", cfg.MaxBytes, cfg.MaxMsgs)
+	}
+	if cfg.Retention != jetstream.LimitsPolicy {
+		t.Errorf("retention: got %v, want LimitsPolicy", cfg.Retention)
+	}
+	if cfg.Storage != jetstream.FileStorage {
+		t.Errorf("storage: got %v, want FileStorage", cfg.Storage)
+	}
+	if cfg.Tier != bus.TierCritical {
+		t.Errorf("tier: got %v, want TierCritical", cfg.Tier)
+	}
+}
+
+func TestCreateDefaultStreamsIncludesEvents(t *testing.T) {
+	js := newTestJS()
+	ctx := context.Background()
+
+	streams, err := bus.CreateDefaultStreams(ctx, js)
+	if err != nil {
+		t.Fatalf("create default streams: %v", err)
+	}
+	for _, name := range []string{bus.StreamJobEvents, bus.StreamEvents} {
+		if _, ok := streams[name]; !ok {
+			t.Errorf("missing stream %q", name)
+		}
+	}
+
+	// The Duplicates window must survive the bus.StreamConfig ->
+	// jetstream.StreamConfig mapping (MsgID dedup depends on it).
+	got := js.streamConfig(bus.StreamEvents)
+	if got.Duplicates != 2*time.Minute {
+		t.Errorf("events stream duplicate window: got %v, want %v", got.Duplicates, 2*time.Minute)
+	}
+	if len(got.Subjects) != 1 || got.Subjects[0] != "zester.event.>" {
+		t.Errorf("events stream subjects: got %v, want [zester.event.>]", got.Subjects)
+	}
+	// job-events must be untouched by the events stream addition: its own
+	// subjects, no duplicate window.
+	je := js.streamConfig(bus.StreamJobEvents)
+	if len(je.Subjects) != 1 || je.Subjects[0] != "zester.job.>" {
+		t.Errorf("job-events subjects changed: got %v", je.Subjects)
+	}
+	if je.Duplicates != 0 {
+		t.Errorf("job-events gained a duplicate window: %v", je.Duplicates)
+	}
+}
+
+func TestInitializeStorageOptsTiersEventsStream(t *testing.T) {
+	js := newTestJS()
+	ctx := context.Background()
+
+	if err := bus.InitializeStorageOpts(ctx, js, bus.StorageOptions{ClusterSize: 3}); err != nil {
+		t.Fatalf("initialize storage: %v", err)
+	}
+	// The events stream gets the same replicas tiering as job-events.
+	for _, name := range []string{bus.StreamJobEvents, bus.StreamEvents} {
+		if got := js.streamConfig(name).Replicas; got != 3 {
+			t.Errorf("stream %q: replicas = %d, want 3", name, got)
+		}
+	}
+	// And the reactor-files bucket exists with the effective count.
+	if got := js.kvConfig(bus.BucketReactorFiles).Replicas; got != 3 {
+		t.Errorf("bucket %q: replicas = %d, want 3", bus.BucketReactorFiles, got)
+	}
+}
+
+func TestDefaultBucketsIncludesReactorFiles(t *testing.T) {
+	for _, cfg := range bus.DefaultBuckets() {
+		if cfg.Bucket != bus.BucketReactorFiles {
+			continue
+		}
+		if cfg.History != 3 {
+			t.Errorf("reactor-files history: got %d, want 3", cfg.History)
+		}
+		if cfg.Tier != bus.TierCritical {
+			t.Errorf("reactor-files tier: got %v, want TierCritical", cfg.Tier)
+		}
+		if cfg.TTL != 0 {
+			t.Errorf("reactor-files must not expire, got TTL %v", cfg.TTL)
+		}
+		return
+	}
+	t.Fatalf("bucket %q missing from DefaultBuckets", bus.BucketReactorFiles)
+}

@@ -1,4 +1,4 @@
 {
   "title": "Reference",
-  "pages": ["cli", "configuration", "master-api", "enrollment-api", "authentication"]
+  "pages": ["cli", "configuration", "events", "master-api", "enrollment-api", "authentication"]
 }

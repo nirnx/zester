@@ -166,10 +166,10 @@ func (a *Agent) runExecWorker(ctx context.Context) {
 // (request/reply response or job return), updating metrics and logging — the
 // shared tail of both the read-only fast path and the queued worker path.
 func (a *Agent) dispatchExec(execCtx context.Context, msg *bus.Msg, req proto.ExecRequest,
-	run func(context.Context, string, string, map[string]any) (proto.ExecResponse, error)) {
+	run func(context.Context, proto.ExecRequest) (proto.ExecResponse, error)) {
 
 	execStart := time.Now()
-	resp, _ := run(execCtx, req.ID, req.Module, req.Args)
+	resp, _ := run(execCtx, req)
 	execDuration := time.Since(execStart)
 	resp.JID = req.JID
 

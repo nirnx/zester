@@ -15,6 +15,7 @@ Zester follows a predictable filesystem layout on both master and peel nodes.
 /etc/zester/master.creds            # NATS credentials (JWT + nkey)
 /srv/zester/states/                 # State tree (SLS files)
 /srv/zester/settings/               # Settings tree (per-peel config)
+/srv/zester/reactor/                # Reactor rules (top.zy + reaction files; set reactor.dir)
 /var/log/zester/                    # Log files (if not using journald)
 ```
 
@@ -25,9 +26,10 @@ Zester follows a predictable filesystem layout on both master and peel nodes.
 /etc/zester/peel.yaml               # Peel configuration
 /etc/zester/peel.creds              # NATS credentials (JWT + nkey)
 /etc/zester/facts/                  # Custom fact definitions
-/etc/zester/beacons.d/              # Beacon configurations
 /var/log/zester/                    # Log files (if not using journald)
 ```
+
+Beacons have no on-disk config directory — they are configured through the settings pipeline (the `beacons:` settings key) and hot-reload on settings changes. See [Reactor operations](/docs/operations/reactor).
 
 ### File Permissions
 

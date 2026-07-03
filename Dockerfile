@@ -28,6 +28,7 @@ COPY --from=builder /bin/zester-watchdog /usr/local/bin/zester-watchdog
 
 COPY playground/states /playground/states
 COPY playground/settings /playground/settings
+COPY playground/reactor /playground/reactor
 COPY playground/auto-approve.sh /playground/auto-approve.sh
 
 ENTRYPOINT []

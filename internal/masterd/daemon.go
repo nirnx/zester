@@ -25,7 +25,9 @@ import (
 	"github.com/ptorbus/zester/pkg/auth"
 	"github.com/ptorbus/zester/pkg/bus"
 	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/ptorbus/zester/pkg/facts"
 	"github.com/ptorbus/zester/pkg/job"
+	"github.com/ptorbus/zester/pkg/reactor"
 	"github.com/ptorbus/zester/pkg/settings"
 	"github.com/ptorbus/zester/pkg/statefiles"
 	"github.com/ptorbus/zester/pkg/update"
@@ -174,6 +176,51 @@ type Daemon struct {
 	// (health.CheckResult): OK once the resolve service is serving, Down
 	// when it failed to start.
 	targetState atomic.Value
+
+	// factsIndex is the target-resolution facts index, retained on the
+	// daemon (atomic pointer: assigned in startTargetService, read from the
+	// reactor's worker goroutines for in-process target resolution and
+	// origin_facts). nil until the target service starts.
+	factsIndex atomic.Pointer[facts.Index]
+
+	// reactorPublisher publishes the local reactor rules dir to the
+	// reactor-files bucket. nil when the reactor is disabled; publishes run
+	// leader-only (publishReactorFiles from runLeaderPublish, exactly like
+	// the state-files publish).
+	reactorPublisher *statefiles.Publisher
+
+	// reactorLoader holds the reactor rule loader (atomic pointer: assigned
+	// by the boot path — possibly on the retry goroutine — and read by the
+	// 'reactor' readiness check for the last-known-good degraded state).
+	reactorLoader atomic.Pointer[reactor.Loader]
+
+	// reactorState holds the current 'reactor' readiness result
+	// (health.CheckResult), mirroring schedState: the boot outcome, flipped
+	// to OK by the retry loop once the engine finally starts.
+	reactorState atomic.Value
+
+	// reactorOpenBreakers holds the running engine's open-breaker accessor
+	// (a func() []string, reactor.Engine.OpenBreakers), read by the
+	// 'reactor' readiness check for the breaker-open degraded state. Stored
+	// by the boot path — possibly on the retry goroutine — alongside the
+	// engine; a func seam so tests can exercise the check directly.
+	reactorOpenBreakers atomic.Value
+
+	// reactorStopMu guards reactorStop and reactorStopped: the stop function
+	// of the currently running reactor engine (replaced by the retry loop)
+	// and whether shutdown already ran (so a late retry success stops its
+	// own engine instead of leaking it) — same guard as the sched-consumer.
+	reactorStopMu  sync.Mutex
+	reactorStop    func()
+	reactorStopped bool
+
+	// reactorStart is a test seam for starting the reactor engine + test
+	// service. nil (production) means reactorBoot.
+	reactorStart func(ctx context.Context) (func(), error)
+
+	// reactorRetryInterval paces the reactor boot retry loop. Zero means
+	// reactorBootRetryInterval (60s); tests set short values.
+	reactorRetryInterval time.Duration
 }
 
 // New constructs the daemon from a fully-resolved config and logger. It
@@ -245,6 +292,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	if err := d.startStatefilesPublisher(runCtx); err != nil {
+		return err
+	}
+
+	// Reactor rules publisher (mirrors the state-files publisher): must be
+	// constructed before the publisher lease starts, because the lease's
+	// OnAcquired publish run (runLeaderPublish) includes the reactor files.
+	if err := d.startReactorPublisher(runCtx); err != nil {
 		return err
 	}
 
@@ -331,6 +385,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// group; readiness check registered after the pre-existing ones.
 	stopTargetService := d.startTargetService(runCtx)
 	defer stopTargetService()
+
+	// Reactor engine: needs NATS + storage init (events stream,
+	// reactor-files bucket), the job manager (reaction dispatch), the
+	// enrollment store (enroll.* actions), and the facts index retained by
+	// startTargetService (in-process resolution + origin_facts) — so it
+	// starts after all of them. LIFO defer: the reactor stops before the
+	// target service and job manager it depends on.
+	stopReactor := d.startReactor(runCtx)
+	defer stopReactor()
 
 	d.startConnectedPeelsGauge(runCtx)
 

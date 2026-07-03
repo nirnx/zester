@@ -13,8 +13,10 @@ import (
 // and invokes handle for every non-nil entry, including delete and purge
 // markers. It is the shared machinery behind Watch and WatchIntoIndex.
 // The watcher automatically reconnects with exponential backoff if the
-// JetStream consumer is lost (e.g., NATS cluster failure).
-func watchFactsEntries(ctx context.Context, js bus.JetStreamAPI, handle func(entry bus.KVEntry), logger *slog.Logger) (context.CancelFunc, error) {
+// JetStream consumer is lost (e.g., NATS cluster failure). onReplayDone
+// (optional) is invoked exactly once, when the INITIAL replay's nil
+// end-of-replay sentinel arrives — reconnect replays do not re-fire it.
+func watchFactsEntries(ctx context.Context, js bus.JetStreamAPI, handle func(entry bus.KVEntry), onReplayDone func(), logger *slog.Logger) (context.CancelFunc, error) {
 	kv, err := bus.GetBucket(ctx, js, bus.BucketFacts)
 	if err != nil {
 		return nil, fmt.Errorf("facts: get facts bucket for watch: %w", err)
@@ -29,6 +31,7 @@ func watchFactsEntries(ctx context.Context, js bus.JetStreamAPI, handle func(ent
 
 	go func() {
 		defer watcher.Stop()
+		replayDone := false
 		for {
 			select {
 			case <-watchCtx.Done():
@@ -64,6 +67,14 @@ func watchFactsEntries(ctx context.Context, js bus.JetStreamAPI, handle func(ent
 					continue
 				}
 				if entry == nil {
+					// End-of-replay sentinel: the bucket's current contents
+					// have all been handled.
+					if !replayDone {
+						replayDone = true
+						if onReplayDone != nil {
+							onReplayDone()
+						}
+					}
 					continue
 				}
 				handle(entry)
@@ -77,7 +88,10 @@ func watchFactsEntries(ctx context.Context, js bus.JetStreamAPI, handle func(ent
 // WatchIntoIndex keeps idx synchronized with the facts KV bucket: puts call
 // idx.Update, explicit deletes and purges call idx.Remove. It reuses the same
 // self-reconnecting watch machinery as Watch, so a WatchAll replay on start
-// (or reconnect) seeds the index with the full bucket contents.
+// (or reconnect) seeds the index with the full bucket contents. When the
+// initial replay completes (the watcher's nil end-of-replay sentinel) the
+// index is marked seeded (idx.Seeded) — consumers that must not resolve
+// against a partially-populated index gate on it.
 //
 // Staleness bounds: explicit kv.Delete/Purge operations ARE surfaced by
 // JetStream watchers and are applied to the index. Two cases are not:
@@ -110,5 +124,5 @@ func WatchIntoIndex(ctx context.Context, js bus.JetStreamAPI, idx *Index, logger
 			}
 			idx.Update(entry.Key(), f)
 		}
-	}, logger)
+	}, idx.MarkSeeded, logger)
 }

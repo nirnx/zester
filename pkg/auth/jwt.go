@@ -348,7 +348,12 @@ func MasterUserJWTOptions(accountPub string) UserJWTOptions {
 
 // AdminUserJWTOptions provides defaults suitable for the CLI admin tool.
 // The admin can send commands to any peel, dispatch/cancel jobs, read/write
-// JetStream KV data (including enrollment management), and read job return events.
+// JetStream KV data (including enrollment management), read job return events,
+// publish operator events on the trusted _admin origin (`zester event send`),
+// watch the whole event stream (`zester event watch`), and call the reactor
+// control plane (`zester reactor test`). Admin creds issued before the
+// event/reactor grants were added keep working degraded (no event/reactor
+// CLI) until re-issued.
 func AdminUserJWTOptions(accountPub string) UserJWTOptions {
 	return UserJWTOptions{
 		Name:          "zester-admin",
@@ -358,6 +363,11 @@ func AdminUserJWTOptions(accountPub string) UserJWTOptions {
 			"zester.dispatch",
 			"zester.job.>",
 			"zester.update.>",
+			// Operator events (`zester event send`) publish on the trusted
+			// _admin origin only — never on peel or _master origins.
+			"zester.event._admin.>",
+			// Reactor control plane request/reply (`zester reactor test`).
+			"zester.reactor.>",
 			// Enrollment admin request/reply (approve/reject/revoke) served
 			// by the masters' admin service.
 			"zester.admin.>",
@@ -372,6 +382,8 @@ func AdminUserJWTOptions(accountPub string) UserJWTOptions {
 		AllowSub: []string{
 			"zester.job.>",
 			"zester.update.>",
+			// Event stream watching (`zester event watch`).
+			"zester.event.>",
 			"$JS.API.>",
 			"$KV.>",
 			"$O.>",

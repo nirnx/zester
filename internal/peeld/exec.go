@@ -184,7 +184,8 @@ func (a *Agent) readOnlyModule(module string) bool {
 // data queries. Imperative-registry calls run on an immutable per-request
 // context derived from mctxTemplate with fresh facts and the cached settings
 // snapshot.
-func (a *Agent) execReadOnly(execCtx context.Context, id, module string, args map[string]any) (proto.ExecResponse, error) {
+func (a *Agent) execReadOnly(execCtx context.Context, req proto.ExecRequest) (proto.ExecResponse, error) {
+	id, module, args := req.ID, req.Module, req.Args
 	if args == nil {
 		args = map[string]any{}
 	}
@@ -238,11 +239,21 @@ func (a *Agent) execReadOnly(execCtx context.Context, id, module string, args ma
 
 // execModule is the core execution function shared between the exec worker
 // and the scheduler. It handles all module types: state.apply, state.highstate,
-// facts.*, settings.*, and single-module execution. id is the request's
-// state ID (used as the primary-param default for single-module runs).
-func (a *Agent) execModule(execCtx context.Context, id, module string, args map[string]any) (proto.ExecResponse, error) {
+// facts.*, settings.*, event.send, and single-module execution. req.ID is the
+// request's state ID (used as the primary-param default for single-module
+// runs); req.ReactorDepth threads the reactor chain depth into event.send.
+func (a *Agent) execModule(execCtx context.Context, req proto.ExecRequest) (proto.ExecResponse, error) {
 	a.execMu.Lock()
 	defer a.execMu.Unlock()
+
+	// Mark the exec worker busy for the duration of this mutating execution.
+	// The beacon manager's BusyFn reads it lock-free and skips polls while
+	// set (disable_during_state_run, reactor amendment 22), so a
+	// reaction-triggered state run cannot re-trip the beacon that caused it.
+	a.execBusy.Store(true)
+	defer a.execBusy.Store(false)
+
+	id, module, args := req.ID, req.Module, req.Args
 
 	peelID := a.peelID
 	logger := a.logger
@@ -361,6 +372,15 @@ func (a *Agent) execModule(execCtx context.Context, id, module string, args map[
 
 	} else if strings.HasPrefix(module, "settings.") || strings.HasPrefix(module, "pillar.") {
 		return a.execSettingsModule(module, args), nil
+
+	} else if module == "event.send" {
+		// Custom peel event (reactor amendment 20): needs the bus, so it is
+		// special-cased here — like the facts./settings. query modules and
+		// BEFORE the pkg/execmod fallback (execmod functions have no bus
+		// access). Deliberately on the mutating (execMu-serialized) worker
+		// path: publishing an event is a side effect, and serialization
+		// keeps per-peel event order deterministic.
+		return a.execEventSend(id, args, req.ReactorDepth), nil
 
 	} else if a.execReg.Has(module) && !a.registry.Has(module) {
 		// Imperative remote-execution function (Salt-style ad-hoc ops:

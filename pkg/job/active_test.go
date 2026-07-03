@@ -6,6 +6,7 @@ package job
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -171,10 +172,70 @@ func TestDispatchResumesOwnInterruptedClaim(t *testing.T) {
 	}
 }
 
-// TestDispatchClaimedByOtherMasterIsNoOp: a claimed record owned by ANOTHER
-// master is left alone — no publish, no status change (the owner, or the
-// orphan scanner, is responsible for it).
-func TestDispatchClaimedByOtherMasterIsNoOp(t *testing.T) {
+// TestDispatchResumesOwnClaimWithDriftedIntent: the own-claim resume check
+// runs BEFORE the intent comparison. Deterministic-JID dispatches (the
+// reactor) legitimately re-render with drifted args between attempts; the
+// claimed record is provably unpublished, so the retry must resume with the
+// requested intent instead of wedging the claim behind ErrJIDConflict.
+func TestDispatchResumesOwnClaimWithDriftedIntent(t *testing.T) {
+	ps, js := testSetup(t)
+	ctx := context.Background()
+
+	j := NewJob("cmd.run", map[string]any{"cmd": "uptime"}, []string{"peel-01"}, 30*time.Second)
+	j.Status = StatusClaimed
+	j.Owner = "master-a"
+	storeJob(t, js, j)
+
+	published := make(chan proto.ExecRequest, 1)
+	sub, err := ps.Subscribe(bus.CmdSubject("peel-01"), func(msg *bus.Msg) {
+		var req proto.ExecRequest
+		if err := bus.Decode(msg.Data, &req); err != nil {
+			t.Errorf("decode exec request: %v", err)
+			return
+		}
+		published <- req
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer sub.Unsubscribe()
+
+	retry := NewJob("cmd.run", map[string]any{"cmd": "hostname"}, []string{"peel-01"}, 30*time.Second)
+	retry.JID = j.JID
+	mgr := NewManager(ps, js, "master-a", nil)
+	if err := mgr.Dispatch(ctx, retry); err != nil {
+		t.Fatalf("Dispatch resume with drifted intent: %v", err)
+	}
+
+	select {
+	case req := <-published:
+		if req.Args["cmd"] != "hostname" {
+			t.Errorf("resumed ExecRequest args = %v, want the requested (drifted) intent", req.Args)
+		}
+	default:
+		t.Fatal("resumed dispatch must publish the ExecRequest")
+	}
+
+	final, err := mgr.GetJob(ctx, j.JID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if final.Status != StatusRunning {
+		t.Errorf("Status = %q, want %q after resume", final.Status, StatusRunning)
+	}
+	if final.Args["cmd"] != "hostname" {
+		t.Errorf("persisted args = %v, want the requested (drifted) intent", final.Args)
+	}
+}
+
+// TestDispatchClaimedByOtherMasterIsClaimPending: a claimed record owned by
+// ANOTHER master is left alone — no publish, no status change — but the
+// collision is NOT reported as success: the record is provably unpublished
+// and its live owner may never resume it, so Dispatch returns the typed
+// retryable ErrJobClaimPending (regardless of intent match — the claim state
+// dominates) and the caller retries until the claim resumes or the orphan
+// scanner reclaims it.
+func TestDispatchClaimedByOtherMasterIsClaimPending(t *testing.T) {
 	ps, js := testSetup(t)
 	ctx := context.Background()
 
@@ -190,11 +251,28 @@ func TestDispatchClaimedByOtherMasterIsNoOp(t *testing.T) {
 	}
 	defer sub.Unsubscribe()
 
-	retry := NewJob("cmd.run", map[string]any{"cmd": "uptime"}, []string{"peel-01"}, 30*time.Second)
-	retry.JID = j.JID
 	mgrB := NewManager(ps, js, "master-b", nil)
-	if err := mgrB.Dispatch(ctx, retry); err != nil {
-		t.Fatalf("Dispatch: %v", err)
+	tests := []struct {
+		name   string
+		mutate func(c *Job)
+	}{
+		{name: "same intent", mutate: func(*Job) {}},
+		{name: "drifted intent", mutate: func(c *Job) { c.Args = map[string]any{"cmd": "hostname"} }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retry := NewJob("cmd.run", map[string]any{"cmd": "uptime"}, []string{"peel-01"}, 30*time.Second)
+			retry.JID = j.JID
+			tt.mutate(retry)
+
+			err := mgrB.Dispatch(ctx, retry)
+			if !errors.Is(err, ErrJobClaimPending) {
+				t.Fatalf("errors.Is(err, ErrJobClaimPending) = false, want true; err = %v", err)
+			}
+			if errors.Is(err, ErrJIDConflict) {
+				t.Error("claim-pending must not classify as ErrJIDConflict (it would be duplicate-suppressed)")
+			}
+		})
 	}
 
 	if publishCount != 0 {

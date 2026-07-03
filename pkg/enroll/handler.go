@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ type Handler struct {
 	issuer            *CredentialIssuer
 	logger            *slog.Logger
 	maxStreamDuration time.Duration
+	onPending         func(Record)
 }
 
 // HandlerConfig configures the enrollment HTTP handler.
@@ -29,6 +31,14 @@ type HandlerConfig struct {
 	Challenges *ChallengeStore
 	Issuer     *CredentialIssuer
 	Logger     *slog.Logger
+
+	// OnPending, when non-nil, is called synchronously with a copy of every
+	// NEWLY created (pending) enrollment record, after the store Create
+	// succeeds. Idempotent resubmits of an already-pending enrollment do NOT
+	// fire it. The master wires it to emit the
+	// zester.event._master.enroll.pending.<id> reactor event; implementations
+	// must be fast and must never fail the enrollment.
+	OnPending func(Record)
 }
 
 // NewHandler creates enrollment HTTP handlers.
@@ -41,6 +51,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		challenges: cfg.Challenges,
 		issuer:     cfg.Issuer,
 		logger:     cfg.Logger,
+		onPending:  cfg.OnPending,
 	}
 }
 
@@ -113,7 +124,7 @@ func (h *Handler) handleNonce(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := ValidatePeelID(peelID); err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid peel_id")
+		h.writeError(w, http.StatusBadRequest, peelIDErrorMessage(err))
 		return
 	}
 	if err := ValidatePublicKey(publicKey); err != nil {
@@ -144,9 +155,12 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate fields.
+	// Validate fields. The peel ID check is the enforcement point for the
+	// subject-token charset rules (see ValidatePeelID): a Record is only
+	// ever created from a request here, so nothing violating them can enter
+	// the fleet.
 	if err := ValidatePeelID(req.PeelID); err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid peel_id")
+		h.writeError(w, http.StatusBadRequest, peelIDErrorMessage(err))
 		return
 	}
 	if err := ValidatePublicKey(req.PublicKey); err != nil {
@@ -250,6 +264,12 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("enroll: create record", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "failed to create enrollment")
 		return
+	}
+
+	// Notify observers of the new pending enrollment (e.g. the master's
+	// enroll/pending reactor event). Nil-safe and best-effort by contract.
+	if h.onPending != nil {
+		h.onPending(*rec)
 	}
 
 	h.logger.Info("enrollment.verify.success",
@@ -513,6 +533,13 @@ func (h *Handler) writeJSON(w http.ResponseWriter, code int, v any) {
 
 func (h *Handler) writeError(w http.ResponseWriter, code int, message string) {
 	h.writeJSON(w, code, map[string]string{"error": message})
+}
+
+// peelIDErrorMessage formats a ValidatePeelID error for an HTTP response:
+// the specific reason (dots, wildcards, leading underscore, length, charset)
+// is surfaced so operators can fix the ID without reading server logs.
+func peelIDErrorMessage(err error) string {
+	return "invalid peel_id: " + strings.TrimPrefix(err.Error(), "enroll: ")
 }
 
 // remoteIP extracts the client IP from the request.

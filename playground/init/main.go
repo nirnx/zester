@@ -18,6 +18,7 @@ const (
 	natsDir     = "/data/nats"
 	statesDir   = "/data/states"
 	settingsDir = "/data/settings"
+	reactorDir  = "/data/reactor"
 )
 
 func main() {
@@ -229,6 +230,13 @@ api:
 		return fmt.Errorf("copy settings: %w", err)
 	}
 	logger.Info("copied settings", "dst", settingsDir)
+
+	// Copy reactor rules to shared volume (masters publish this dir to the
+	// reactor-files bucket; default reactor.dir is /data/reactor).
+	if err := copyDir("/playground/reactor", reactorDir); err != nil {
+		return fmt.Errorf("copy reactor rules: %w", err)
+	}
+	logger.Info("copied reactor rules", "dst", reactorDir)
 
 	return nil
 }
