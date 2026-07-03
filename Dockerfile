@@ -15,7 +15,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-cli ./playground/zester-cli
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester ./cmd/zester
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-watchdog ./cmd/zester-watchdog
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates curl bash git openssh-client
 
