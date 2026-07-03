@@ -142,6 +142,14 @@ func (s *testStream) UpdateConsumer(_ context.Context, _ jetstream.ConsumerConfi
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (s *testStream) ResetConsumer(_ context.Context, _ string) (*jetstream.ConsumerResetResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *testStream) ResetConsumerToSequence(_ context.Context, _ string, _ uint64) (*jetstream.ConsumerResetResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (s *testStream) OrderedConsumer(_ context.Context, _ jetstream.OrderedConsumerConfig) (jetstream.Consumer, error) {
 	return nil, fmt.Errorf("not implemented")
 }
