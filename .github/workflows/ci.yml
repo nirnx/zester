@@ -26,6 +26,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # Compile-only check of the Docker-based suite: catches dependency
+      # bumps that break the integration tree, since the full integration
+      # job is skipped on PRs.
+      - name: go vet (integration tag)
+        run: go vet -tags integration ./integration/
+
       - name: go mod tidy check
         run: |
           go mod tidy
