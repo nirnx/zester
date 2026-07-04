@@ -19,7 +19,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://nirnx.github.io/zester'),
+  metadataBase: new URL('https://zester.cc'),
   title: {
     template: '%s | Zester',
     default: 'Zester — infrastructure automation in pure Go',

@@ -40,9 +40,7 @@ jobs:
 
       - name: Build docs
         working-directory: website
-        env:
-          # GitHub Pages project sites serve under /<repo>/
-          DOCS_BASE_PATH: /zester
+        # Served at the domain root (custom domain zester.cc) — no base path.
         run: pnpm build
 
       - name: Upload Pages artifact

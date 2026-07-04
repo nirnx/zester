@@ -6,7 +6,7 @@ State files stay Salt-compatible: requisites (`require`/`watch`/`onchanges`/`onf
 
 Event-driven automation is built in (Salt's beacons + reactor): peels emit events and service-state beacons onto a durable JetStream stream, and master-side reactor rules dispatch jobs, auto-approve enrollments, or chain further events — with exactly-once reactions, loop guards, and hot-reloaded rules.
 
-**📖 Documentation: [nirnx.github.io/zester](https://nirnx.github.io/zester/)** — sources live in [`website/`](website/) (Fumadocs; run `pnpm dev` inside `website/` to browse locally).
+**📖 Documentation: [zester.cc](https://zester.cc/)** — sources live in [`website/`](website/) (Fumadocs; run `pnpm dev` inside `website/` to browse locally).
 
 ## Binaries
 
