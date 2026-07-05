@@ -25,6 +25,10 @@ jobs:
         run: go test -count=1 ./...
 
       - name: Build .deb packages (linux/amd64)
+        env:
+          # nfpm@latest may require a newer toolchain than go.mod pins;
+          # auto lets `go install` fetch it (module builds stay on go.mod's).
+          GOTOOLCHAIN: auto
         run: make deb-all GOARCH=amd64
 
       - name: Tarball raw binaries
