@@ -13,8 +13,8 @@ integration-report.html
 /zester-migrate
 *.test
 
-# Claude Code worktrees
-.claude/worktrees/
+# Claude Code local state (settings, worktrees)
+.claude/
 
 # Docs site (Fumadocs, in website/) — build output
 website/out/
