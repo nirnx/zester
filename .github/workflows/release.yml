@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # git describe needs full history + tags for version stamping
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Unit tests
+        run: go test -count=1 ./...
+
+      - name: Build .deb packages (linux/amd64)
+        run: make deb-all GOARCH=amd64
+
+      - name: Tarball raw binaries
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tar -C bin/release -czf "dist/zester-${version}-linux-amd64.tar.gz" \
+            zester zester-master zester-peel zester-watchdog zester-migrate
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.deb *.tar.gz > SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes_args=()
+          # Use the matching CHANGELOG section as release notes when present.
+          if [ -f CHANGELOG.md ]; then
+            version="${GITHUB_REF_NAME#v}"
+            awk -v ver="$version" '
+              $0 ~ "^## \\[" ver "\\]" {found=1; next}
+              found && /^## \[/ {exit}
+              found {print}
+            ' CHANGELOG.md > /tmp/notes.md
+            [ -s /tmp/notes.md ] && notes_args=(--notes-file /tmp/notes.md)
+          fi
+          [ ${#notes_args[@]} -eq 0 ] && notes_args=(--generate-notes)
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Zester $GITHUB_REF_NAME" \
+            "${notes_args[@]}" \
+            dist/*.deb dist/*.tar.gz dist/SHA256SUMS

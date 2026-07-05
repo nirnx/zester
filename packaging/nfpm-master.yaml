@@ -4,7 +4,7 @@ platform: linux
 version: "${VERSION}"
 maintainer: "Zester Maintainers"
 description: "Zester master daemon"
-license: "Proprietary"
+license: "Apache-2.0"
 depends:
   - zester-watchdog (>= ${VERSION})
 contents:

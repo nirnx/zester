@@ -29,6 +29,7 @@ build-release:                            ## Build Linux binaries with version i
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o bin/release/zester-peel ./cmd/zester-peel
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o bin/release/zester ./cmd/zester
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o bin/release/zester-watchdog ./cmd/zester-watchdog
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o bin/release/zester-migrate ./cmd/zester-migrate
 
 # ── Packages ────────────────────────────────────────────
 $(NFPM):
