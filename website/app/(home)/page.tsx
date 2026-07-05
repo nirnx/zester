@@ -211,6 +211,25 @@ export default function HomePage() {
           </Link>
         </div>
       </section>
+
+      <footer className="border-t border-fd-border">
+        <div className="container mx-auto max-w-6xl px-6 py-8 text-center text-sm text-fd-muted-foreground">
+          <p>
+            Apache License 2.0 ·{' '}
+            <a
+              href="https://github.com/nirnx/zester"
+              className="underline hover:text-fd-foreground"
+            >
+              GitHub
+            </a>
+          </p>
+          <p className="mt-2">
+            Salt and SaltStack are trademarks of their respective owner. Zester
+            is an independent project, not affiliated with or endorsed by
+            Broadcom, VMware, or the Salt Project.
+          </p>
+        </div>
+      </footer>
     </main>
   );
 }

@@ -68,3 +68,13 @@ make test-integration    # Docker-based end-to-end suite
 ```
 
 CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, a `go mod tidy` check, the build, unit tests, and the race detector on core packages; integration tests run on pushes to `main`.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE). Example states under
+`playground/states/users/` are adapted from the Apache-2.0-licensed
+[users-formula](https://github.com/saltstack-formulas/users-formula) (see [NOTICE](NOTICE)).
+
+Salt and SaltStack are trademarks of their respective owner. Zester is an
+independent project, not affiliated with or endorsed by Broadcom, VMware,
+or the Salt Project.
