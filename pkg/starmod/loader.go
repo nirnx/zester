@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/state"
 	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
 )

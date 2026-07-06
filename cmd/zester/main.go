@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ptorbus/zester/cmd/zester/cmd"
+	"github.com/nirnx/zester/cmd/zester/cmd"
 )
 
 func main() {

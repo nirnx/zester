@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/target"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/target"
+	"github.com/nirnx/zester/pkg/template"
 )
 
 // makeBasketFunc creates a template.BasketFunc that queries the basket KV bucket.

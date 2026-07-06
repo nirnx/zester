@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/auth"
 )
 
 // enrollFlowServer is an httptest server implementing the full enrollment

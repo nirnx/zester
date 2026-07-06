@@ -10,10 +10,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/event"
-	"github.com/ptorbus/zester/pkg/target"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/target"
+	"github.com/nirnx/zester/pkg/template"
 )
 
 // FactsFn serves the emitting peel's facts for the origin_facts render

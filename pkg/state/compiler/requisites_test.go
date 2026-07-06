@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/state"
-	"github.com/ptorbus/zester/pkg/state/compiler"
-	"github.com/ptorbus/zester/pkg/state/modules"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state/compiler"
+	"github.com/nirnx/zester/pkg/state/modules"
+	"github.com/nirnx/zester/pkg/template"
 )
 
 // compileStates writes a single init.zy under a formula dir and compiles it,

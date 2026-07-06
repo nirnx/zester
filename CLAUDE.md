@@ -1,6 +1,6 @@
 # Zester
 
-Go-based infrastructure automation system (SaltStack alternative). Module path: `github.com/ptorbus/zester`.
+Go-based infrastructure automation system (SaltStack alternative). Module path: `github.com/nirnx/zester`.
 
 > ## ⚠️ SUPER IMPORTANT — Model policy (read first)
 >

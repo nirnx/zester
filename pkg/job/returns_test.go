@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // TestWatcherFinalizeWritesCountsNotAggregate verifies the finding-9 fix:

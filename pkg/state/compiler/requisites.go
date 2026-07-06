@@ -3,7 +3,7 @@ package compiler
 import (
 	"fmt"
 
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // mergedStateMap is stateID -> module -> args list (single-key maps).

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec"
 )
 
 // FakeCommandExec is an in-memory fake for exec.CommandExec.

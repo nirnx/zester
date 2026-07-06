@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/reactor"
+	"github.com/nirnx/zester/pkg/reactor"
 )
 
 // ---------- buildReactorTestData ----------

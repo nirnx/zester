@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 var enrollListCmd = &cobra.Command{

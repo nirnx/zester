@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 )
 
 func testGroupMctx(fakeGroup *exectest.FakeGroupExec) *exec.ModuleContext {

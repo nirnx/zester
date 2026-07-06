@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // TestSubjectPeelID covers the subject-token identity extraction shared by

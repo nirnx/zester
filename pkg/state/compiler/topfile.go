@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ptorbus/zester/pkg/settings"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/template"
 	"gopkg.in/yaml.v3"
 )
 

@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ptorbus/zester/internal/version"
+	"github.com/nirnx/zester/internal/version"
 )
 
 var versionCmd = &cobra.Command{

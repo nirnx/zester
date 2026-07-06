@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/exec/exectest"
-	"github.com/ptorbus/zester/pkg/starmod"
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/starmod"
+	"github.com/nirnx/zester/pkg/state"
 	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
 )

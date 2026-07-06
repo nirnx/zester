@@ -20,7 +20,7 @@ import (
 
 	"github.com/segmentio/ksuid"
 
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // Event is the wire struct for every message on the zester.event.>

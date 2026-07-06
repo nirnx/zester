@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/target"
-	"github.com/ptorbus/zester/pkg/update"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/target"
+	"github.com/nirnx/zester/pkg/update"
 )
 
 var updateRollbackCmd = &cobra.Command{

@@ -9,7 +9,7 @@ import (
 
 	"github.com/segmentio/ksuid"
 
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // NewJID generates a new K-Sorted Unique ID for a job.

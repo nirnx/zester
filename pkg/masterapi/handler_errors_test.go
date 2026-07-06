@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/enroll"
-	"github.com/ptorbus/zester/pkg/job"
-	"github.com/ptorbus/zester/pkg/target"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/target"
 )
 
 // --- dispatch error branches -------------------------------------------------

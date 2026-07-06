@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 func TestParseState(t *testing.T) {

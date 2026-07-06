@@ -12,7 +12,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // Manifest describes a published binary for a specific component and platform.

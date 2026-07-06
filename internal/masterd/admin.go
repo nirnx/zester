@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 // adminQueueGroup is the NATS queue group the masters join for enrollment

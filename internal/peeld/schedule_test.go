@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ptorbus/zester/internal/config"
+	"github.com/nirnx/zester/internal/config"
 )
 
 func TestScheduleRawEntries(t *testing.T) {

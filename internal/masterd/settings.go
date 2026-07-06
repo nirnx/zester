@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ptorbus/zester/pkg/auth"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/settings"
 )
 
 // startSettingsPublisher loads the account encryption key, creates the

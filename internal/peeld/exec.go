@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/facts/collectors"
-	"github.com/ptorbus/zester/pkg/proto"
-	"github.com/ptorbus/zester/pkg/starmod"
-	"github.com/ptorbus/zester/pkg/state"
-	"github.com/ptorbus/zester/pkg/state/compiler"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/facts/collectors"
+	"github.com/nirnx/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/starmod"
+	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state/compiler"
+	"github.com/nirnx/zester/pkg/template"
 	"gopkg.in/yaml.v3"
 )
 

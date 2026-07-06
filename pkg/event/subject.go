@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // Kind classifies an event subject by its token layout.

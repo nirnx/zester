@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // watchFactsEntries runs a self-reconnecting watcher over the facts KV bucket

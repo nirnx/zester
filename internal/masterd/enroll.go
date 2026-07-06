@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/ptorbus/zester/internal/health"
-	"github.com/ptorbus/zester/pkg/enroll"
-	"github.com/ptorbus/zester/pkg/masterapi"
-	"github.com/ptorbus/zester/pkg/target"
+	"github.com/nirnx/zester/internal/health"
+	"github.com/nirnx/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/masterapi"
+	"github.com/nirnx/zester/pkg/target"
 )
 
 // startEnrollment wires the enrollment TLS server (challenge store,

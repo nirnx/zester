@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ptorbus/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/auth"
 )
 
 // SaveCredentials writes the JWT and peel's seed to a .creds file.

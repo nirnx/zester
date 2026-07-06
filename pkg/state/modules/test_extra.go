@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // These are Salt-compatible test helper states. Like test.ping, they need no

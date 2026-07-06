@@ -5,10 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ptorbus/zester/internal/health"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/facts"
-	"github.com/ptorbus/zester/pkg/target"
+	"github.com/nirnx/zester/internal/health"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/facts"
+	"github.com/nirnx/zester/pkg/target"
 )
 
 // connectedPeelsInterval is how often the connected-peels gauge recounts

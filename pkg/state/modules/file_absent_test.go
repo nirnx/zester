@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/exec/exectest"
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testFileAbsentMctx() *exec.ModuleContext {

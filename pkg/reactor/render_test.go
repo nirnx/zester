@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/event"
 )
 
 func testEvent(tag string, data map[string]any) event.Event {

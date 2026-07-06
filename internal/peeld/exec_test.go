@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // TestResolveStatesDirWith covers the C2 retry helper: a ReadDir landing in

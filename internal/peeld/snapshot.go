@@ -9,7 +9,7 @@ import (
 
 	"github.com/vmihailenco/msgpack/v5"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // defaultSettingsSnapshotPath is the well-known on-disk location of the

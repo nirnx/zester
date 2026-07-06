@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // ErrJIDConflict marks a Dispatch rejected because the JID is already

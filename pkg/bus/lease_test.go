@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // leaseTestSetup creates a lease bucket with a short TTL. FakeKV checks TTL

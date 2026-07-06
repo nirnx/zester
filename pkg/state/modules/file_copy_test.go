@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec"
 )
 
 func testFileCopyMctx() *exec.ModuleContext {

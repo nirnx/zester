@@ -1,4 +1,4 @@
-module github.com/ptorbus/zester
+module github.com/nirnx/zester
 
 go 1.25.5
 

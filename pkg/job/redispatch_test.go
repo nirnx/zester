@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // cmdCounter counts ExecRequest publishes per target peel.

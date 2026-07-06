@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/settings"
-	"github.com/ptorbus/zester/pkg/state/compiler"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/state/compiler"
+	"github.com/nirnx/zester/pkg/template"
 )
 
 func TestParseStateTopFile(t *testing.T) {

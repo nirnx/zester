@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
 )
 
 // testJS implements bus.JetStreamAPI for testing. It delegates KV operations

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // FileRecurse implements the file.recurse state.

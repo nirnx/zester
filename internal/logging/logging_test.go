@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ptorbus/zester/internal/version"
+	"github.com/nirnx/zester/internal/version"
 )
 
 func TestSetupJSONOutputShape(t *testing.T) {

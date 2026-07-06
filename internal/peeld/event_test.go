@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/internal/metrics"
-	"github.com/ptorbus/zester/pkg/beacon"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/event"
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/internal/metrics"
+	"github.com/nirnx/zester/pkg/beacon"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // newEventTestAgent builds on newTestAgent with just enough extra wiring to

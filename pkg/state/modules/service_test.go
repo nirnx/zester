@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/exec/exectest"
-	"github.com/ptorbus/zester/pkg/state/modules"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/state/modules"
 )
 
 // testSvcMctx builds a ModuleContext wired with the given FakeServiceExec.

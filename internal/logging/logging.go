@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/ptorbus/zester/internal/version"
+	"github.com/nirnx/zester/internal/version"
 )
 
 // Valid log level values accepted by Setup.

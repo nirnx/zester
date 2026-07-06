@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec"
 	"go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"

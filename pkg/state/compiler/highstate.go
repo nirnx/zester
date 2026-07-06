@@ -1,8 +1,8 @@
 package compiler
 
 import (
-	"github.com/ptorbus/zester/pkg/settings"
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // Highstate compiles the highstate for a given peel by resolving the state top file

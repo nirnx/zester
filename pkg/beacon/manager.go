@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/event"
-	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/exec"
 )
 
 // DefaultBufferSize bounds the offline event buffer: events whose publish

@@ -6,8 +6,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // PkgrepoManaged implements the pkgrepo.managed state.

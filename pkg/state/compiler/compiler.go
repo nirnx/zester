@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ptorbus/zester/pkg/state"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/template"
 	"gopkg.in/yaml.v3"
 )
 

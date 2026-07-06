@@ -7,9 +7,9 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/update"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/update"
 )
 
 func TestResolveRolloutTargets(t *testing.T) {

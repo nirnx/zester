@@ -6,6 +6,11 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Go module path renamed from `github.com/ptorbus/zester` to
+  `github.com/nirnx/zester` following the repository move; `go install`
+  commands, clone URLs, and docs updated accordingly.
+
 ## [0.1.0] - 2026-07-05
 
 Initial release.

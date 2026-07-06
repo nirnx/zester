@@ -11,7 +11,7 @@ import (
 
 	"github.com/vmihailenco/msgpack/v5"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // ManagerConfig configures the facts manager.

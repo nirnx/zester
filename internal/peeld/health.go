@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ptorbus/zester/internal/health"
-	"github.com/ptorbus/zester/internal/version"
+	"github.com/nirnx/zester/internal/health"
+	"github.com/nirnx/zester/internal/version"
 )
 
 // startLocalHealthServer serves the peel's local observability endpoints:

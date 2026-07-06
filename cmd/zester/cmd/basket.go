@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/target"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/target"
 )
 
 var basketCmd = &cobra.Command{

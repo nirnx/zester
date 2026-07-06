@@ -7,8 +7,8 @@ import (
 	"os/user"
 	"strconv"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // FileDirectory implements the file.directory state.

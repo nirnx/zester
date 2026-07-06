@@ -9,7 +9,7 @@ import (
 
 	"github.com/segmentio/ksuid"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 const (

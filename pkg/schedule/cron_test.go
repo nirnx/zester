@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/schedule"
+	"github.com/nirnx/zester/pkg/schedule"
 )
 
 func TestParseCron(t *testing.T) {

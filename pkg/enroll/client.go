@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/auth"
 )
 
 // maxResponseBody is the maximum response body size the client will read

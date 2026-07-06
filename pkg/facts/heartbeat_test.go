@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 func TestHeartbeatEncodeRoundTrip(t *testing.T) {

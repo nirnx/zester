@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
 )
 
 // stubCollector is a test collector that returns static data.

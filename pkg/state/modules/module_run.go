@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // ModuleRun implements the module.run state — a Salt-compatibility escape

@@ -8,10 +8,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/auth"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 // pendingHookSetup builds a handler with the OnPending hook wired to record

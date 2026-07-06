@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/job"
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // Bounded exec queue (finding 32 / roadmap B15): mutating executions no

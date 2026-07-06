@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // peelIndexPrefix is prepended to peel IDs for the peel-to-enrollment

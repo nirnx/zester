@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/facts"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/facts"
 )
 
 // DefaultResolveQueue is the queue group masters join when serving the

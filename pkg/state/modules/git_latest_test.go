@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 )
 
 // gitLatestScriptCmd is a CommandExec fake that dispatches results per git

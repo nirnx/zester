@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/auth"
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 const (

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/internal/config"
+	"github.com/nirnx/zester/internal/config"
 )
 
 // TestPeelFlagParity pins the full zester-peel flag set: every pre-existing

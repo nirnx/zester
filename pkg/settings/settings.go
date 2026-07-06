@@ -11,7 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/template"
 )
 
 // DefaultSettingsDir is the default directory for settings files.

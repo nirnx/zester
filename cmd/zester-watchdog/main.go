@@ -13,11 +13,11 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/ptorbus/zester/internal/logging"
-	"github.com/ptorbus/zester/internal/version"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/proto"
-	"github.com/ptorbus/zester/pkg/update"
+	"github.com/nirnx/zester/internal/logging"
+	"github.com/nirnx/zester/internal/version"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/update"
 )
 
 // watchdogFlags holds every CLI flag value. Registration is separated from

@@ -3,7 +3,7 @@ package starmod_test
 import (
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/starmod"
+	"github.com/nirnx/zester/pkg/starmod"
 	"go.starlark.net/starlark"
 )
 

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ptorbus/zester/internal/health"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/statefiles"
+	"github.com/nirnx/zester/internal/health"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/statefiles"
 )
 
 // startStatefilesPublisher creates the state-files publisher on

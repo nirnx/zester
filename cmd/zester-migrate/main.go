@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ptorbus/zester/pkg/migrate"
+	"github.com/nirnx/zester/pkg/migrate"
 )
 
 func main() {

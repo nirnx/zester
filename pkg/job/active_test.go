@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // TestDispatchActiveKeyLifecycle: Dispatch creates "active.<jid>" with the

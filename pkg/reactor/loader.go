@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/settings"
 )
 
 // KeyManifest is the well-known KV key in the reactor-files bucket holding

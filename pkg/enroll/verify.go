@@ -8,7 +8,7 @@ import (
 
 	"github.com/nats-io/nkeys"
 
-	"github.com/ptorbus/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/auth"
 )
 
 // maxPeelIDLength bounds peel IDs; they are embedded in NATS subjects and

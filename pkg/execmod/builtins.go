@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ptorbus/zester/internal/version"
-	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/nirnx/zester/internal/version"
+	"github.com/nirnx/zester/pkg/exec"
 	"gopkg.in/yaml.v3"
 )
 

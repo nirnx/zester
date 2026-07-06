@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/auth"
-	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 func TestSaveCredentials(t *testing.T) {

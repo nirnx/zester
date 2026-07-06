@@ -4,14 +4,14 @@ import (
 	"context"
 	"time"
 
-	"github.com/ptorbus/zester/internal/version"
-	"github.com/ptorbus/zester/pkg/basket"
-	"github.com/ptorbus/zester/pkg/beacon"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/facts"
-	"github.com/ptorbus/zester/pkg/proto"
-	"github.com/ptorbus/zester/pkg/settings"
-	"github.com/ptorbus/zester/pkg/statefiles"
+	"github.com/nirnx/zester/internal/version"
+	"github.com/nirnx/zester/pkg/basket"
+	"github.com/nirnx/zester/pkg/beacon"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/facts"
+	"github.com/nirnx/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/statefiles"
 )
 
 // peelHeartbeatInterval is how often the peel writes its liveness record into

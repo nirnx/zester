@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/template"
 )
 
 func TestLoadFile_BasicYAML(t *testing.T) {

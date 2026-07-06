@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/auth"
-	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 func TestVerifyEnrollSignature_Valid(t *testing.T) {

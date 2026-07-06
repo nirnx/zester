@@ -15,8 +15,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/ptorbus/zester/pkg/auth"
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // MasterCurvePubKey is the well-known KV key where the master's curve public key

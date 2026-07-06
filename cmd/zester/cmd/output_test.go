@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/job"
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 var errTimeout = errors.New("request timeout")

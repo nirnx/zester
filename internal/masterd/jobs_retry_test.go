@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/internal/health"
+	"github.com/nirnx/zester/internal/health"
 )
 
 // TestSchedConsumerRetryFlipsReadiness verifies that a boot failure of the

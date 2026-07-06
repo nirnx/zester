@@ -15,10 +15,10 @@ import (
 	"github.com/segmentio/ksuid"
 	"github.com/spf13/cobra"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/job"
-	"github.com/ptorbus/zester/pkg/proto"
-	"github.com/ptorbus/zester/pkg/target"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/target"
 )
 
 // runExec is the root command's RunE handler for <target> <module.function> [args...].

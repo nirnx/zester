@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // FakeKV implements bus.KV with in-memory storage.

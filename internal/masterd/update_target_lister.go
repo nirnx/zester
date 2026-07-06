@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/update"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/update"
 )
 
 // rolloutTargetLister implements target.PeelLister against the set of nodes

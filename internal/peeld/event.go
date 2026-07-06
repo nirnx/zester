@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/event"
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // publishEvent is the shared event-publish seam for event.send and the

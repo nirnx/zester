@@ -10,8 +10,8 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/event"
 )
 
 // ConsumerName is the shared durable consumer on the "events" stream. All

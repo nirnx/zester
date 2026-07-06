@@ -7,9 +7,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/target"
-	"github.com/ptorbus/zester/pkg/update"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/target"
+	"github.com/nirnx/zester/pkg/update"
 )
 
 // startRolloutController initializes the rollout controller for fleet-wide

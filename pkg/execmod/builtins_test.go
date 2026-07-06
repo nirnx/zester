@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ptorbus/zester/internal/version"
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/exec/exectest"
-	"github.com/ptorbus/zester/pkg/execmod"
+	"github.com/nirnx/zester/internal/version"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/execmod"
 )
 
 // testMctx builds a ModuleContext wired with in-memory fakes. Individual

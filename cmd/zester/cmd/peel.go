@@ -12,9 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ptorbus/zester/pkg/auth"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/facts"
+	"github.com/nirnx/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/facts"
 )
 
 var peelCmd = &cobra.Command{

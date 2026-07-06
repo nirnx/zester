@@ -3,7 +3,7 @@ package schedule_test
 import (
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/schedule"
+	"github.com/nirnx/zester/pkg/schedule"
 )
 
 func boolPtr(b bool) *bool { return &b }

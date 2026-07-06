@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/statefiles"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/statefiles"
 )
 
 // manifestTestSetup initializes storage and returns the state-files KV plus a

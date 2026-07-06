@@ -21,8 +21,8 @@ import (
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/settings"
 )
 
 // cliResult mirrors cmd/zester/cmd/output.go outputRecord for JSON parsing.

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ptorbus/zester/pkg/enroll"
-	"github.com/ptorbus/zester/pkg/facts"
-	"github.com/ptorbus/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/facts"
+	"github.com/nirnx/zester/pkg/settings"
 )
 
 // startFactsWatcher watches for peel facts and reacts to each update via

@@ -1,9 +1,9 @@
 package peeld
 
 import (
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/state"
-	"github.com/ptorbus/zester/pkg/state/modules"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state/modules"
 )
 
 // registerStateModules registers every built-in state module with injected

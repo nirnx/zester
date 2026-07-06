@@ -8,7 +8,7 @@ import (
 
 	"github.com/vmihailenco/msgpack/v5"
 
-	"github.com/ptorbus/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/proto"
 )
 
 // policyMsg is appended to every conformance failure so the fix is obvious.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/facts/collectors"
+	"github.com/nirnx/zester/pkg/facts/collectors"
 )
 
 func writeFactsFile(t *testing.T, content string) string {

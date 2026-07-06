@@ -7,9 +7,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/target"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/target"
 )
 
 // seedBasketTestData creates a FakeJS with four peels split across two

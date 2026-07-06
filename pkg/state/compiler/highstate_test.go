@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/state/compiler"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/state/compiler"
+	"github.com/nirnx/zester/pkg/template"
 )
 
 func TestHighstateCompile(t *testing.T) {

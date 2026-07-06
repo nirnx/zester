@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec"
 )
 
 // FakeCronExec is an in-memory fake for exec.CronExec.

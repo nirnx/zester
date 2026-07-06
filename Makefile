@@ -7,9 +7,9 @@ GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DEB_VERSION = $(shell echo "$(VERSION)" | sed 's/-\([0-9]*\)-g/+\1.g/')
 LDFLAGS    := -s -w \
-  -X github.com/ptorbus/zester/internal/version.Version=$(VERSION) \
-  -X github.com/ptorbus/zester/internal/version.GitCommit=$(GIT_COMMIT) \
-  -X github.com/ptorbus/zester/internal/version.BuildDate=$(BUILD_DATE)
+  -X github.com/nirnx/zester/internal/version.Version=$(VERSION) \
+  -X github.com/nirnx/zester/internal/version.GitCommit=$(GIT_COMMIT) \
+  -X github.com/nirnx/zester/internal/version.BuildDate=$(BUILD_DATE)
 GOARCH     ?= amd64
 NFPM       := $(shell command -v nfpm 2>/dev/null || echo $(shell go env GOPATH)/bin/nfpm)
 

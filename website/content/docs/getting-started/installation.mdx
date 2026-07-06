@@ -10,7 +10,7 @@ description: "Zester ships as a single static Go binary with zero external depen
 The fastest way to try Zester is with the Docker Compose playground. No Go installation required — just Docker.
 
 ```bash
-git clone https://github.com/ptorbus/zester.git
+git clone https://github.com/nirnx/zester.git
 cd zester
 docker compose up -d
 ```
@@ -93,7 +93,7 @@ export PATH=$PATH:/usr/local/go/bin
 Clone the repository and build all binaries:
 
 ```bash
-git clone https://github.com/ptorbus/zester.git
+git clone https://github.com/nirnx/zester.git
 cd zester
 go build -o bin/zester ./cmd/zester
 go build -o bin/zester-master ./cmd/zester-master
@@ -103,9 +103,9 @@ go build -o bin/zester-peel ./cmd/zester-peel
 Or install the CLI directly to your `$GOPATH/bin`:
 
 ```bash
-go install github.com/ptorbus/zester/cmd/zester@latest
-go install github.com/ptorbus/zester/cmd/zester-master@latest
-go install github.com/ptorbus/zester/cmd/zester-peel@latest
+go install github.com/nirnx/zester/cmd/zester@latest
+go install github.com/nirnx/zester/cmd/zester-master@latest
+go install github.com/nirnx/zester/cmd/zester-peel@latest
 ```
 
 <Callout type="info" title="Three binaries">
@@ -120,13 +120,13 @@ Zester produces three separate binaries:
 
 ## Binary Releases
 
-Pre-built binaries are available on the [GitHub Releases](https://github.com/ptorbus/zester/releases) page.
+Pre-built binaries are available on the [GitHub Releases](https://github.com/nirnx/zester/releases) page.
 
 <Tabs items={["Linux amd64", "Linux arm64", "macOS (Apple Silicon)", "macOS (Intel)"]}>
 <Tab value="Linux amd64">
 
 ```bash
-curl -LO https://github.com/ptorbus/zester/releases/latest/download/zester-linux-amd64.tar.gz
+curl -LO https://github.com/nirnx/zester/releases/latest/download/zester-linux-amd64.tar.gz
 tar xzf zester-linux-amd64.tar.gz
 sudo mv zester zester-master zester-peel /usr/local/bin/
 ```
@@ -134,7 +134,7 @@ sudo mv zester zester-master zester-peel /usr/local/bin/
 <Tab value="Linux arm64">
 
 ```bash
-curl -LO https://github.com/ptorbus/zester/releases/latest/download/zester-linux-arm64.tar.gz
+curl -LO https://github.com/nirnx/zester/releases/latest/download/zester-linux-arm64.tar.gz
 tar xzf zester-linux-arm64.tar.gz
 sudo mv zester zester-master zester-peel /usr/local/bin/
 ```
@@ -142,7 +142,7 @@ sudo mv zester zester-master zester-peel /usr/local/bin/
 <Tab value="macOS (Apple Silicon)">
 
 ```bash
-curl -LO https://github.com/ptorbus/zester/releases/latest/download/zester-darwin-arm64.tar.gz
+curl -LO https://github.com/nirnx/zester/releases/latest/download/zester-darwin-arm64.tar.gz
 tar xzf zester-darwin-arm64.tar.gz
 sudo mv zester zester-master zester-peel /usr/local/bin/
 ```
@@ -150,7 +150,7 @@ sudo mv zester zester-master zester-peel /usr/local/bin/
 <Tab value="macOS (Intel)">
 
 ```bash
-curl -LO https://github.com/ptorbus/zester/releases/latest/download/zester-darwin-amd64.tar.gz
+curl -LO https://github.com/nirnx/zester/releases/latest/download/zester-darwin-amd64.tar.gz
 tar xzf zester-darwin-amd64.tar.gz
 sudo mv zester zester-master zester-peel /usr/local/bin/
 ```

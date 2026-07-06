@@ -15,15 +15,15 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/ptorbus/zester/internal/config"
-	"github.com/ptorbus/zester/internal/health"
-	"github.com/ptorbus/zester/internal/metrics"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/enroll"
-	"github.com/ptorbus/zester/pkg/event"
-	"github.com/ptorbus/zester/pkg/facts"
-	"github.com/ptorbus/zester/pkg/reactor"
+	"github.com/nirnx/zester/internal/config"
+	"github.com/nirnx/zester/internal/health"
+	"github.com/nirnx/zester/internal/metrics"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/facts"
+	"github.com/nirnx/zester/pkg/reactor"
 )
 
 // reactorTestConfig returns a defaults-based master config with the reactor

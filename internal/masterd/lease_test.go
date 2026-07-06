@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/internal/metrics"
-	"github.com/ptorbus/zester/pkg/auth"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/enroll"
-	"github.com/ptorbus/zester/pkg/facts"
-	"github.com/ptorbus/zester/pkg/settings"
-	"github.com/ptorbus/zester/pkg/statefiles"
+	"github.com/nirnx/zester/internal/metrics"
+	"github.com/nirnx/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/facts"
+	"github.com/nirnx/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/statefiles"
 )
 
 func discardLogger() *slog.Logger {

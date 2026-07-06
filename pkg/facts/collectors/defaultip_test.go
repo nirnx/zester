@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/facts/collectors"
+	"github.com/nirnx/zester/pkg/facts/collectors"
 )
 
 func TestDefaultIP_Metadata(t *testing.T) {

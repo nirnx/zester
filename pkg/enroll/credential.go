@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/auth"
+	"github.com/nirnx/zester/pkg/auth"
 )
 
 const (

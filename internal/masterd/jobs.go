@@ -8,9 +8,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/ptorbus/zester/internal/health"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/job"
+	"github.com/nirnx/zester/internal/health"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/job"
 )
 
 // startJobManager creates the job manager with the master's instance ID for

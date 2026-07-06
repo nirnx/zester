@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/job"
 )
 
 var jobCmd = &cobra.Command{

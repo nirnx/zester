@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // connectNATS validates the configured NATS URLs, builds the TLS config, and

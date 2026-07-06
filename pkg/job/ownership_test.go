@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // TestJobOwnership verifies that when a job is dispatched with an owner,

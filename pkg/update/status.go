@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // NodeStatus represents the current state of a watched node.

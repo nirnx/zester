@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/settings"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/settings"
 )
 
 // Cache syncs state files from the KV bucket to a local disk directory.

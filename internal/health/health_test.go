@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/internal/health"
+	"github.com/nirnx/zester/internal/health"
 )
 
 func doHealth(t *testing.T, h http.Handler) (*httptest.ResponseRecorder, health.Response) {

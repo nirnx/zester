@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 func TestAdminRequestRoundTrip(t *testing.T) {

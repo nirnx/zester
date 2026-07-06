@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // DefaultWatchReconnectJitter is the default spread for the deterministic

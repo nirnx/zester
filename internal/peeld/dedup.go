@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // Persisted JID dedup (roadmap B9 peel half, finding 32): the per-JID epoch

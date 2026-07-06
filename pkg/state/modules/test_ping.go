@@ -3,7 +3,7 @@ package modules
 import (
 	"context"
 
-	"github.com/ptorbus/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // TestPing implements the test.ping state.

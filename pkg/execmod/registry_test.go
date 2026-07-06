@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/exec"
-	"github.com/ptorbus/zester/pkg/execmod"
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/execmod"
 )
 
 func TestRegistryRegisterHasNames(t *testing.T) {

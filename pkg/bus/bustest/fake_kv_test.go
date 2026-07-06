@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 func TestMatchSubject(t *testing.T) {

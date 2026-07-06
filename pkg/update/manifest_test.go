@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
 )
 
 func setupManifestTest(t *testing.T) (*ManifestStore, *BinaryStore) {

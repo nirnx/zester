@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ptorbus/zester/internal/logging"
+	"github.com/nirnx/zester/internal/logging"
 	"gopkg.in/yaml.v3"
 )
 

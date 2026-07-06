@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ptorbus/zester/pkg/state"
-	"github.com/ptorbus/zester/pkg/state/compiler"
-	"github.com/ptorbus/zester/pkg/template"
+	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state/compiler"
+	"github.com/nirnx/zester/pkg/template"
 )
 
 // testState is a simple state implementation for testing

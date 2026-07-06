@@ -4,16 +4,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ptorbus/zester/internal/config"
-	"github.com/ptorbus/zester/internal/metrics"
-	"github.com/ptorbus/zester/pkg/bus"
-	"github.com/ptorbus/zester/pkg/bus/bustest"
-	"github.com/ptorbus/zester/pkg/execmod"
-	"github.com/ptorbus/zester/pkg/facts"
-	"github.com/ptorbus/zester/pkg/job"
-	"github.com/ptorbus/zester/pkg/proto"
-	"github.com/ptorbus/zester/pkg/state"
-	"github.com/ptorbus/zester/pkg/state/modules"
+	"github.com/nirnx/zester/internal/config"
+	"github.com/nirnx/zester/internal/metrics"
+	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus/bustest"
+	"github.com/nirnx/zester/pkg/execmod"
+	"github.com/nirnx/zester/pkg/facts"
+	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state/modules"
 )
 
 // newTestAgent builds an Agent with just enough wiring for handler-level

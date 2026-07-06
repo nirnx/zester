@@ -12,7 +12,7 @@ import (
 
 	"github.com/segmentio/ksuid"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // Handler provides HTTP handlers for the enrollment API.

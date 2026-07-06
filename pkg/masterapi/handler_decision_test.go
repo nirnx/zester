@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/enroll"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 func createTestEnrollment(t *testing.T, env *testEnv, id, peelID string, state enroll.State) *enroll.Record {

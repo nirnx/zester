@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec"
 )
 
 // FakeUserExec is an in-memory fake for exec.UserExec.

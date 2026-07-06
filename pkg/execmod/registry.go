@@ -14,7 +14,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/ptorbus/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec"
 )
 
 // Func is a single remote-execution function. It receives the request context,

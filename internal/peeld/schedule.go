@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/ptorbus/zester/internal/config"
-	"github.com/ptorbus/zester/pkg/job"
-	"github.com/ptorbus/zester/pkg/proto"
-	"github.com/ptorbus/zester/pkg/schedule"
+	"github.com/nirnx/zester/internal/config"
+	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/schedule"
 )
 
 // schedExec is the scheduler's ExecFn. Scheduled single-module runs carry no

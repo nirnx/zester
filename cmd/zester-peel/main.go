@@ -12,9 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ptorbus/zester/internal/config"
-	"github.com/ptorbus/zester/internal/logging"
-	"github.com/ptorbus/zester/internal/peeld"
+	"github.com/nirnx/zester/internal/config"
+	"github.com/nirnx/zester/internal/logging"
+	"github.com/nirnx/zester/internal/peeld"
 )
 
 func main() {

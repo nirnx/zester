@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ptorbus/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // TestManagerReclaimRunningJobMergesReplayedReturns verifies findings 18/30:

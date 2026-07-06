@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ptorbus/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/event"
 )
 
 var eventCmd = &cobra.Command{
