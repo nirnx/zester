@@ -159,6 +159,42 @@ sudo mv zester zester-master zester-peel /usr/local/bin/
 
 ---
 
+## APT Repository (Debian / Ubuntu)
+
+On Debian-based systems, the signed APT repository at `https://zester.cc/repo`
+is the easiest way to install and stay up to date — upgrades then arrive through
+the normal `apt upgrade` flow.
+
+```bash
+# 1. Trust the repository signing key
+sudo curl -fsSL https://zester.cc/repo/zester.gpg \
+  -o /usr/share/keyrings/zester.gpg
+
+# 2. Add the repository
+echo "deb [signed-by=/usr/share/keyrings/zester.gpg] https://zester.cc/repo stable main" \
+  | sudo tee /etc/apt/sources.list.d/zester.list
+
+# 3. Install the components you need
+sudo apt update
+sudo apt install zester-peel        # managed-node agent
+```
+
+The repository ships four packages — install whichever a host needs:
+
+| Package | Role |
+|---|---|
+| `zester` | Operator CLI |
+| `zester-master` | Master control plane |
+| `zester-peel` | Managed-node agent |
+| `zester-watchdog` | Self-update process supervisor |
+
+<Callout type="info" title="Architecture support">
+Only `amd64` is published to the APT repository today. On arm64 or other
+platforms, use the [binary releases](#binary-releases) or build from source.
+</Callout>
+
+---
+
 ## Verify Installation
 
 After installing, verify that all binaries are available:

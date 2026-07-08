@@ -6,6 +6,19 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-07
+
+### Added
+- **APT repository** at `https://zester.cc/repo` (Debian/Ubuntu). Each `v*`
+  release publishes its `.deb` packages (`zester`, `zester-master`,
+  `zester-peel`, `zester-watchdog`; amd64) to a GPG-signed repo served from
+  GitHub Pages alongside the docs. Install with
+  `deb [signed-by=/usr/share/keyrings/zester.gpg] https://zester.cc/repo stable main`.
+  Mechanics: `packaging/apt/publish-repo.sh` (apt-ftparchive + gpg) regenerates
+  and signs metadata from the durable `apt-repo` pool-of-record branch, which
+  the Pages workflow overlays into the site. Requires the `GPG_PRIVATE_KEY`
+  (and optional `GPG_PASSPHRASE`) Actions secret — see `packaging/apt/README.md`.
+
 ### Changed
 - Go module path renamed from `github.com/ptorbus/zester` to
   `github.com/nirnx/zester` following the repository move; `go install`
