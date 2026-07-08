@@ -3,9 +3,6 @@ name: Docs
 on:
   push:
     branches: [main]
-  # Called by release.yml after it updates the apt-repo branch, so a new
-  # release's packages go live in the same run.
-  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -45,27 +42,6 @@ jobs:
         working-directory: website
         # Served at the domain root (custom domain zester.cc) — no base path.
         run: pnpm build
-
-      # Fold the signed APT repository into the same Pages artifact so it is
-      # served at zester.cc/repo. The apt-repo branch is the pool of record,
-      # updated by release.yml; no signing key is needed here. See
-      # packaging/apt/README.md.
-      - name: Overlay APT repository
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if ! git ls-remote --exit-code --heads "$repo_url" apt-repo >/dev/null 2>&1; then
-            echo "apt-repo branch not present yet — skipping /repo overlay"
-            exit 0
-          fi
-          git clone --branch apt-repo --depth 1 "$repo_url" /tmp/apt-repo
-          dest=website/out/repo
-          mkdir -p "$dest"
-          cp -r /tmp/apt-repo/pool /tmp/apt-repo/dists "$dest"/
-          cp /tmp/apt-repo/zester.gpg /tmp/apt-repo/zester.asc "$dest"/ 2>/dev/null || true
-          echo "overlaid apt-repo into $dest"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5

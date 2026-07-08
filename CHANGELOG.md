@@ -6,18 +6,27 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **APT repository moved to a self-hosted server** at `https://repo.zester.cc`
+  (suite `noble`, component `main`). Each `v*` release now uploads its `.deb`s
+  to the repo server, which signs and rebuilds the index on ingest; publishing
+  is authenticated with the `REPO_PUBLISH_TOKEN` Actions secret. Replaces the
+  GitHub Pages `/repo` approach — the `apt-repo` branch, the Pages overlay in
+  the docs workflow, and `packaging/apt/*` (apt-ftparchive + GPG signing in CI)
+  are removed. Install with the key at
+  `https://repo.zester.cc/debian/repository.key` and
+  `deb [signed-by=/usr/share/keyrings/zester.gpg] https://repo.zester.cc/debian noble main`.
+- The release workflow's GitHub Release step is now idempotent — re-running an
+  existing tag refreshes its assets (and re-publishes to the APT repo) instead
+  of failing on "release already exists".
+
 ## [0.2.0] - 2026-07-07
 
 ### Added
-- **APT repository** at `https://zester.cc/repo` (Debian/Ubuntu). Each `v*`
-  release publishes its `.deb` packages (`zester`, `zester-master`,
-  `zester-peel`, `zester-watchdog`; amd64) to a GPG-signed repo served from
-  GitHub Pages alongside the docs. Install with
-  `deb [signed-by=/usr/share/keyrings/zester.gpg] https://zester.cc/repo stable main`.
-  Mechanics: `packaging/apt/publish-repo.sh` (apt-ftparchive + gpg) regenerates
-  and signs metadata from the durable `apt-repo` pool-of-record branch, which
-  the Pages workflow overlays into the site. Requires the `GPG_PRIVATE_KEY`
-  (and optional `GPG_PASSPHRASE`) Actions secret — see `packaging/apt/README.md`.
+- **APT repository** (Debian/Ubuntu) — the `zester`, `zester-master`,
+  `zester-peel`, and `zester-watchdog` packages (amd64) are now installable
+  via `apt` from a signed repository. (Initially served from GitHub Pages;
+  moved to `https://repo.zester.cc` — see Unreleased.)
 
 ### Changed
 - Go module path renamed from `github.com/ptorbus/zester` to

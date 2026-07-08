@@ -161,17 +161,17 @@ sudo mv zester zester-master zester-peel /usr/local/bin/
 
 ## APT Repository (Debian / Ubuntu)
 
-On Debian-based systems, the signed APT repository at `https://zester.cc/repo`
+On Debian-based systems, the signed APT repository at `https://repo.zester.cc`
 is the easiest way to install and stay up to date — upgrades then arrive through
 the normal `apt upgrade` flow.
 
 ```bash
 # 1. Trust the repository signing key
-sudo curl -fsSL https://zester.cc/repo/zester.gpg \
+sudo curl -fsSL https://repo.zester.cc/debian/repository.key \
   -o /usr/share/keyrings/zester.gpg
 
 # 2. Add the repository
-echo "deb [signed-by=/usr/share/keyrings/zester.gpg] https://zester.cc/repo stable main" \
+echo "deb [signed-by=/usr/share/keyrings/zester.gpg] https://repo.zester.cc/debian noble main" \
   | sudo tee /etc/apt/sources.list.d/zester.list
 
 # 3. Install the components you need

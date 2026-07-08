@@ -57,63 +57,40 @@ jobs:
             [ -s /tmp/notes.md ] && notes_args=(--notes-file /tmp/notes.md)
           fi
           [ ${#notes_args[@]} -eq 0 ] && notes_args=(--generate-notes)
-          gh release create "$GITHUB_REF_NAME" \
-            --title "Zester $GITHUB_REF_NAME" \
-            "${notes_args[@]}" \
-            dist/*.deb dist/*.tar.gz dist/SHA256SUMS
+          # Idempotent: re-running a tag refreshes assets instead of failing.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --clobber \
+              dist/*.deb dist/*.tar.gz dist/SHA256SUMS
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Zester $GITHUB_REF_NAME" \
+              "${notes_args[@]}" \
+              dist/*.deb dist/*.tar.gz dist/SHA256SUMS
+          fi
 
-      # ---- APT repository (https://zester.cc/repo) -------------------------
-      # Publish the .deb packages to the signed APT repo. The `apt-repo` branch
-      # is the durable pool of record; the Pages job (below) overlays it into
-      # the docs site. See packaging/apt/README.md.
-      - name: Import GPG signing key
+      # ---- APT repository (https://repo.zester.cc) ------------------------
+      # Upload each .deb to the self-hosted repo server; it signs and rebuilds
+      # the noble/main index on ingest. The server holds its own signing key —
+      # no GPG material is needed in CI. Auth via the REPO_PUBLISH_TOKEN secret.
+      - name: Publish to APT repository
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          REPO_PUBLISH_TOKEN: ${{ secrets.REPO_PUBLISH_TOKEN }}
+          # Override in the workflow if the server's suite/component ever change.
+          APT_DIST: noble
+          APT_COMPONENT: main
         run: |
           set -euo pipefail
-          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
-            echo "::error::GPG_PRIVATE_KEY secret is not set — cannot sign the APT repo (see packaging/apt/README.md)" >&2
+          if [ -z "${REPO_PUBLISH_TOKEN:-}" ]; then
+            echo "::error::REPO_PUBLISH_TOKEN secret is not set — cannot publish to repo.zester.cc" >&2
             exit 1
           fi
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq apt-utils gnupg
-          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
-          keyid=$(gpg --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10; exit}')
-          echo "GPG_KEY_ID=$keyid" >> "$GITHUB_ENV"
-
-      - name: Publish to apt-repo branch
-        env:
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          # Fetch the pool-of-record branch, or bootstrap it as an orphan.
-          if git ls-remote --exit-code --heads "$repo_url" apt-repo >/dev/null 2>&1; then
-            git clone --branch apt-repo --depth 1 "$repo_url" aptrepo
-          else
-            git clone --depth 1 "$repo_url" aptrepo
-            git -C aptrepo checkout --orphan apt-repo
-            git -C aptrepo rm -rfq . || true
-          fi
-          GPG_KEY_ID="$GPG_KEY_ID" GPG_PASSPHRASE="${GPG_PASSPHRASE:-}" \
-            bash packaging/apt/publish-repo.sh "$PWD/aptrepo" "$PWD/dist"
-          cp packaging/apt/branch-README.md aptrepo/README.md
-          cd aptrepo
-          git add -A
-          git -c user.name='github-actions[bot]' \
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit -m "apt: publish ${GITHUB_REF_NAME}" \
-            || { echo "apt-repo unchanged — nothing to publish"; exit 0; }
-          git push origin apt-repo
-
-  # Rebuild the Pages site (docs + /repo overlay) so the new packages go live
-  # immediately. Reuses the Pages workflow via workflow_call — no cross-workflow
-  # trigger needed (a GITHUB_TOKEN push to apt-repo would not start a new run).
-  pages:
-    needs: release
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    uses: ./.github/workflows/docs.yml
+          upload="https://repo.zester.cc/debian/pool/${APT_DIST}/${APT_COMPONENT}/upload"
+          count=0
+          for deb in dist/*.deb; do
+            echo "uploading $(basename "$deb") -> ${APT_DIST}/${APT_COMPONENT}"
+            curl -fsS --retry 3 --retry-delay 2 \
+              --user "zester:${REPO_PUBLISH_TOKEN}" \
+              --upload-file "$deb" "$upload"
+            count=$((count + 1))
+          done
+          echo "published $count package(s) to repo.zester.cc"
