@@ -55,6 +55,18 @@ zester ca init --dir /var/lib/zester/auth/ca
 
 Record the printed SPKI pin — you will put it in every `peel.yaml`. The default CA directory is `/var/lib/zester/auth/ca`; the master's `ca.dir` config must point at the same location if you choose a different one.
 
+### 1b. Initialize the NATS auth hierarchy (on the master host)
+
+`zester ca` handles the TLS plane; `zester auth init` handles the NATS **auth** plane — the operator/account/user JWTs your daemons authenticate with. It is also offline (no NATS needed):
+
+```bash
+zester auth init \
+  --dir /var/lib/zester/auth \
+  --nats-conf /etc/nats/nats-server.conf
+```
+
+This generates the operator/account/system JWTs, `account.seed` (the fleet trust root — replicate it to every master), `master.creds`, `admin.creds`, and a `nats-server.conf` (operator mode, MEMORY resolver, JetStream) whose `tls{}` block references the NATS server cert you issue next. Zester does **not** ship or run `nats-server` — install NATS yourself and start it with `-c /etc/nats/nats-server.conf`.
+
 ### 2. Issue the NATS server certificate
 
 ```bash

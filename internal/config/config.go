@@ -68,8 +68,41 @@ func loadFile(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+
+	// All-in-one convenience: the CLI's default search hits the master
+	// DAEMON config (/etc/zester/master.yaml) first, which has no `master:`
+	// block — so on the master host the CLI would otherwise get no creds/CA
+	// and fail NATS TLS with a bare cert error. When there's no `master:`
+	// block, derive the connection from the daemon's own fields: its NATS
+	// URL, its nats_ca, and the admin credentials in its auth_dir.
+	if len(cfg.Master.URLs) == 0 && cfg.Master.CredsFile == "" && cfg.Master.TLSCA == "" {
+		var dc daemonConnFields
+		if yaml.Unmarshal(data, &dc) == nil && (dc.NatsURL != "" || dc.AuthDir != "") {
+			if dc.NatsURL != "" {
+				cfg.Master.URLs = []string{dc.NatsURL}
+			}
+			cfg.Master.TLSCA = dc.NatsCA
+			authDir := dc.AuthDir
+			if authDir == "" {
+				authDir = "/var/lib/zester/auth"
+			}
+			creds := filepath.Join(authDir, "admin.creds")
+			if _, statErr := os.Stat(creds); statErr == nil {
+				cfg.Master.CredsFile = creds
+			}
+		}
+	}
+
 	if len(cfg.Master.URLs) == 0 {
 		cfg.Master.URLs = []string{"tls://localhost:4222"}
 	}
 	return &cfg, nil
+}
+
+// daemonConnFields captures the subset of the master DAEMON config the CLI can
+// derive its connection from when the file carries no `master:` block.
+type daemonConnFields struct {
+	NatsURL string `yaml:"nats_url"`
+	NatsCA  string `yaml:"nats_ca"`
+	AuthDir string `yaml:"auth_dir"`
 }
