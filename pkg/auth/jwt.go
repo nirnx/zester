@@ -478,7 +478,9 @@ func PeelUserJWTOptions(peelID string, accountPub string) UserJWTOptions {
 			fmt.Sprintf("$KV.basket.%s.>", peelID),
 			fmt.Sprintf("$KV.facts.%s", peelID),
 			fmt.Sprintf("$KV.peel-heartbeat.%s", peelID),
-			fmt.Sprintf("$KV.update-status.%s", peelID),
+			// update.StatusKey is "<component>.<id>" — peel creds always
+			// report as component "peel".
+			fmt.Sprintf("$KV.update-status.peel.%s", peelID),
 			"_INBOX.>",
 		},
 		AllowSub: []string{

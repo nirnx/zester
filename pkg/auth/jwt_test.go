@@ -652,7 +652,7 @@ func TestPeelUserJWTOptions_UpdatePlaneGrants(t *testing.T) {
 	}
 
 	wantPub := []string{
-		"$KV.update-status.web-01",
+		"$KV.update-status.peel.web-01",
 		"$JS.API.STREAM.INFO.KV_update-status",
 		"$JS.API.STREAM.INFO.OBJ_update-binaries",
 		"$JS.API.DIRECT.GET.OBJ_update-binaries.>",

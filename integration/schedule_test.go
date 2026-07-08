@@ -18,10 +18,14 @@ import (
 func TestSchedule_ReturnJob(t *testing.T) {
 	const peel = "web-01"
 
-	// Write peel.yaml with a short-interval schedule entry that creates real jobs.
-	// The peel loads /etc/zester/peel.yaml by default when --config is not set.
-	// CLI flags (--id, --master-url, etc.) override the file fields, but
-	// Schedule has no CLI flag so it only comes from the file.
+	// Append a short-interval schedule entry (return_job: true) to the baked
+	// /etc/zester/peel.yaml. The image bakes auth_dir/data_dir pins into that
+	// file (see Dockerfile.peel) — REPLACING it would reset the peel to the
+	// default /var/lib/zester layout, losing its creds and enrollment key, so
+	// the restarted peel would re-enroll under a fresh key and be refused
+	// with HTTP 409 for the rest of the suite. CLI flags (--id, --master-url,
+	// etc.) override file fields, but Schedule has no CLI flag so it only
+	// comes from the file.
 	peelYAML := `schedule:
   sched_test:
     module: cmd.run
@@ -37,15 +41,16 @@ func TestSchedule_ReturnJob(t *testing.T) {
 		t.Fatalf("get container %s: %v", peel, err)
 	}
 
-	// Write config file into the peel container.
+	// Save the baked config, then append the schedule section to it.
 	exitCode, output, err := containerExecRaw(ctx, container, []string{
-		"sh", "-c", "cat > /etc/zester/peel.yaml << 'EOCFG'\n" + peelYAML + "EOCFG",
+		"sh", "-c", "cp /etc/zester/peel.yaml /etc/zester/peel.yaml.orig 2>/dev/null || true; " +
+			"cat >> /etc/zester/peel.yaml << 'EOCFG'\n" + peelYAML + "EOCFG",
 	})
 	if err != nil || exitCode != 0 {
 		t.Fatalf("write peel.yaml: exit=%d err=%v output=%s", exitCode, err, output)
 	}
 
-	// Register cleanup: remove config and restart to restore original state.
+	// Register cleanup: restore the original config and restart.
 	t.Cleanup(func() {
 		cctx := context.Background()
 		c, err := stack.ServiceContainer(cctx, peel)
@@ -53,7 +58,8 @@ func TestSchedule_ReturnJob(t *testing.T) {
 			return
 		}
 		//nolint:errcheck
-		containerExecRaw(cctx, c, []string{"rm", "-f", "/etc/zester/peel.yaml"})
+		containerExecRaw(cctx, c, []string{"sh", "-c",
+			"if [ -f /etc/zester/peel.yaml.orig ]; then mv -f /etc/zester/peel.yaml.orig /etc/zester/peel.yaml; else rm -f /etc/zester/peel.yaml; fi"})
 		//nolint:errcheck
 		containerExecRaw(cctx, c, []string{"systemctl", "restart", "zester-peel"})
 		// Give peel time to reconnect to NATS.

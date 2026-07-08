@@ -6,6 +6,55 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-08
+
+Field-testing and CI follow-ups to the 0.3.0 embedded-CA release.
+
+### Added
+- **`zester auth init`** (offline, no NATS): generates the NATS auth
+  hierarchy — operator/account/system JWTs, `account.seed` (the fleet trust
+  root), `master.creds`, `admin.creds` — plus a `nats-server.conf` that
+  trusts them (operator mode, MEMORY resolver, JetStream). Paired with
+  `zester ca` this makes a bare-metal bootstrap fully CLI-driven; the
+  operator still installs and runs their own external `nats-server`.
+
+### Fixed
+- **Peel JWT update-status grant now matches the reporter's actual KV key**
+  (`$KV.update-status.peel.<id>`, was `$KV.update-status.<id>`): a
+  zester-watchdog connecting with peel credentials had every status heartbeat
+  rejected as a NATS permissions violation, so the node never appeared in
+  `zester update status`. Re-issue peel creds (re-enroll) to pick up the
+  corrected grant.
+- **Credential-loss recovery is no longer a dead-end.** A peel that lost its
+  credentials but still holds its identity key would re-enroll and hit a
+  permanent 409 ("already has an active enrollment"). The enrollment handler
+  now allows a **same-key** re-enrollment from approved/issued/active states
+  (the challenge-response already proved key ownership, so a matching key is
+  provably the same peel recovering); a *different* key still gets 409 — the
+  peel-ID uniqueness guard blocks impersonation. The 409 message now names the
+  `revoke`-to-recover path.
+- **A never-connected discovery peel no longer wedges.** The re-discovery
+  recovery loop was gated behind a successful NATS connection, so an
+  already-enrolled peel booting with no bootstrap cache and a stale/
+  unresolvable endpoint stayed offline forever. The recovery loop now runs
+  from the local phase (fires even when NATS never connects), and boot-time
+  resolution attempts one verified discovery fetch before falling back to the
+  builtin `tls://nats:4222` tail.
+- **Packaged peels no longer auto-start unconfigured.** `postinstall` enables
+  but only starts `zester-peel` when `master_urls` is set — an unconfigured
+  peel could otherwise fall to the convention master `https://zester:8443` and
+  silently TOFU-enroll into a half-state during provisioning.
+- **Operator CLI on an all-in-one box now derives its connection from the
+  daemon config.** The CLI's default search hits `/etc/zester/master.yaml`
+  (the master DAEMON config, which has no `master:` block) first, so on the
+  master host it silently got no creds/CA and failed NATS TLS with a bare cert
+  error. When there is no `master:` block the CLI now derives its NATS URL,
+  CA, and admin credentials from the daemon's `nats_url`, `nats_ca`, and
+  `auth_dir`/admin.creds.
+- Docs: the `enroll_ca_pin` examples used the scalar form
+  (`enroll_ca_pin: "sha256:…"`), which fails strict-YAML parsing against the
+  `[]string` field; corrected to the list form.
+
 ## [0.3.0] - 2026-07-08
 
 ### Added
@@ -80,30 +129,6 @@ All notable changes to Zester are documented here. The format follows
   (default `/var/lib/zester`) — the credentials/trust directory and the
   runtime-state directory (settings snapshot, job dedup state, baked states
   fallback, template base path) are now configurable instead of hardcoded.
-
-### Fixed (embedded-CA field testing)
-- **Credential-loss recovery is no longer a dead-end.** A peel that lost its
-  credentials but still holds its identity key would re-enroll and hit a
-  permanent 409 ("already has an active enrollment"). The enrollment handler
-  now allows a **same-key** re-enrollment from approved/issued/active states
-  (the challenge-response already proved key ownership, so a matching key is
-  provably the same peel recovering); a *different* key still gets 409 — the
-  peel-ID uniqueness guard blocks impersonation. The 409 message now names the
-  `revoke`-to-recover path.
-- **A never-connected discovery peel no longer wedges.** The re-discovery
-  recovery loop was gated behind a successful NATS connection, so an
-  already-enrolled peel booting with no bootstrap cache and a stale/
-  unresolvable endpoint stayed offline forever. The recovery loop now runs
-  from the local phase (fires even when NATS never connects), and boot-time
-  resolution attempts one verified discovery fetch before falling back to the
-  builtin `tls://nats:4222` tail.
-- **Packaged peels no longer auto-start unconfigured.** `postinstall` enables
-  but only starts `zester-peel` when `master_urls` is set — an unconfigured
-  peel could otherwise fall to the convention master `https://zester:8443` and
-  silently TOFU-enroll into a half-state during provisioning.
-- Docs: the `enroll_ca_pin` examples used the scalar form
-  (`enroll_ca_pin: "sha256:…"`), which fails strict-YAML parsing against the
-  `[]string` field; corrected to the list form.
 
 ### Changed
 - **Default filesystem layout moved from `/data` to FHS-proper locations.**
@@ -222,7 +247,8 @@ Initial release.
   Docker-based integration suite (82 tests).
 - Apache-2.0 license.
 
-[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/nirnx/zester/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nirnx/zester/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nirnx/zester/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nirnx/zester/releases/tag/v0.1.0

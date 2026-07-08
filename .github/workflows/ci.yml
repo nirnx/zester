@@ -50,6 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     # Docker-based end-to-end suite; heavier, so only on main pushes.
     if: github.event_name == 'push'
+    # The zz_ca_rotation test alone rolls the 3-node NATS cluster twice with
+    # full-fleet recovery waits; 15m was routinely within noise of a green run.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
 
@@ -59,4 +62,4 @@ jobs:
           cache: true
 
       - name: integration tests
-        run: go test -v -tags integration -count=1 -timeout 15m ./integration/
+        run: go test -v -tags integration -count=1 -timeout 25m ./integration/
