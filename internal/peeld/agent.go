@@ -128,6 +128,14 @@ type Agent struct {
 	// the worker's per-execution writes to mctx.Facts/Settings.
 	mctxTemplate *exec.ModuleContext
 
+	// bootstrapMu guards lastBootstrap, the last discovery doc applied via the
+	// cluster-info watch / recovery loop. The KV watch replays the current
+	// value on every boot/reconnect, so applyBootstrapDoc no-ops a
+	// content-identical re-delivery instead of rewriting files and forcing a
+	// reconnect.
+	bootstrapMu   sync.Mutex
+	lastBootstrap *enroll.BootstrapDoc
+
 	// guardRunner evaluates onlyif/unless shell guards on states, using the
 	// peel's command provider. Exit code 0 = success.
 	guardRunner state.GuardRunner
@@ -674,15 +682,12 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if enroll.HasCredentials(a.cfg.AuthDir, a.peelID) {
 		return nil
 	}
-	masterURLs := a.cfg.MasterURLs
-	if len(masterURLs) == 0 && a.cfg.MasterURL != "" {
-		masterURLs = []string{a.cfg.MasterURL}
-	}
-	if len(masterURLs) == 0 {
-		// Salt-style convention: with nothing configured, try the
-		// well-known "zester" hostname. On a network with a `zester` DNS
-		// record (+ TOFU or a pin), a truly empty peel.yaml enrolls.
-		masterURLs = []string{defaultConventionMasterURL}
+	// Resolve enrollment base URLs through the shared helper so discovery
+	// (boot fetch, recovery loop, cluster-info watch) later targets the SAME
+	// master — including the Salt-style convention fallback. On a network with
+	// a `zester` DNS record (+ TOFU or a pin), a truly empty peel.yaml enrolls.
+	masterURLs := a.peelMasterURLs()
+	if len(a.cfg.MasterURLs) == 0 && a.cfg.MasterURL == "" {
 		a.logger.Warn("no master_urls configured; trying convention hostname (Salt-style default) — set master_urls to silence",
 			"url", defaultConventionMasterURL)
 	}

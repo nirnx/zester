@@ -281,6 +281,10 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// supersede, when non-nil, is a live record being replaced by a same-key
+	// credential recovery: the new record atomically repoints the index and
+	// retires this one (see Store.Supersede), never releasing the index.
+	var supersede *Record
 	if existing != nil {
 		switch existing.State {
 		case StatePending:
@@ -308,10 +312,11 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			}
 			h.logger.Info("enroll: same-key re-enrollment of an active peel (credential recovery)",
 				"peel_id", req.PeelID, "prior_state", existing.State, "source_ip", remoteIP(r))
-			if err := h.store.ReleaseIndex(r.Context(), req.PeelID); err != nil {
-				h.logger.Warn("enroll: failed to release old peel index for re-enrollment",
-					"peel_id", req.PeelID, "error", err)
-			}
+			// Do NOT release the index here: a delete-then-create sequence
+			// leaves a window where FindByPeelID returns nothing and a
+			// concurrent attacker with a different key could claim the
+			// identity. Instead atomically supersede via the index CAS below.
+			supersede = existing
 		case StateRejected, StateRevoked:
 			// Allow re-enrollment: release the old peel index so the new
 			// record can atomically claim it via Store.Create.
@@ -342,7 +347,12 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		TrustChecked:   trustChecked,
 	}
 
-	if err := h.store.Create(r.Context(), rec); err != nil {
+	if supersede != nil {
+		err = h.store.Supersede(r.Context(), rec, supersede)
+	} else {
+		err = h.store.Create(r.Context(), rec)
+	}
+	if err != nil {
 		h.logger.Error("enroll: create record", "error", err)
 		h.writeError(w, http.StatusInternalServerError, "failed to create enrollment")
 		return

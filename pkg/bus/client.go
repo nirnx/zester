@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -371,10 +373,16 @@ func (c *Client) SetServers(urls []string) error {
 	if err := c.nc.SetServerPool(urls); err != nil {
 		return fmt.Errorf("bus: set server pool: %w", err)
 	}
-	current := c.nc.ConnectedUrl()
+	// Only force a reconnect when the currently-connected server is genuinely
+	// not in the new pool. nats.go normalizes pool URLs (e.g. it appends the
+	// default :4222 to a port-less host), so ConnectedUrl() may differ
+	// textually from an advertised entry that is the SAME endpoint — compare
+	// on normalized (scheme, host, port) form, not raw strings, or an
+	// unchanged port-less pool would force a needless reconnect on every apply.
+	current := normalizeNATSEndpoint(c.nc.ConnectedUrl())
 	stillListed := false
 	for _, u := range urls {
-		if u == current {
+		if normalizeNATSEndpoint(u) == current {
 			stillListed = true
 			break
 		}
@@ -385,6 +393,31 @@ func (c *Client) SetServers(urls []string) error {
 		}
 	}
 	return nil
+}
+
+// defaultNATSPort mirrors nats.go's default port, appended to a port-less URL
+// when it normalizes the server pool.
+const defaultNATSPort = "4222"
+
+// normalizeNATSEndpoint canonicalizes a NATS URL for equality comparison:
+// lowercased scheme + host and an explicit port (nats.go adds the default port
+// to port-less URLs, so "tls://h" and "tls://h:4222" are the same endpoint).
+// Unparseable input is returned trimmed and lowercased as a best-effort key.
+func normalizeNATSEndpoint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return strings.ToLower(raw)
+	}
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if port == "" {
+		port = defaultNATSPort
+	}
+	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(host, port)
 }
 
 // JetStream returns the bus adapter over the JetStream context. The adapter

@@ -3,8 +3,11 @@ package peeld
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -141,13 +144,22 @@ func (a *Agent) persistBootstrap(trust *enroll.ResolvedTrust) {
 	}
 
 	// Write the verified anchor as the NATS CA (unless the operator
-	// configured an explicit nats_ca, which wins and is left untouched).
+	// configured an explicit nats_ca, which wins and is left untouched). Do
+	// NOT clobber a conventional nats-ca.crt the operator provisioned for a
+	// split-CA/external deployment (one that does not already trust this
+	// enrollment anchor) — that would break the peel's NATS TLS at the next
+	// reconnect.
 	if a.cfg.NatsCA == "" {
 		caPath := filepath.Join(a.cfg.AuthDir, "nats-ca.crt")
-		if err := writeFileAtomic(caPath, ca.EncodeCertPEM(trust.Anchor), 0644); err != nil {
-			a.logger.Warn("bootstrap: failed to write NATS CA", "path", caPath, "error", err)
-		} else {
-			a.logger.Info("bootstrap: wrote NATS CA from verified enrollment anchor", "path", caPath)
+		switch {
+		case !a.natsCAManaged(caPath, ca.SPKIPin(trust.Anchor)):
+			a.logger.Warn("bootstrap: existing NATS CA is operator-provisioned (does not trust the enrollment anchor); leaving it untouched", "path", caPath)
+		default:
+			if err := writeFileAtomic(caPath, ca.EncodeCertPEM(trust.Anchor), 0644); err != nil {
+				a.logger.Warn("bootstrap: failed to write NATS CA", "path", caPath, "error", err)
+			} else {
+				a.logger.Info("bootstrap: wrote NATS CA from verified enrollment anchor", "path", caPath)
+			}
 		}
 	}
 
@@ -193,8 +205,12 @@ func (a *Agent) writeBootstrapCache(natsURLs []string, source, caFingerprint str
 	a.logger.Info("bootstrap cache written", "nats_urls", len(accepted), "source", source)
 }
 
-// peelMasterURLs returns the enrollment base URLs (list preferred, single
-// fallback).
+// peelMasterURLs returns the enrollment base URLs: the configured list (or the
+// single-URL fallback), else the Salt-style convention master. It mirrors the
+// resolution ensureEnrolled performs, so discovery (boot fetch, recovery loop,
+// cluster-info watch) targets the SAME master a convention-mode peel enrolled
+// against — otherwise a zero-config peel would enroll but never discover its
+// NATS endpoints and have no self-heal path.
 func (a *Agent) peelMasterURLs() []string {
 	if len(a.cfg.MasterURLs) > 0 {
 		return a.cfg.MasterURLs
@@ -202,36 +218,68 @@ func (a *Agent) peelMasterURLs() []string {
 	if a.cfg.MasterURL != "" {
 		return []string{a.cfg.MasterURL}
 	}
-	return nil
+	return []string{defaultConventionMasterURL}
 }
 
 // discoveryDriven reports whether the peel resolves its NATS endpoints via
-// enrollment discovery (no explicit nats_url override, and a master URL to
-// discover against).
+// enrollment discovery — i.e. no explicit nats_url override. With no master
+// configured, peelMasterURLs falls back to the convention master, so discovery
+// always has a target.
 func (a *Agent) discoveryDriven() bool {
-	return a.cfg.NatsURL == "" && (len(a.cfg.MasterURLs) > 0 || a.cfg.MasterURL != "")
+	return a.cfg.NatsURL == ""
 }
 
 // watchClusterInfo watches the secrets-bucket cluster-info key and applies new
-// bootstrap docs (NATS endpoints + CA) as they are published.
+// bootstrap docs (NATS endpoints + CA) as they are published. The watch is
+// re-established with capped backoff when it drops (JetStream consumer loss
+// closes the Updates channel) — like the settings watchers — so a peel whose
+// connection recovers never goes permanently deaf to endpoint migrations / CA
+// rotations. Returns only on context cancellation.
 func (a *Agent) watchClusterInfo(ctx context.Context) {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	for {
+		if err := a.watchClusterInfoOnce(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			a.logger.Warn("discovery: cluster-info watch dropped; re-establishing", "error", err, "retry_in", backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+		// Clean exit means ctx was cancelled.
+		return
+	}
+}
+
+// watchClusterInfoOnce runs a single cluster-info watch session. It returns nil
+// when ctx is cancelled and a non-nil error when the watch drops (bucket open,
+// watch setup, or the Updates channel closing), so the caller can back off and
+// re-establish.
+func (a *Agent) watchClusterInfoOnce(ctx context.Context) error {
 	kv, err := bus.GetBucket(ctx, a.client.JetStream(), bus.BucketSecrets)
 	if err != nil {
-		a.logger.Warn("discovery: cannot open secrets bucket for cluster-info watch", "error", err)
-		return
+		return err
 	}
 	watcher, err := kv.Watch(ctx, settings.ClusterInfoKey)
 	if err != nil {
-		a.logger.Warn("discovery: cannot watch cluster-info", "error", err)
-		return
+		return err
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case entry, ok := <-watcher.Updates():
 			if !ok {
-				return
+				return fmt.Errorf("cluster-info watch channel closed")
 			}
 			if entry == nil || len(entry.Value()) == 0 {
 				continue
@@ -298,16 +346,39 @@ func (a *Agent) recoveryLoop(ctx context.Context) {
 
 // applyBootstrapDoc validates and applies a fetched/watched bootstrap doc:
 // rewrites the NATS-CA file (unless an explicit nats_ca is configured),
-// persists the cache, and repoints the live NATS pool when the endpoint set
-// changed.
+// persists the cache, and repoints the live NATS pool. Content-identical
+// re-deliveries are no-oped — the KV cluster-info watch replays the current
+// value on every boot/reconnect, which must not churn files or force a
+// reconnect.
 func (a *Agent) applyBootstrapDoc(doc *enroll.BootstrapDoc, source string) {
 	if doc == nil {
 		return
 	}
+	a.bootstrapMu.Lock()
+	unchanged := a.lastBootstrap != nil && a.lastBootstrap.ContentEqual(*doc)
+	a.bootstrapMu.Unlock()
+	if unchanged {
+		return
+	}
+
+	// Write ONLY the pin/anchor-verified root, never the raw multi-cert bundle
+	// (an attacker-appended cert must be dropped), and never over a NATS CA the
+	// operator provisioned separately — mirroring persistBootstrap's SECURITY
+	// invariant. A bundle whose root is not the trusted anchor is not written
+	// (root rotation is a deliberate operator file drop, per the rotation
+	// model), but the endpoint list below is still applied.
 	if doc.CABundlePEM != "" && a.cfg.NatsCA == "" {
 		caPath := filepath.Join(a.cfg.AuthDir, "nats-ca.crt")
-		if err := writeFileAtomic(caPath, []byte(doc.CABundlePEM), 0644); err != nil {
-			a.logger.Warn("discovery: write NATS CA", "error", err)
+		rootPEM, rootSPKI, ok := a.verifiedRootPEM([]byte(doc.CABundlePEM))
+		switch {
+		case !ok:
+			a.logger.Warn("discovery: bootstrap bundle has no pin/anchor-verified root; not updating NATS CA", "source", source)
+		case !a.natsCAManaged(caPath, rootSPKI):
+			a.logger.Warn("discovery: existing NATS CA is operator-provisioned (does not trust the enrollment anchor); not overwriting", "path", caPath)
+		default:
+			if err := writeFileAtomic(caPath, rootPEM, 0644); err != nil {
+				a.logger.Warn("discovery: write NATS CA", "error", err)
+			}
 		}
 	}
 	accepted, rejected := bus.ValidateAdvertisableNATSURLs(doc.NATSURLs)
@@ -322,7 +393,92 @@ func (a *Agent) applyBootstrapDoc(doc *enroll.BootstrapDoc, source string) {
 		a.logger.Warn("discovery: SetServers failed", "error", err)
 		return
 	}
+	a.bootstrapMu.Lock()
+	cp := *doc
+	a.lastBootstrap = &cp
+	a.bootstrapMu.Unlock()
 	a.logger.Info("discovery: applied NATS endpoints", "source", source, "count", len(accepted))
+}
+
+// verifiedRootPEM extracts the single trust anchor from a discovery bundle: the
+// pinned root (enroll_ca_pin) when pins are configured, else the bundle's
+// self-signed root but ONLY when it matches the peel's current enrollment
+// anchor. Returns that one root's PEM and true, or (nil,false) when no trusted
+// root can be selected — so an attacker-appended extra cert is never written,
+// and discovery never introduces a brand-new, never-anchored root.
+func (a *Agent) verifiedRootPEM(bundlePEM []byte) (rootPEM []byte, spki string, ok bool) {
+	if len(a.cfg.EnrollCAPin) > 0 {
+		root, err := ca.FindPinnedRoot(bundlePEM, a.cfg.EnrollCAPin)
+		if err != nil {
+			return nil, "", false
+		}
+		return ca.EncodeCertPEM(root), ca.SPKIPin(root), true
+	}
+	root, err := ca.FirstCARoot(bundlePEM)
+	if err != nil {
+		return nil, "", false
+	}
+	anchor := a.enrollAnchorSPKI()
+	rootSPKI := ca.SPKIPin(root)
+	if anchor == "" || rootSPKI != anchor {
+		return nil, "", false
+	}
+	return ca.EncodeCertPEM(root), rootSPKI, true
+}
+
+// enrollAnchorSPKI returns the SPKI pin of the peel's current enrollment CA
+// anchor (the enroll_ca file if configured, else the persisted enroll-ca.crt),
+// or "" when none can be determined.
+func (a *Agent) enrollAnchorSPKI() string {
+	path := a.cfg.EnrollCA
+	if path == "" {
+		path = filepath.Join(a.cfg.AuthDir, "enroll-ca.crt")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	root, err := ca.FirstCARoot(data)
+	if err != nil {
+		return ""
+	}
+	return ca.SPKIPin(root)
+}
+
+// natsCAManaged reports whether the conventional nats-ca.crt at caPath is
+// enrollment-managed and therefore safe to (over)write from discovery: true
+// when the file is absent, or when it already trusts the peel's enrollment
+// anchor (proving Zester wrote it, not an operator who provisioned a separate
+// NATS CA for a split-CA/external deployment). An empty anchorSPKI, or an
+// unreadable existing file, is treated as "cannot prove lineage" and refuses
+// to overwrite.
+func (a *Agent) natsCAManaged(caPath, anchorSPKI string) bool {
+	data, err := os.ReadFile(caPath)
+	if os.IsNotExist(err) {
+		return true // first provision
+	}
+	if err != nil || anchorSPKI == "" {
+		return false
+	}
+	rest := data
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			continue
+		}
+		if ca.SPKIPin(cert) == anchorSPKI {
+			return true
+		}
+	}
+	return false
 }
 
 // loadBootstrapCache reads and validates the cache, returning the NATS URL

@@ -136,3 +136,31 @@ func TestValidateAdvertisableNATSURLs(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeNATSEndpoint(t *testing.T) {
+	// A port-less URL and its explicit-:4222 form are the SAME endpoint —
+	// nats.go appends the default port, so SetServers must not treat them as a
+	// changed pool and force a needless reconnect.
+	pairs := [][2]string{
+		{"tls://nats.example.com", "tls://nats.example.com:4222"},
+		{"tls://NATS.example.com:4222", "tls://nats.example.com:4222"},
+		{"TLS://host:4222", "tls://host:4222"},
+		{" tls://host ", "tls://host:4222"},
+	}
+	for _, p := range pairs {
+		if got := normalizeNATSEndpoint(p[0]); got != p[1] {
+			t.Errorf("normalizeNATSEndpoint(%q) = %q, want %q", p[0], got, p[1])
+		}
+	}
+
+	// Distinct endpoints must stay distinct.
+	if normalizeNATSEndpoint("tls://a:4222") == normalizeNATSEndpoint("tls://b:4222") {
+		t.Error("distinct hosts normalized to the same key")
+	}
+	if normalizeNATSEndpoint("tls://a:4222") == normalizeNATSEndpoint("tls://a:5222") {
+		t.Error("distinct ports normalized to the same key")
+	}
+	if normalizeNATSEndpoint("") != "" {
+		t.Error("empty input should normalize to empty")
+	}
+}

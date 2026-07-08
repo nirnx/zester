@@ -6,6 +6,70 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-08
+
+Correctness and security fixes from an adversarial review of the 0.3.0/0.3.1
+embedded-CA and zero-config-bootstrap code.
+
+### Security
+- **Enrollment same-key recovery no longer opens a hijack race.** Recovery
+  released the peer index (KV delete) before re-creating it; in that window an
+  attacker submitting a different key (the endpoint is unauthenticated and the
+  challenge only proves ownership of the submitted key, with a valid trust
+  binding freely derivable from the public CA) could claim the identity, which
+  reactor auto-approval — gating only on trust-mismatch — would then
+  credential. Recovery now atomically repoints the index via CAS
+  (`Store.Supersede`) and never releases it, so the different-key guard is
+  never bypassable.
+- **Peel discovery no longer writes an unvalidated CA bundle.** The
+  recovery-loop and `_cluster_info` watch path wrote the raw discovery
+  `ca_bundle_pem` verbatim to `nats-ca.crt`; it now writes only the
+  pin/anchor-verified single root (mirroring the enrollment path), dropping any
+  extra certificate in the bundle and refusing to introduce a brand-new,
+  never-anchored root (root rotation stays a deliberate operator file drop).
+
+### Fixed
+- **Same-key credential recovery retires the old enrollment record** (transition
+  to revoked, "superseded") instead of leaving a live "active" ghost that made
+  `zester enroll list` show two records and `enroll revoke` act on the wrong one.
+- **`ca.FirstCARoot` now selects the self-signed root anywhere in a bundle**, not
+  the first CA certificate: a chain-ordered `enroll_ca` bundle (intermediate
+  first) plus a root `enroll_ca_pin` no longer fails with a spurious fatal pin
+  mismatch, and no-pin enrollments no longer bind the intermediate SPKI and get
+  flagged trust-mismatched.
+- **Peel discovery no longer clobbers an operator-provisioned NATS CA.** In a
+  split-CA / external deployment where the NATS root is pre-dropped at the
+  conventional `nats-ca.crt` path and `nats_ca` is unset, enrollment/discovery
+  used to overwrite it with the enrollment anchor (breaking NATS TLS at the next
+  reconnect); it now leaves a NATS CA that does not already trust the enrollment
+  anchor untouched.
+- **Zero-config convention-master peels now get NATS discovery.** The
+  `https://zester:8443` fallback was applied only inside the enrollment path, so
+  a peel with an empty config enrolled but never discovered endpoints and had no
+  self-heal loop; master-URL resolution is now unified so the boot fetch,
+  recovery loop, and cluster-info watch all target the convention master too.
+- **Runtime NATS re-pointing no longer forces spurious reconnects.**
+  `bus.Client.SetServers` compared the connected server against the new pool by
+  raw string, but nats.go normalizes URLs (adds the default `:4222`), so a
+  port-less advertised endpoint never matched and every discovery apply
+  force-reconnected a healthy connection; comparison is now on normalized
+  (scheme, host, port) form. The peel also no-ops a content-identical
+  bootstrap-doc re-delivery (the cluster-info watch replays on every boot).
+- **`_cluster_info` watch survives consumer loss.** It exited permanently when
+  the JetStream watcher channel closed, leaving a healthy peel deaf to endpoint
+  migrations and CA rotations until restart; it now re-establishes with capped
+  backoff like the settings watchers.
+- **The self-update watchdog no longer wedges when the bootstrap cache never
+  appears.** With `--bootstrap-cache` it polled forever and the whole
+  self-update plane went silently dark for all-in-one peels (explicit
+  `nats_url`) or masters advertising no endpoints; it now starts on `--nats-url`
+  and follows the cache, repointing its NATS pool if/when the cache appears or
+  changes (endpoint-migration self-heal) instead of reading it once at startup.
+- **The persisted enrollment trust anchor is written atomically** (temp +
+  rename); a crash or `ENOSPC` mid-write previously left a truncated
+  `enroll-ca.crt` that the strict read path treats as fatal, wedging the peel
+  until manual deletion.
+
 ## [0.3.1] - 2026-07-08
 
 Field-testing and CI follow-ups to the 0.3.0 embedded-CA release.
@@ -247,7 +311,8 @@ Initial release.
   Docker-based integration suite (82 tests).
 - Apache-2.0 license.
 
-[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/nirnx/zester/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/nirnx/zester/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nirnx/zester/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nirnx/zester/compare/v0.1.0...v0.2.0

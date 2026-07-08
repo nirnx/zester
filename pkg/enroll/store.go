@@ -343,6 +343,66 @@ func (s *Store) Revoke(ctx context.Context, id, revokedBy, reason string) (*Reco
 	return rec, nil
 }
 
+// Supersede atomically repoints the peel index from an existing (live) record
+// to a new pending record and retires the old one, WITHOUT ever releasing the
+// index. Used for same-key credential recovery: because the index is never
+// absent, the uniqueness guard that blocks a DIFFERENT key from claiming an
+// active identity is never dropped — closing the re-enrollment hijack window
+// that a release-then-create sequence opens. The old record is transitioned
+// to Revoked ("superseded") so it does not linger as a live/active ghost.
+func (s *Store) Supersede(ctx context.Context, newRec, oldRec *Record) error {
+	indexKey := peelIndexPrefix + newRec.PeelID
+
+	// Read the current index revision for a CAS repoint. A concurrent writer
+	// that changes the index between here and the Update loses the CAS and this
+	// call fails (the peel simply retries) — never a silent double-claim. An
+	// attacker cannot claim via Store.Create either: that path uses kv.Create
+	// on the index, which fails while the key exists (it never does not).
+	idxEntry, err := s.kv.Get(ctx, indexKey)
+	if err != nil {
+		return fmt.Errorf("enroll: supersede: read peel index for %s: %w", newRec.PeelID, err)
+	}
+
+	data, err := bus.Encode(newRec)
+	if err != nil {
+		return fmt.Errorf("enroll: encode record: %w", err)
+	}
+	// Write the new record under its unique KSUID key (no index claim here).
+	rev, err := s.kv.Create(ctx, newRec.ID, data)
+	if err != nil {
+		return fmt.Errorf("enroll: supersede: create record %s: %w", newRec.ID, err)
+	}
+	newRec.Revision = rev
+
+	// Atomically repoint the index old -> new.
+	if _, err := s.kv.Update(ctx, indexKey, []byte(newRec.ID), idxEntry.Revision()); err != nil {
+		// Roll back the orphaned new record; the index still points at oldRec.
+		if delErr := s.kv.Delete(ctx, newRec.ID); delErr != nil {
+			s.logger.Warn("enroll: supersede: failed to roll back new record after index CAS conflict",
+				"peel_id", newRec.PeelID, "new_id", newRec.ID, "error", delErr)
+		}
+		return fmt.Errorf("enroll: supersede: repoint peel index for %s: %w", newRec.PeelID, err)
+	}
+
+	// Retire the old record so it does not linger as a live/active ghost. The
+	// index already points at newRec, so this is best-effort cleanup.
+	if oldRec.CanTransitionTo(StateRevoked) {
+		now := time.Now().UTC()
+		oldRec.State = StateRevoked
+		oldRec.DecidedAt = &now
+		oldRec.DecidedBy = "system"
+		oldRec.RejectReason = "superseded by " + newRec.ID + " (same-key credential recovery)"
+		if err := s.Update(ctx, oldRec); err != nil {
+			s.logger.Warn("enroll: supersede: failed to retire old record (ghost may linger)",
+				"peel_id", newRec.PeelID, "old_id", oldRec.ID, "error", err)
+		}
+	}
+
+	s.logger.Info("enrollment superseded (same-key credential recovery)",
+		"peel_id", newRec.PeelID, "old_id", oldRec.ID, "new_id", newRec.ID)
+	return nil
+}
+
 // ReleaseIndex removes the peel-to-enrollment index entry for a peel ID.
 // This is used when re-enrollment is allowed (after rejection or revocation)
 // to free the index so a new enrollment record can claim it atomically.

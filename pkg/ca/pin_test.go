@@ -56,6 +56,39 @@ func TestFindPinnedRoot_TrustsExactlyThePinnedCert(t *testing.T) {
 	}
 }
 
+func TestFirstCARoot_SelectsSelfSignedRoot(t *testing.T) {
+	a := testAuthority(t)
+	rootPEM := EncodeCertPEM(a.Root)
+	intPEM := EncodeCertPEM(a.Intermediate)
+
+	// Chain-ordered bundle (intermediate first, root last): the trust anchor
+	// must be the self-signed root, not the first IsCA cert (the intermediate).
+	chainOrdered := append(append([]byte{}, intPEM...), rootPEM...)
+	got, err := FirstCARoot(chainOrdered)
+	if err != nil {
+		t.Fatalf("FirstCARoot(chain-ordered): %v", err)
+	}
+	if SPKIPin(got) != a.RootSPKIPin() {
+		t.Fatalf("FirstCARoot picked the intermediate, not the self-signed root")
+	}
+
+	// Root-only bundle still returns the root.
+	if got, err := FirstCARoot(rootPEM); err != nil || SPKIPin(got) != a.RootSPKIPin() {
+		t.Fatalf("FirstCARoot(root-only) = (%v, %v)", got, err)
+	}
+
+	// Intermediate-only bundle (no self-signed root): fall back to the first
+	// CA cert rather than erroring, preserving best-effort behavior.
+	if got, err := FirstCARoot(intPEM); err != nil || SPKIPin(got) != SPKIPin(a.Intermediate) {
+		t.Fatalf("FirstCARoot(intermediate-only) fallback failed: (%v, %v)", got, err)
+	}
+
+	// No CA certificate at all: error.
+	if _, err := FirstCARoot([]byte("-----BEGIN NONSENSE-----\n-----END NONSENSE-----\n")); err == nil {
+		t.Error("FirstCARoot on non-CA input should error")
+	}
+}
+
 func TestSPKIPin_StableAcrossReissue(t *testing.T) {
 	a := testAuthority(t)
 	// Re-encoding / re-parsing the same cert yields the same pin; and the

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -191,9 +192,12 @@ func resolveByFetch(cfg TrustConfig, pins []string) (*ResolvedTrust, error) {
 	pool.AddCert(root)
 
 	// Persist the anchor so subsequent boots are strict (rung 3), never
-	// re-TOFU.
+	// re-TOFU. Write atomically (temp + rename): a crash or ENOSPC mid-write
+	// must never leave a truncated anchor, which the strict read path treats
+	// as a fatal non-ENOENT error and would wedge the peel until manual
+	// deletion.
 	if cfg.AnchorFile != "" {
-		if err := os.WriteFile(cfg.AnchorFile, ca.EncodeCertPEM(root), 0600); err != nil {
+		if err := writeFileAtomic(cfg.AnchorFile, ca.EncodeCertPEM(root), 0600); err != nil {
 			cfg.Logger.Warn("enrollment trust: failed to persist anchor", "path", cfg.AnchorFile, "error", err)
 		}
 	}
@@ -324,4 +328,29 @@ func pinOf(cert *x509.Certificate) string {
 		return ""
 	}
 	return ca.SPKIPin(cert)
+}
+
+// writeFileAtomic writes data to a temp file in the same directory and renames
+// it over path, so a reader never observes a partial file (and a crash leaves
+// either the old file or the complete new one, never a truncated anchor).
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

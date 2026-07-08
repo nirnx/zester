@@ -1,6 +1,7 @@
 package ca
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -102,9 +103,16 @@ func EncodeCertPEM(cert *x509.Certificate) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
 }
 
-// FirstCARoot returns the first self-signed CA certificate found in a PEM
-// bundle (a trust anchor). Errors when the bundle contains no such root.
+// FirstCARoot returns the trust anchor of a PEM bundle: the first self-signed
+// CA certificate, regardless of its position. A bundle is conventionally
+// ordered leaf→intermediate→root (or intermediate-first), so returning the
+// first IsCA cert would pick an intermediate and yield the wrong SPKI pin —
+// scan the whole bundle for the self-signed root first. Falls back to the
+// first CA certificate only when no self-signed root is present (an
+// intermediate-only bundle), preserving best-effort behavior for that case.
+// Errors when the bundle contains no CA certificate at all.
 func FirstCARoot(bundlePEM []byte) (*x509.Certificate, error) {
+	var firstCA *x509.Certificate
 	rest := bundlePEM
 	for {
 		var block *pem.Block
@@ -119,11 +127,29 @@ func FirstCARoot(bundlePEM []byte) (*x509.Certificate, error) {
 		if err != nil {
 			continue
 		}
-		if cert.IsCA {
+		if !cert.IsCA {
+			continue
+		}
+		if firstCA == nil {
+			firstCA = cert
+		}
+		if isSelfSigned(cert) {
 			return cert, nil
 		}
 	}
+	if firstCA != nil {
+		return firstCA, nil
+	}
 	return nil, fmt.Errorf("ca: no CA certificate in bundle")
+}
+
+// isSelfSigned reports whether a certificate is its own issuer and verifies
+// under its own key — i.e. a root, not an intermediate.
+func isSelfSigned(cert *x509.Certificate) bool {
+	if !bytes.Equal(cert.RawIssuer, cert.RawSubject) {
+		return false
+	}
+	return cert.CheckSignatureFrom(cert) == nil
 }
 
 // subjectKeyID computes the RFC 5280 method-1 subject key identifier

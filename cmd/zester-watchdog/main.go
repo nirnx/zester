@@ -144,15 +144,22 @@ func main() {
 	}
 
 	// Resolve NATS URLs AFTER the child starts. With --bootstrap-cache the
-	// watchdog follows the peel's discovered endpoints, polling the cache
-	// file the peel writes during enrollment (child-first ordering avoids the
-	// deadlock where the watchdog waits for a file only the child produces).
+	// watchdog PREFERS the peel's discovered endpoints, but must NOT block on
+	// them forever: the peel never writes the cache when it runs with an
+	// explicit nats_url (all-in-one) or when the master advertises no
+	// endpoints, which would otherwise wedge the watchdog — and the whole
+	// self-update plane — silently. Start on the cache if present, else fall
+	// back to --nats-url; followBootstrapCache then repoints the live pool
+	// if/when the cache appears or changes (endpoint-migration self-heal).
 	var natsURLs []string
 	if f.bootstrapCache != "" {
-		natsURLs = waitForBootstrapURLs(ctx, f.bootstrapCache, logger)
-		if natsURLs == nil {
-			stopChild() // ctx cancelled while waiting
-			return
+		if urls := readBootstrapURLs(f.bootstrapCache); len(urls) > 0 {
+			natsURLs = urls
+			logger.Info("watchdog: using NATS endpoints from bootstrap cache", "path", f.bootstrapCache, "count", len(urls))
+		} else {
+			natsURLs = bus.NormalizeNATSURLs([]string{f.natsURL})
+			logger.Info("watchdog: bootstrap cache not present yet; starting on --nats-url and following the cache",
+				"nats_url", f.natsURL, "cache", f.bootstrapCache)
 		}
 	} else {
 		natsURLs = bus.NormalizeNATSURLs([]string{f.natsURL})
@@ -225,7 +232,14 @@ func main() {
 		}
 	}
 	defer func() { _ = client.Shutdown(context.Background()) }()
-	logger.Info("connected to NATS", "url", f.natsURL)
+	logger.Info("connected to NATS", "urls", natsURLs)
+
+	// Follow the peel's bootstrap cache: repoint the watchdog's NATS pool when
+	// the discovered endpoint set changes (or first appears), so a fleet NATS
+	// migration the peel self-heals reaches the watchdog without a restart.
+	if f.bootstrapCache != "" {
+		go followBootstrapCache(ctx, client, f.bootstrapCache, natsURLs, logger)
+	}
 
 	var statusKV bus.KV
 	for attempt := 1; ; attempt++ {
@@ -371,30 +385,59 @@ type watchdogBootstrapCache struct {
 	NATSURLs []string `json:"nats_urls"`
 }
 
-// waitForBootstrapURLs reads validated NATS URLs from the peel's bootstrap
-// cache, polling (10s) until the file appears and yields at least one valid
-// tls:// URL. Read-only — the peel owns the cache. Returns nil only on
-// context cancellation.
-func waitForBootstrapURLs(ctx context.Context, path string, logger *slog.Logger) []string {
-	logged := false
+// readBootstrapURLs reads and validates the NATS URL list from the peel's
+// bootstrap cache. Returns nil when the file is absent, unreadable, or yields
+// no valid tls:// URL. Read-only — the peel owns the cache.
+func readBootstrapURLs(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var c watchdogBootstrapCache
+	if json.Unmarshal(data, &c) != nil {
+		return nil
+	}
+	urls, _ := bus.ValidateAdvertisableNATSURLs(c.NATSURLs)
+	return urls
+}
+
+// followBootstrapCache polls the peel's bootstrap cache and repoints the
+// watchdog's NATS pool when the discovered endpoint set changes (including its
+// first appearance), so a fleet NATS migration — which the peel self-heals via
+// its own discovery — reaches the watchdog without a restart. seed is the URL
+// list the connection started on, so only a genuine change triggers a repoint.
+func followBootstrapCache(ctx context.Context, client *bus.Client, path string, seed []string, logger *slog.Logger) {
+	last := seed
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	for {
-		if data, err := os.ReadFile(path); err == nil {
-			var c watchdogBootstrapCache
-			if json.Unmarshal(data, &c) == nil {
-				if urls, _ := bus.ValidateAdvertisableNATSURLs(c.NATSURLs); len(urls) > 0 {
-					logger.Info("watchdog: using NATS endpoints from bootstrap cache", "path", path, "count", len(urls))
-					return urls
-				}
-			}
-		}
-		if !logged {
-			logger.Info("watchdog: waiting for peel bootstrap cache", "path", path)
-			logged = true
-		}
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-time.After(10 * time.Second):
+			return
+		case <-ticker.C:
+		}
+		urls := readBootstrapURLs(path)
+		if len(urls) == 0 || sameURLs(urls, last) {
+			continue
+		}
+		if err := client.SetServers(urls); err != nil {
+			logger.Warn("watchdog: repoint to discovered NATS endpoints failed", "error", err)
+			continue
+		}
+		last = urls
+		logger.Info("watchdog: repointed NATS endpoints from bootstrap cache", "count", len(urls))
+	}
+}
+
+// sameURLs reports whether two URL lists are equal in order and content.
+func sameURLs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
+	return true
 }

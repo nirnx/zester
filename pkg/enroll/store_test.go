@@ -76,6 +76,64 @@ func TestStoreCreate(t *testing.T) {
 	}
 }
 
+func TestStoreSupersede(t *testing.T) {
+	store, ctx := testStoreSetup(t)
+	now := time.Now().UTC()
+
+	old := &enroll.Record{
+		ID: "enr-old", PeelID: "web-01", PublicKey: "UKEY", CurvePublicKey: "XKEY",
+		State: enroll.StateActive, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.Create(ctx, old); err != nil {
+		t.Fatalf("Create old: %v", err)
+	}
+	// Carry the current revision, as the handler's FindByPeelID path does.
+	loadedOld, err := store.FindByPeelID(ctx, "web-01")
+	if err != nil {
+		t.Fatalf("FindByPeelID old: %v", err)
+	}
+
+	newRec := &enroll.Record{
+		ID: "enr-new", PeelID: "web-01", PublicKey: "UKEY", CurvePublicKey: "XKEY",
+		State: enroll.StatePending, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.Supersede(ctx, newRec, loadedOld); err != nil {
+		t.Fatalf("Supersede: %v", err)
+	}
+
+	// The index now resolves to the new record.
+	got, err := store.FindByPeelID(ctx, "web-01")
+	if err != nil {
+		t.Fatalf("FindByPeelID new: %v", err)
+	}
+	if got == nil || got.ID != "enr-new" {
+		t.Fatalf("index not repointed to the new record: %+v", got)
+	}
+	if got.State != enroll.StatePending {
+		t.Errorf("new record state = %q, want pending", got.State)
+	}
+
+	// The old record is retired to revoked — no lingering live/active ghost.
+	oldGot, err := store.Get(ctx, "enr-old")
+	if err != nil {
+		t.Fatalf("Get old: %v", err)
+	}
+	if oldGot.State != enroll.StateRevoked {
+		t.Errorf("old record state = %q, want revoked (superseded)", oldGot.State)
+	}
+
+	// The index was never released, so the uniqueness guard is intact: a fresh
+	// Create for the same peel ID (a different key attempting to claim the
+	// identity) still fails — the hijack window is closed.
+	attacker := &enroll.Record{
+		ID: "enr-atk", PeelID: "web-01", PublicKey: "UEVIL",
+		State: enroll.StatePending, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.Create(ctx, attacker); err == nil {
+		t.Error("Create succeeded for an already-indexed peel ID (uniqueness guard bypassed)")
+	}
+}
+
 func TestStoreCreateDuplicatePeelID(t *testing.T) {
 	store, ctx := testStoreSetup(t)
 	now := time.Now().UTC()
