@@ -37,6 +37,14 @@ func runEnrollShow(cmd *cobra.Command, args []string) error {
 	fmt.Printf("State:          %s\n", rec.State)
 	fmt.Printf("Public Key:     %s\n", rec.PublicKey)
 	fmt.Printf("Hostname:       %s\n", rec.Hostname)
+	if rec.TrustMismatch {
+		fmt.Printf("Trust:          MISMATCH! peel reported CA %s (not this master's root)\n", rec.TrustedCASPKI)
+		fmt.Printf("                → possible first-contact MITM; verify the node out of band before 'enroll approve --force'\n")
+	} else if rec.TrustChecked {
+		fmt.Printf("Trust:          ok (peel-reported CA matches master root: %s)\n", rec.TrustedCASPKI)
+	} else if rec.TrustedCASPKI != "" {
+		fmt.Printf("Trust:          present (unverified — external-CA master has no root to compare): %s\n", rec.TrustedCASPKI)
+	}
 	fmt.Printf("Created At:     %s\n", rec.CreatedAt.Local().Format(time.RFC3339))
 	fmt.Printf("Updated At:     %s\n", rec.UpdatedAt.Local().Format(time.RFC3339))
 	if rec.DecidedBy != "" {

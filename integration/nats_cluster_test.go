@@ -36,8 +36,8 @@ func TestNATSCluster(t *testing.T) {
 
 		// All 5 peels should respond.
 		results := execCLI(t, "*", "test.ping")
-		if len(results) != 5 {
-			t.Fatalf("expected 5 ping results, got %d", len(results))
+		if len(results) != len(allNodes) {
+			t.Fatalf("expected %d ping results, got %d", len(allNodes), len(results))
 		}
 		for _, r := range results {
 			r.checkSuccess(t, fmt.Sprintf("peel %s ping", r.PeelID))
@@ -53,8 +53,8 @@ func TestNATSCluster(t *testing.T) {
 
 		// All peels should still respond — 2/3 NATS quorum is intact.
 		results := execCLI(t, "*", "test.ping")
-		if len(results) != 5 {
-			t.Fatalf("expected 5 ping results after nats-2 failure, got %d", len(results))
+		if len(results) != len(allNodes) {
+			t.Fatalf("expected %d ping results after nats-2 failure, got %d", len(allNodes), len(results))
 		}
 		for _, r := range results {
 			r.checkSuccess(t, fmt.Sprintf("peel %s after nats-2 stop", r.PeelID))
@@ -132,8 +132,8 @@ func TestNATSCluster(t *testing.T) {
 
 		// All peels should respond after the node recovers.
 		results := execCLI(t, "*", "test.ping")
-		if len(results) != 5 {
-			t.Fatalf("expected 5 ping results after nats-2 recovery, got %d", len(results))
+		if len(results) != len(allNodes) {
+			t.Fatalf("expected %d ping results after nats-2 recovery, got %d", len(allNodes), len(results))
 		}
 		for _, r := range results {
 			r.checkSuccess(t, fmt.Sprintf("peel %s after nats-2 recovery", r.PeelID))
@@ -156,8 +156,8 @@ func TestNATSCluster(t *testing.T) {
 		}
 
 		results := execCLI(t, "*", "test.ping")
-		if len(results) != 5 {
-			t.Fatalf("expected 5 ping results after combined failure, got %d", len(results))
+		if len(results) != len(allNodes) {
+			t.Fatalf("expected %d ping results after combined failure, got %d", len(allNodes), len(results))
 		}
 		for _, r := range results {
 			r.checkSuccess(t, fmt.Sprintf("peel %s after nats-3 + master failure", r.PeelID))

@@ -25,12 +25,12 @@ func TestMasterFlagParity(t *testing.T) {
 		"config":             "",
 		"nats-url":           "tls://nats:4222",
 		"nats-ca":            "",
-		"auth-dir":           "/data/auth",
+		"auth-dir":           "/var/lib/zester/auth",
 		"enroll-addr":        ":8443",
-		"enroll-tls-cert":    "/data/auth/enroll.crt",
-		"enroll-tls-key":     "/data/auth/enroll.key",
-		"states-dir":         "/data/states",
-		"settings-dir":       "/data/settings",
+		"enroll-tls-cert":    "/var/lib/zester/auth/enroll.crt",
+		"enroll-tls-key":     "/var/lib/zester/auth/enroll.key",
+		"states-dir":         "/var/lib/zester/states",
+		"settings-dir":       "/var/lib/zester/settings",
 		"jetstream-replicas": "0",
 		"health-addr":        "127.0.0.1:9091",
 		"api-docs":           "false",
@@ -42,7 +42,7 @@ func TestMasterFlagParity(t *testing.T) {
 		"log-format": "json",
 		// Reactor (event-driven reactions):
 		"reactor":                   "true",
-		"reactor-dir":               "/data/reactor",
+		"reactor-dir":               "/var/lib/zester/reactor",
 		"reactor-workers":           "4",
 		"reactor-max-chain-depth":   "3",
 		"reactor-enable-chaining":   "true",
@@ -51,6 +51,12 @@ func TestMasterFlagParity(t *testing.T) {
 		"reactor-max-event-age":     time.Hour.String(),
 		"reactor-storm-rate":        "60",
 		"reactor-breaker-cooldown":  (5 * time.Minute).String(),
+		// Embedded CA + discovery:
+		"ca-mode":                 "auto",
+		"ca-dir":                  "",
+		"ca-enroll-cert-validity": (90 * 24 * time.Hour).String(),
+		"ca-enroll-sans":          "",
+		"nats-advertise-urls":     "",
 	}
 
 	got := map[string]*flag.Flag{}
@@ -129,8 +135,8 @@ gitfs:
 	if cfg.GitFS.Interval != 2*time.Minute {
 		t.Errorf("GitFS.Interval = %v, want YAML value 2m", cfg.GitFS.Interval)
 	}
-	if cfg.AuthDir != "/data/auth" {
-		t.Errorf("AuthDir = %q, want default /data/auth", cfg.AuthDir)
+	if cfg.AuthDir != "/var/lib/zester/auth" {
+		t.Errorf("AuthDir = %q, want default /var/lib/zester/auth", cfg.AuthDir)
 	}
 	if cfg.LogFormat != "json" {
 		t.Errorf("LogFormat = %q, want default json", cfg.LogFormat)

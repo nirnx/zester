@@ -3,9 +3,11 @@ package bus
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +27,23 @@ type ClientConfig struct {
 
 	// TLS is the TLS configuration. Required in production.
 	TLS *tls.Config
+
+	// CAFile is the path to a PEM CA bundle used to verify the NATS server
+	// certificate. Unlike baking a pool into TLS.RootCAs (frozen for the
+	// process lifetime), the file is re-read on EVERY (re)connect attempt:
+	// CA rotation is a file drop, and a file that does not exist yet
+	// (provisioned out-of-band by the operator or init tooling) fails only
+	// the current attempt — the reconnect loop heals once it appears.
+	// Composes with TLS: the base config's floor/settings apply, the pool
+	// comes from this file at connect time.
+	CAFile string
+
+	// CAFileOptional makes a missing CAFile mean "system trust store for
+	// this attempt" instead of a failed attempt. Used for the conventional
+	// <auth_dir>/nats-ca.crt candidate, which is consulted per attempt so a
+	// CA dropped there later takes effect without a restart; explicit
+	// operator-configured paths stay strict (never silently downgraded).
+	CAFileOptional bool
 
 	// CredsFile is the path to a NATS credentials file (JWT + nkey).
 	CredsFile string
@@ -238,6 +257,49 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if cfg.TLS != nil {
 		opts = append(opts, nats.Secure(cfg.TLS))
 	}
+	if cfg.CAFile != "" {
+		// Deliberately NOT nats.RootCAs(): that helper reads the file
+		// eagerly at option-application time and fails nats.Connect outright
+		// when it is missing. Setting RootCAsCB directly defers every read
+		// to the individual (re)connect attempt: rotation is picked up
+		// without a restart, and a not-yet-materialized CA (provisioned
+		// out-of-band) fails only that attempt — the retry/reconnect loop
+		// heals once the file appears.
+		caFile := cfg.CAFile
+		optional := cfg.CAFileOptional
+		if _, err := os.Stat(caFile); err != nil {
+			if optional {
+				cfg.Logger.Debug("conventional NATS CA file absent; using system trust store until it appears",
+					"path", caFile)
+			} else {
+				cfg.Logger.Warn("NATS CA file not readable yet; connect attempts will retry until it appears",
+					"path", caFile, "error", err)
+			}
+		}
+		opts = append(opts, func(o *nats.Options) error {
+			if o.TLSConfig == nil {
+				o.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
+			}
+			o.RootCAsCB = func() (*x509.CertPool, error) {
+				pem, err := os.ReadFile(caFile)
+				if err != nil {
+					if optional && os.IsNotExist(err) {
+						// nil pool = system trust store for this attempt;
+						// the file is re-checked on the next one.
+						return nil, nil
+					}
+					return nil, fmt.Errorf("bus: read NATS CA: %w", err)
+				}
+				pool := x509.NewCertPool()
+				if !pool.AppendCertsFromPEM(pem) {
+					return nil, fmt.Errorf("bus: failed to parse NATS CA certificate from %q", caFile)
+				}
+				return pool, nil
+			}
+			o.Secure = true
+			return nil
+		})
+	}
 	if cfg.CredsFile != "" {
 		opts = append(opts, nats.UserCredentials(cfg.CredsFile))
 	}
@@ -294,6 +356,35 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 // Conn returns the underlying NATS connection.
 func (c *Client) Conn() *nats.Conn {
 	return c.nc
+}
+
+// SetServers replaces the client's server pool at runtime (nats.go v1.52.0
+// SetServerPool) and forces a reconnect when the currently-connected server
+// is no longer in the new set. Subscriptions are auto-resent and JetStream
+// contexts survive — no client rebuild. Used by the peel's discovery-refresh
+// path so a NATS migration is picked up without a process restart. The new
+// URLs must be tls:// (the pool inherits the connection-level TLS + creds).
+func (c *Client) SetServers(urls []string) error {
+	if len(urls) == 0 {
+		return fmt.Errorf("bus: SetServers: empty URL list")
+	}
+	if err := c.nc.SetServerPool(urls); err != nil {
+		return fmt.Errorf("bus: set server pool: %w", err)
+	}
+	current := c.nc.ConnectedUrl()
+	stillListed := false
+	for _, u := range urls {
+		if u == current {
+			stillListed = true
+			break
+		}
+	}
+	if !stillListed {
+		if err := c.nc.ForceReconnect(); err != nil {
+			return fmt.Errorf("bus: force reconnect: %w", err)
+		}
+	}
+	return nil
 }
 
 // JetStream returns the bus adapter over the JetStream context. The adapter

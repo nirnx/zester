@@ -464,6 +464,14 @@ func (d *Daemon) reactorEnroll(ctx context.Context, op, enrollmentID, requirePee
 			op, enrollmentID, rec.State, reactor.ErrEnrollRefused)
 	}
 
+	// Reactor auto-approval must never paper over a first-contact MITM
+	// artifact: a trust-mismatched record is refused unconditionally (there
+	// is no force in reaction rendering — a human must decide).
+	if op == "approve" && rec.TrustMismatch {
+		return fmt.Errorf("enrollment %s is trust-mismatched; reactor auto-approval refused: %w",
+			enrollmentID, reactor.ErrEnrollRefused)
+	}
+
 	switch op {
 	case "approve":
 		_, err = d.enrollStore.Approve(ctx, enrollmentID, reactorOperator)

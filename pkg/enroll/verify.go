@@ -158,6 +158,60 @@ func enrollSignatureMessage(challenge []byte, curvePublicKey string) []byte {
 	return msg
 }
 
+// trustBindingDomain domain-separates the trust-binding signature from the
+// primary enrollment signature (challenge || curvePublicKey, no separator),
+// so the two can never be confused.
+const trustBindingDomain = "zester-enroll-trust-v1\x00"
+
+// trustBindingCapability is a fixed marker embedded in the SIGNED
+// trust-binding message. Note that the marker alone cannot make a STRIPPED
+// binding detectable (an absent field carries no signature to inspect) — the
+// strip is closed operationally by the master REQUIRING the binding when it
+// runs an embedded CA (handler.go: a missing binding on an embedded-CA master
+// is rejected, since every peel that completed the handshake against the
+// non-public root necessarily resolved and sent one). The marker's role is
+// domain/purpose separation within the signed blob.
+const trustBindingCapability = "bind"
+
+// trustSignatureMessage constructs the message signed for the CA-fingerprint
+// binding: domain || challenge(32) || capability || trustedCASPKI. The
+// challenge inclusion carries the same anti-replay binding as the primary
+// signature; the capability marker closes the additive-field strip downgrade.
+func trustSignatureMessage(challenge []byte, trustedCASPKI string) []byte {
+	parts := trustBindingDomain + trustBindingCapability + "\x00" + trustedCASPKI
+	msg := make([]byte, len(challenge)+len(parts))
+	copy(msg, challenge)
+	copy(msg[len(challenge):], parts)
+	return msg
+}
+
+// SignTrustBinding signs the trusted-CA SPKI the peel established, binding it
+// to the enrollment challenge with the peel's nkey seed.
+func SignTrustBinding(seed, challenge []byte, trustedCASPKI string) ([]byte, error) {
+	kp, err := nkeys.FromSeed(seed)
+	if err != nil {
+		return nil, fmt.Errorf("enroll: load key from seed: %w", err)
+	}
+	sig, err := kp.Sign(trustSignatureMessage(challenge, trustedCASPKI))
+	if err != nil {
+		return nil, fmt.Errorf("enroll: sign trust binding: %w", err)
+	}
+	return sig, nil
+}
+
+// VerifyTrustBinding verifies a trust-binding signature over the challenge and
+// reported CA SPKI.
+func VerifyTrustBinding(publicKey string, challenge []byte, trustedCASPKI string, signature []byte) error {
+	kp, err := nkeys.FromPublicKey(publicKey)
+	if err != nil {
+		return fmt.Errorf("enroll: invalid public key: %w", err)
+	}
+	if err := kp.Verify(trustSignatureMessage(challenge, trustedCASPKI), signature); err != nil {
+		return fmt.Errorf("enroll: trust-binding verification failed: %w", err)
+	}
+	return nil
+}
+
 // SignEnrollmentID signs the enrollment ID for credential download auth.
 // Returns the base64url-encoded signature.
 func SignEnrollmentID(seed []byte, enrollmentID string) (string, error) {

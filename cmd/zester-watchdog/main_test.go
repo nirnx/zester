@@ -33,9 +33,10 @@ func TestRegisterFlags_Parity(t *testing.T) {
 		// New flags (additive). ready-url defaults empty = derived from
 		// --health-url (path replaced with /readyz) so it follows the
 		// child's port.
-		"ready-url":  "",
-		"log-level":  "info",
-		"log-format": "json",
+		"ready-url":       "",
+		"log-level":       "info",
+		"log-format":      "json",
+		"bootstrap-cache": "",
 	}
 
 	got := map[string]string{}

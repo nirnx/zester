@@ -21,19 +21,25 @@ func TestPeelFlagParity(t *testing.T) {
 	}
 
 	want := map[string]string{
-		// Pre-existing flags (parity: name + default must not change).
-		"config":       "",
-		"id":           "",
-		"nats-url":     "tls://nats:4222",
+		// Pre-existing flags (parity: name must not change).
+		"config": "",
+		"id":     "",
+		// nats-url default is now empty (discovery sentinel: unset =
+		// discover; the builtin tls://nats:4222 tail is applied at runtime).
+		"nats-url":     "",
 		"nats-ca":      "",
 		"master-url":   "",
 		"enroll-ca":    "",
-		"states-cache": "/data/states-cache",
+		"states-cache": "/var/cache/zester/states",
 		"health-addr":  "127.0.0.1:9090",
 		// New flags (additive).
-		"master-urls": "",
-		"log-level":   "info",
-		"log-format":  "json",
+		"master-urls":   "",
+		"log-level":     "info",
+		"log-format":    "json",
+		"auth-dir":      "/var/lib/zester/auth",
+		"data-dir":      "/var/lib/zester",
+		"enroll-ca-pin": "",
+		"enroll-trust":  "",
 	}
 
 	got := make(map[string]string)

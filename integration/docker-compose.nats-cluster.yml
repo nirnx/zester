@@ -107,12 +107,29 @@ services:
     environment:
       SSL_CERT_FILE: /data/auth/nats-ca.crt
 
+  wd-01:
+    command: ["zester-watchdog",
+      "--child-bin", "/usr/local/bin/zester-peel",
+      "--child-args", "--id wd-01 --master-url https://master:8443 --enroll-ca /data/auth/enroll-ca.crt --auth-dir /data/auth --data-dir /data --nats-url tls://nats-3:4222,tls://nats-2:4222,tls://nats:4222",
+      "--id", "wd-01",
+      "--component", "peel",
+      "--nats-url", "tls://nats-3:4222,tls://nats-2:4222,tls://nats:4222",
+      "--nats-ca", "/data/auth/nats-ca.crt",
+      "--nats-creds", "/data/auth/wd-01.creds",
+      "--health-url", "http://127.0.0.1:9090/healthz",
+      "--soak-time", "10s"]
+
   # --- Admin: multi-URL for zester --direct ------------------------------------
 
   admin:
     environment:
       NATS_URL: "tls://nats:4222,tls://nats-2:4222,tls://nats-3:4222"
       SSL_CERT_FILE: /data/auth/nats-ca.crt
+    # rw so the CA-rotation test can atomically rewrite the shared trust
+    # material from a container that is NOT a counted fleet node.
+    volumes:
+      - auth-data:/data/auth
+      - nats-config:/data/nats:ro
 
 volumes:
   jetstream-data-2:

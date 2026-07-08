@@ -71,6 +71,12 @@ func (d *Daemon) startSettingsPublisher(ctx context.Context) error {
 		d.logger.Info("published master curve public key for peel decryption")
 	}
 
+	// Publish the discovery/refresh bootstrap document (CA bundle + fleet
+	// NATS endpoints) to the cluster-info key, same non-lease-gated
+	// idempotent pattern. No-op unless embedded CA or nats_advertise_urls
+	// is configured.
+	d.publishClusterInfo(ctx, secretsKV)
+
 	// Load raw settings files and extract secrets for peel-side rendering.
 	rawSettingsFiles, err := loadSettingsFiles(d.cfg.SettingsDir)
 	if err != nil {

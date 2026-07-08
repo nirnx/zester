@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/nirnx/zester/pkg/auth"
-	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/ca"
 )
 
 const (
@@ -140,14 +140,11 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("generated admin credentials", "path", adminCredsPath)
 
-	// Generate TLS certificates for the enrollment HTTPS API.
-	if err := generateEnrollmentTLS(authDir, logger); err != nil {
-		return fmt.Errorf("generate enrollment TLS: %w", err)
-	}
-
-	// Generate TLS certificates for NATS client transport.
-	if err := generateNATSTLS(authDir, logger); err != nil {
-		return fmt.Errorf("generate NATS TLS: %w", err)
+	// Generate ONE embedded CA (pkg/ca) and issue both the enrollment and
+	// NATS server certs from it — exercising the production bootstrap and
+	// satisfying ENROLL-TLS-3 (enroll + NATS share the same CA root).
+	if err := generateTLS(authDir, logger); err != nil {
+		return fmt.Errorf("generate TLS: %w", err)
 	}
 
 	// Write nats-server.conf for the external NATS server.
@@ -207,6 +204,32 @@ resolver_preload: {
 	// token mapping (docs enabled for playground convenience).
 	masterConfig := `nats_url: "tls://nats:4222"
 nats_ca: "/data/auth/nats-ca.crt"
+# The playground/compose stack mounts its volumes under /data; binary
+# defaults are /var/lib/zester, so pin the layout explicitly here.
+auth_dir: "/data/auth"
+states_dir: "/data/states"
+settings_dir: "/data/settings"
+enroll:
+  tls_cert: "/data/auth/enroll.crt"
+  tls_key: "/data/auth/enroll.key"
+# The init step wrote the embedded CA to /data/auth/ca, so ca.mode auto
+# enables embedded mode: the master self-issues its enrollment cert from the
+# CA and serves discovery. nats_advertise_urls feeds the /enroll/ca bootstrap
+# document (peels with an explicit --nats-url still override it).
+ca:
+  mode: auto
+  dir: "/data/auth/ca"
+  # Peels dial https://master:8443; the container hostname is not "master",
+  # so the self-issued enrollment cert must carry these SANs explicitly.
+  enroll_sans:
+    - "master"
+    - "master-2"
+nats_advertise_urls:
+  - "tls://nats:4222"
+  - "tls://nats-2:4222"
+  - "tls://nats-3:4222"
+reactor:
+  dir: "/data/reactor"
 api:
   docs_enabled: true
   tokens:
@@ -241,72 +264,53 @@ api:
 	return nil
 }
 
-func generateEnrollmentTLS(authDir string, logger *slog.Logger) error {
-	ca, err := bus.GenerateSelfSignedCA("Zester Playground", 10*365*24*time.Hour)
+// generateTLS creates ONE embedded CA (pkg/ca) and issues both the
+// enrollment HTTPS cert and the NATS server cert from it. The single root is
+// written as both enroll-ca.crt and nats-ca.crt (byte-identical), so the
+// playground exercises the same one-CA bootstrap the embedded-CA mode uses in
+// production and satisfies ENROLL-TLS-3.
+func generateTLS(authDir string, logger *slog.Logger) error {
+	const day = 24 * time.Hour
+	authority, err := ca.Generate(ca.Config{Organization: "Zester Playground"})
 	if err != nil {
 		return fmt.Errorf("generate CA: %w", err)
 	}
+	if err := authority.Save(filepath.Join(authDir, "ca")); err != nil {
+		return fmt.Errorf("save CA: %w", err)
+	}
 
-	certPEM, keyPEM, err := ca.IssueCert("master", nil, []string{"master", "localhost"}, 10*365*24*time.Hour)
+	// Enrollment leaf (SANs cover the compose master name, the convention
+	// hostname, and localhost).
+	enrollLeaf, err := authority.IssueServer("master", []string{"master", "zester", "localhost"}, nil, 3650*day)
 	if err != nil {
-		return fmt.Errorf("issue server cert: %w", err)
+		return fmt.Errorf("issue enrollment cert: %w", err)
 	}
-
-	caPath := filepath.Join(authDir, "enroll-ca.crt")
-	if err := bus.WritePEM(caPath, ca.CertPEM); err != nil {
-		return fmt.Errorf("write CA cert: %w", err)
-	}
-	logger.Info("wrote enrollment CA", "path", caPath)
-
-	certPath := filepath.Join(authDir, "enroll.crt")
-	if err := bus.WritePEM(certPath, certPEM); err != nil {
-		return fmt.Errorf("write server cert: %w", err)
-	}
-	logger.Info("wrote enrollment cert", "path", certPath)
-
-	keyPath := filepath.Join(authDir, "enroll.key")
-	if err := bus.WritePEM(keyPath, keyPEM); err != nil {
-		return fmt.Errorf("write server key: %w", err)
-	}
-	logger.Info("wrote enrollment key", "path", keyPath)
-
-	return nil
-}
-
-func generateNATSTLS(authDir string, logger *slog.Logger) error {
-	ca, err := bus.GenerateSelfSignedCA("Zester NATS", 10*365*24*time.Hour)
-	if err != nil {
-		return fmt.Errorf("generate NATS CA: %w", err)
-	}
-
-	certPEM, keyPEM, err := ca.IssueCert(
-		"nats",
-		nil,
-		[]string{"nats", "nats-2", "nats-3", "localhost"},
-		10*365*24*time.Hour,
-	)
+	// NATS server leaf (SANs cover all cluster node names).
+	natsLeaf, err := authority.IssueServer("nats", []string{"nats", "nats-2", "nats-3", "localhost"}, nil, 3650*day)
 	if err != nil {
 		return fmt.Errorf("issue NATS server cert: %w", err)
 	}
 
-	caPath := filepath.Join(authDir, "nats-ca.crt")
-	if err := bus.WritePEM(caPath, ca.CertPEM); err != nil {
-		return fmt.Errorf("write NATS CA cert: %w", err)
+	bundle := authority.Bundle()
+	writes := []struct {
+		name string
+		data []byte
+		mode os.FileMode
+	}{
+		{"enroll-ca.crt", bundle, 0644},
+		{"nats-ca.crt", bundle, 0644},
+		{"enroll.crt", enrollLeaf.CertPEM, 0644},
+		{"enroll.key", enrollLeaf.KeyPEM, 0600},
+		{"nats-server.crt", natsLeaf.CertPEM, 0644},
+		{"nats-server.key", natsLeaf.KeyPEM, 0600},
 	}
-	logger.Info("wrote NATS CA", "path", caPath)
-
-	certPath := filepath.Join(authDir, "nats-server.crt")
-	if err := bus.WritePEM(certPath, certPEM); err != nil {
-		return fmt.Errorf("write NATS server cert: %w", err)
+	for _, w := range writes {
+		if err := os.WriteFile(filepath.Join(authDir, w.name), w.data, w.mode); err != nil {
+			return fmt.Errorf("write %s: %w", w.name, err)
+		}
 	}
-	logger.Info("wrote NATS server cert", "path", certPath)
-
-	keyPath := filepath.Join(authDir, "nats-server.key")
-	if err := bus.WritePEM(keyPath, keyPEM); err != nil {
-		return fmt.Errorf("write NATS server key: %w", err)
-	}
-	logger.Info("wrote NATS server key", "path", keyPath)
-
+	logger.Info("generated one embedded CA and issued enrollment + NATS certs",
+		"root_pin", authority.RootSPKIPin())
 	return nil
 }
 

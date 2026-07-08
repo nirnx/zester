@@ -20,19 +20,19 @@ func (d *Daemon) connectNATS() error {
 		return fmt.Errorf("rejecting NATS configuration: %w", err)
 	}
 
-	natsTLS, err := bus.NATSClientTLS(natsURLs, d.cfg.NatsCA)
-	if err != nil {
-		return fmt.Errorf("configure NATS TLS: %w", err)
-	}
+	natsTLS, natsCA, caOptional := bus.NATSClientTLS(natsURLs, d.cfg.NatsCA, d.cfg.AuthDir)
 	var client *bus.Client
 	for attempt := 1; ; attempt++ {
+		var err error
 		client, err = bus.NewClient(bus.ClientConfig{
-			URLs:         natsURLs,
-			Name:         "zester-master",
-			CredsFile:    d.cfg.AuthDir + "/master.creds",
-			TLS:          natsTLS,
-			Logger:       d.logger,
-			RetryConnect: true,
+			URLs:           natsURLs,
+			Name:           "zester-master",
+			CredsFile:      d.cfg.AuthDir + "/master.creds",
+			TLS:            natsTLS,
+			CAFile:         natsCA,
+			CAFileOptional: caOptional,
+			Logger:         d.logger,
+			RetryConnect:   true,
 			// Transport metrics for the Prometheus registry.
 			OnReconnect:    d.reg.NATSReconnects.Inc,
 			OnDisconnect:   func(error) { d.reg.NATSDisconnects.Inc() },
@@ -84,6 +84,9 @@ func (d *Daemon) initStorage(ctx context.Context) error {
 			break
 		}
 		if attempt >= 20 {
+			if !d.client.IsHealthy() {
+				return fmt.Errorf("initialize storage after %d attempts (NATS never became healthy — check nats_url, nats_ca, and the NATS server): %w", attempt, err)
+			}
 			return fmt.Errorf("initialize storage after %d attempts: %w", attempt, err)
 		}
 		wait := min(time.Duration(attempt)*time.Second, 5*time.Second)

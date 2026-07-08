@@ -20,6 +20,10 @@ type AdminRequest struct {
 	// Reason is an optional human-readable justification, recorded as
 	// RejectReason for reject and revoke operations.
 	Reason string `msgpack:"reason,omitempty"`
+
+	// Force overrides the refusal to approve a trust-mismatched record
+	// (a possible first-contact MITM). Additive; pre-feature clients omit it.
+	Force bool `msgpack:"force,omitempty"`
 }
 
 // Validate reports whether the request carries the required fields.

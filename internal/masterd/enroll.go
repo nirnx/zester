@@ -30,7 +30,13 @@ func (d *Daemon) startEnrollment(ctx context.Context) (func(), error) {
 		return nil, fmt.Errorf("create credential issuer: %w", err)
 	}
 
-	enrollHandler := enroll.NewHandler(enroll.HandlerConfig{
+	// The embedded CA (if any) was started earlier in Run (before the
+	// settings publisher, so cluster-info carries the CA bundle); reuse its
+	// GetCertificate callback. External mode leaves it nil and the server
+	// falls back to the operator-provided cert/key files.
+	getCert := d.enrollGetCert
+
+	handlerCfg := enroll.HandlerConfig{
 		Store:      d.enrollStore,
 		Challenges: challengeStore,
 		Issuer:     credIssuer,
@@ -39,14 +45,26 @@ func (d *Daemon) startEnrollment(ctx context.Context) (func(), error) {
 		// created enrollment so reactor rules (e.g. auto-approve) can react.
 		// Best-effort by contract: emit failures are Debug-logged.
 		OnPending: d.emitEnrollPendingEvent,
-	})
+	}
+	if d.bootstrapEnabled() {
+		handlerCfg.Bootstrap = d.bootstrapDoc
+		d.logger.Info("enrollment discovery enabled (GET /api/v1/enroll/ca)",
+			"advertise_urls", len(d.advertiseURLs()), "embedded_ca", d.caManager != nil)
+	}
+	if d.caManager != nil {
+		// Compare peel-reported trusted-CA fingerprints against our root to
+		// flag first-contact MITM (surfaced at the approval gate).
+		handlerCfg.CARootPin = d.caManager.rootPin
+	}
+	enrollHandler := enroll.NewHandler(handlerCfg)
 
 	enrollServerCfg := enroll.ServerConfig{
-		ListenAddr: d.cfg.Enroll.Addr,
-		TLSCert:    d.cfg.Enroll.TLSCert,
-		TLSKey:     d.cfg.Enroll.TLSKey,
-		Handler:    enrollHandler,
-		Logger:     d.logger,
+		ListenAddr:     d.cfg.Enroll.Addr,
+		TLSCert:        d.cfg.Enroll.TLSCert,
+		TLSKey:         d.cfg.Enroll.TLSKey,
+		GetCertificate: getCert,
+		Handler:        enrollHandler,
+		Logger:         d.logger,
 	}
 
 	apiTokens := make([]masterapi.TokenEntry, 0, len(d.cfg.API.Tokens))

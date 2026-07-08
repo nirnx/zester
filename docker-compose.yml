@@ -110,6 +110,27 @@ services:
     volumes:
       - auth-data:/data/auth
 
+  # Watchdog-supervised peel: exercises the packaged topology (zester-peel
+  # running under zester-watchdog with the peel's own credentials). The
+  # update integration tests assert wd-01 reports into `zester update status`.
+  wd-01:
+    build: .
+    command: ["zester-watchdog",
+      "--child-bin", "/usr/local/bin/zester-peel",
+      "--child-args", "--id wd-01 --master-url https://master:8443 --enroll-ca /data/auth/enroll-ca.crt --auth-dir /data/auth --data-dir /data",
+      "--id", "wd-01",
+      "--component", "peel",
+      "--nats-url", "tls://nats:4222",
+      "--nats-ca", "/data/auth/nats-ca.crt",
+      "--nats-creds", "/data/auth/wd-01.creds",
+      "--health-url", "http://127.0.0.1:9090/healthz",
+      "--soak-time", "10s"]
+    depends_on:
+      master:
+        condition: service_started
+    volumes:
+      - auth-data:/data/auth
+
   admin:
     build: .
     depends_on:

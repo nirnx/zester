@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	// bakedStatesDirDefault is the baked-in states fallback used when the KV
-	// cache dir is empty (overridable per Agent for tests).
-	bakedStatesDirDefault = "/data/states"
+	// bakedStatesDirName is the data_dir-relative directory of the baked-in
+	// states fallback used when the KV cache dir is empty (the resolved path
+	// is overridable per Agent for tests).
+	bakedStatesDirName = "states"
 
 	// statesDirRetryAttempts/statesDirRetryDelay bound the ReadDir retries in
 	// resolveStatesDir: the state-file cache's atomic dir swap (two

@@ -1196,3 +1196,26 @@ func TestDefaultBucketsIncludesReactorFiles(t *testing.T) {
 	}
 	t.Fatalf("bucket %q missing from DefaultBuckets", bus.BucketReactorFiles)
 }
+
+// TestNewClient_MissingCAFileIsNonFatal pins the boot-tolerance behavior:
+// a configured-but-absent CA file must not fail NewClient when RetryConnect
+// is set — the per-connect callback re-reads the path on every attempt, so
+// trust material that appears later heals without a restart. (Before the
+// callback migration this was a hard startup error on master/peel and a
+// fatal exit on the watchdog.)
+func TestNewClient_MissingCAFileIsNonFatal(t *testing.T) {
+	client, err := bus.NewClient(bus.ClientConfig{
+		URLs:          []string{"tls://127.0.0.1:1"},
+		TLS:           &tls.Config{MinVersion: tls.VersionTLS13},
+		CAFile:        filepath.Join(t.TempDir(), "missing-ca.crt"),
+		RetryConnect:  true,
+		MaxReconnects: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewClient with missing CA file must not fail at construction: %v", err)
+	}
+	defer func() { _ = client.Shutdown(context.Background()) }()
+	if client.IsHealthy() {
+		t.Error("client reports healthy with an unreachable server and missing CA")
+	}
+}

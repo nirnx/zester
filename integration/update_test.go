@@ -5,6 +5,7 @@ package integration
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -207,16 +208,27 @@ func TestUpdatePublish_SHA256Consistency(t *testing.T) {
 	}
 }
 
-// TestUpdateStatus_NoWatchdogs verifies that with no watchdog processes
-// running, the status command reports no nodes.
-func TestUpdateStatus_NoWatchdogs(t *testing.T) {
-	output := execInContainer(t, "admin", []string{
-		"zester", "update", "status", "--component", "peel",
-	})
-
-	if !strings.Contains(output, "No peel nodes reporting status") {
-		t.Errorf("expected 'No peel nodes reporting status', got: %s", output)
+// TestUpdateStatus_WatchdogReports verifies that wd-01 — a peel supervised
+// by zester-watchdog, connecting with the peel's own credentials (the
+// packaged topology) — appears in `zester update status`. This is the
+// regression test for peel JWTs lacking update-plane grants: without the
+// $KV.update-status.<id> put and bucket-handle grants, the watchdog
+// connects but every status heartbeat dies as a NATS permission violation
+// and the node never reports. The reporter writes every 30s; poll
+// generously.
+func TestUpdateStatus_WatchdogReports(t *testing.T) {
+	deadline := time.Now().Add(2 * time.Minute)
+	var output string
+	for time.Now().Before(deadline) {
+		output = execInContainer(t, "admin", []string{
+			"zester", "update", "status", "--component", "peel",
+		})
+		if strings.Contains(output, "wd-01") {
+			return
+		}
+		time.Sleep(5 * time.Second)
 	}
+	t.Fatalf("wd-01 never appeared in update status (watchdog status heartbeat with peel creds); last output: %s", output)
 }
 
 // extractSHA256 extracts the SHA-256 hex digest from CLI publish output.

@@ -190,9 +190,22 @@ func (s *Store) FindByPeelID(ctx context.Context, peelID string) (*Record, error
 
 // Approve transitions an enrollment from Pending to Approved.
 func (s *Store) Approve(ctx context.Context, id, approvedBy string) (*Record, error) {
+	return s.ApproveForce(ctx, id, approvedBy, false)
+}
+
+// ApproveForce approves a pending enrollment. When the record is flagged
+// TrustMismatch (a possible first-contact MITM: the peel trusted a CA that is
+// not this master's root), approval is refused unless force is true. Reactor
+// auto-approval always passes force=false, so a flagged record never
+// auto-approves.
+func (s *Store) ApproveForce(ctx context.Context, id, approvedBy string, force bool) (*Record, error) {
 	rec, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+
+	if rec.TrustMismatch && !force {
+		return nil, fmt.Errorf("enroll: record %s is trust-mismatched (peel reported CA %s, not this master's root) — a possible first-contact MITM; approve with --force only if you have verified the node out of band", id, rec.TrustedCASPKI)
 	}
 
 	if !rec.CanTransitionTo(StateApproved) {

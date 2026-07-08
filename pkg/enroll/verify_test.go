@@ -397,3 +397,38 @@ func TestSignEnrollmentID_RoundTrip(t *testing.T) {
 		t.Errorf("Round-trip verification failed: %v", err)
 	}
 }
+
+func TestTrustBinding_SignVerify_AndStripResistance(t *testing.T) {
+	kb, err := auth.GenerateKeyBundle(auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge := make([]byte, 32)
+	for i := range challenge {
+		challenge[i] = byte(i)
+	}
+	spki := "sha256:" + strings.Repeat("ab", 32)
+
+	sig, err := enroll.SignTrustBinding(kb.Seed, challenge, spki)
+	if err != nil {
+		t.Fatalf("SignTrustBinding: %v", err)
+	}
+	if err := enroll.VerifyTrustBinding(kb.PublicKey, challenge, spki, sig); err != nil {
+		t.Fatalf("VerifyTrustBinding: %v", err)
+	}
+	// Wrong SPKI fails (an attacker can't rebind to a different CA).
+	if err := enroll.VerifyTrustBinding(kb.PublicKey, challenge, "sha256:"+strings.Repeat("cd", 32), sig); err == nil {
+		t.Error("verification accepted a different SPKI")
+	}
+	// Wrong challenge fails (anti-replay).
+	other := make([]byte, 32)
+	if err := enroll.VerifyTrustBinding(kb.PublicKey, other, spki, sig); err == nil {
+		t.Error("verification accepted a different challenge")
+	}
+	// Domain separation: a primary enrollment signature never verifies as a
+	// trust binding.
+	primary, _ := enroll.SignChallenge(kb.Seed, challenge, "Xcurvekey")
+	if err := enroll.VerifyTrustBinding(kb.PublicKey, challenge, spki, primary); err == nil {
+		t.Error("a primary enrollment signature verified as a trust binding (domain separation broken)")
+	}
+}

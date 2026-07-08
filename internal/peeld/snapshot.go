@@ -12,13 +12,13 @@ import (
 	"github.com/nirnx/zester/pkg/bus"
 )
 
-// defaultSettingsSnapshotPath is the well-known on-disk location of the
+// settingsSnapshotFileName is the data_dir-relative file name of the
 // last-known-good resolved-settings snapshot (msgpack, 0600). The peel writes
 // it on every successful settings resolution and loads it at boot, so a peel
 // that restarts during a NATS outage warm-starts cachedSettings, the
 // basket_scope, and settings-sourced schedule entries from the settings it
 // last enforced (offline-first startup, roadmap C3 / finding 5).
-const defaultSettingsSnapshotPath = "/data/settings-snapshot.msgpack"
+const settingsSnapshotFileName = "settings-snapshot.msgpack"
 
 // saveSettingsSnapshot persists a resolved settings map to path (msgpack,
 // mode 0600, atomic temp-file + rename).

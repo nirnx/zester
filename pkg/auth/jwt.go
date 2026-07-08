@@ -463,17 +463,36 @@ func PeelUserJWTOptions(peelID string, accountPub string) UserJWTOptions {
 			// JetStream API — peel-heartbeat bucket (bucket handle; the Put
 			// itself is the per-peel $KV grant below, mirroring facts).
 			"$JS.API.STREAM.INFO.KV_peel-heartbeat",
+			// JetStream API — update plane (consumed by the colocated
+			// zester-watchdog, which connects with the peel's creds):
+			// update-status bucket handle + own-key status Put ($KV grant
+			// below), and read-only download access to the update-binaries
+			// object store (ordered consumers deliver chunks to _INBOX.>).
+			"$JS.API.STREAM.INFO.KV_update-status",
+			"$JS.API.STREAM.INFO.OBJ_update-binaries",
+			"$JS.API.DIRECT.GET.OBJ_update-binaries.>",
+			"$JS.API.STREAM.MSG.GET.OBJ_update-binaries",
+			"$JS.API.CONSUMER.CREATE.OBJ_update-binaries",
+			"$JS.API.CONSUMER.CREATE.OBJ_update-binaries.>",
+			"$JS.API.CONSUMER.DELETE.OBJ_update-binaries.>",
 			fmt.Sprintf("$KV.basket.%s.>", peelID),
 			fmt.Sprintf("$KV.facts.%s", peelID),
 			fmt.Sprintf("$KV.peel-heartbeat.%s", peelID),
+			fmt.Sprintf("$KV.update-status.%s", peelID),
 			"_INBOX.>",
 		},
 		AllowSub: []string{
 			fmt.Sprintf("zester.cmd.%s", peelID),
 			fmt.Sprintf("zester.cmd.%s.>", peelID),
+			// Update commands for the colocated watchdog (own id only).
+			fmt.Sprintf("zester.update.cmd.%s", peelID),
 			"zester.job.*.cancel",
 			"$KV.settings-files.>",
 			"$KV.secrets._master_curve_pub",
+			// Cluster-info bootstrap doc (CA bundle + NATS endpoints) for
+			// the discovery/refresh channel — read-only, own-scoped keys
+			// unaffected.
+			"$KV.secrets._cluster_info",
 			fmt.Sprintf("$KV.secrets.%s", peelID),
 			"$KV.basket.>",
 			"$KV.state-files.>",

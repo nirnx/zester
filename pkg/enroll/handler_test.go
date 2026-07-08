@@ -1242,3 +1242,69 @@ func TestHandleEnroll_PeelIDValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleEnroll_TrustBinding covers the embedded-CA trust binding: a
+// missing binding is rejected (strip resistance), a matching binding records
+// TrustChecked without mismatch, and a wrong CA flags TrustMismatch.
+func TestHandleEnroll_TrustBinding(t *testing.T) {
+	js := bustest.NewFakeJS()
+	ctx := context.Background()
+	if err := bus.InitializeStorage(ctx, js); err != nil {
+		t.Fatalf("init storage: %v", err)
+	}
+	store, _ := enroll.NewStore(ctx, enroll.StoreConfig{JS: js})
+	challenges, _ := enroll.NewChallengeStore(ctx, js, nil)
+	accountKB, _ := auth.GenerateKeyBundle(auth.RoleAccount)
+	issuer, _ := enroll.NewCredentialIssuer(enroll.CredentialIssuerConfig{AccountKP: accountKB})
+
+	const masterPin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	handler := enroll.NewHandler(enroll.HandlerConfig{
+		Store: store, Challenges: challenges, Issuer: issuer,
+		CARootPin: func() string { return masterPin },
+	})
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	submit := func(t *testing.T, peelID, reportedCA string, bind bool) *httptest.ResponseRecorder {
+		t.Helper()
+		kb, _ := auth.GenerateKeyBundle(auth.RoleUser)
+		curve, _ := auth.CurvePublicKeyFromSeed(kb.Seed)
+		ch, _ := challenges.Issue(ctx, peelID, kb.PublicKey)
+		sig, _ := enroll.SignChallenge(kb.Seed, ch.Challenge, curve)
+		req := enroll.EnrollRequest{
+			PeelID: peelID, PublicKey: kb.PublicKey, CurvePublicKey: curve,
+			ChallengeID: ch.ChallengeID, Signature: sig,
+		}
+		if bind {
+			req.TrustedCASPKI = reportedCA
+			req.TrustSignature, _ = enroll.SignTrustBinding(kb.Seed, ch.Challenge, reportedCA)
+		}
+		body, _ := json.Marshal(req)
+		r := httptest.NewRequest("POST", "/api/v1/enroll", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		return rec
+	}
+
+	// Stripped binding on an embedded-CA master -> 401 (strip resistance).
+	if rec := submit(t, "p-strip", "", false); rec.Code != http.StatusUnauthorized {
+		t.Errorf("stripped binding: status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// Matching CA -> created, TrustChecked, no mismatch.
+	if rec := submit(t, "p-ok", masterPin, true); rec.Code != http.StatusCreated {
+		t.Fatalf("matching binding: status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if r, _ := store.FindByPeelID(ctx, "p-ok"); r == nil || !r.TrustChecked || r.TrustMismatch {
+		t.Errorf("matching record: checked/mismatch = %v/%v, want true/false", r.TrustChecked, r.TrustMismatch)
+	}
+
+	// Wrong CA -> created but flagged mismatch.
+	wrong := "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	if rec := submit(t, "p-bad", wrong, true); rec.Code != http.StatusCreated {
+		t.Fatalf("mismatch binding: status = %d", rec.Code)
+	}
+	if r, _ := store.FindByPeelID(ctx, "p-bad"); r == nil || !r.TrustMismatch {
+		t.Errorf("mismatch record not flagged: %+v", r)
+	}
+}

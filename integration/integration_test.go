@@ -77,8 +77,14 @@ type stateResult struct {
 	SkipReason string            `json:"skip_reason,omitempty"`
 }
 
-// allPeels is the set of peel IDs expected in the Docker Compose stack.
+// allPeels is the set of Ubuntu-based peel IDs in the Docker Compose stack
+// (used by tests that need real useradd/apt tooling).
 var allPeels = []string{"web-01", "web-02", "web-03", "db-01", "db-02"}
+
+// allNodes is every enrolled node in the stack: the five peels plus wd-01,
+// the Alpine-based peel supervised by zester-watchdog (packaged topology).
+// Fleet-wide fan-out assertions count against this list.
+var allNodes = []string{"web-01", "web-02", "web-03", "db-01", "db-02", "wd-01"}
 
 // stack is the shared Docker Compose stack, started once in TestMain.
 var stack *compose.DockerCompose
@@ -163,11 +169,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Wait for all 5 peels to respond to test.ping. The timeout must account
+	// Wait for every node to respond to test.ping. The timeout must account
 	// for: enrollment connection retries (~60-90s), poll-until-approved backoff
 	// (10s → 20s → 40s → 80s worst case), and facts publishing (~5s).
 	if err := waitForPeels(ctx, 5*time.Minute); err != nil {
-		for _, svc := range allPeels {
+		for _, svc := range allNodes {
 			dumpServiceLogs(ctx, svc)
 		}
 		fmt.Fprintf(os.Stderr, "wait for peels: %v\n", err)
@@ -301,12 +307,15 @@ func requireSuccess(t *testing.T, results []cliResult, expectedPeel string) cliR
 	return cliResult{} // unreachable
 }
 
-// waitForPeels polls test.ping against '*' until all 5 peels respond
-// successfully, or the timeout expires.
+// waitForPeels polls test.ping against '*' until every expected node
+// responds successfully, or the timeout expires. Each iteration re-runs
+// auto-approve first: nodes that enroll after the initial approval batch
+// (e.g. wd-01, whose watchdog starts the peel child on its own schedule)
+// would otherwise stay pending forever.
 func waitForPeels(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	expected := make(map[string]bool, len(allPeels))
-	for _, id := range allPeels {
+	expected := make(map[string]bool, len(allNodes))
+	for _, id := range allNodes {
 		expected[id] = true
 	}
 
@@ -315,6 +324,16 @@ func waitForPeels(ctx context.Context, timeout time.Duration) error {
 		if err != nil {
 			time.Sleep(3 * time.Second)
 			continue
+		}
+
+		// Approve any enrollments that arrived since the last pass
+		// (idempotent; exits 0 when nothing is pending).
+		_, approveOut, approveErr := container.Exec(ctx,
+			[]string{"sh", "/playground/auto-approve.sh"}, tcexec.Multiplexed())
+		if approveErr == nil {
+			if out, _ := io.ReadAll(approveOut); strings.Contains(string(out), "Approving") {
+				fmt.Printf("waitForPeels: %s", string(out))
+			}
 		}
 
 		cmd := []string{"zester", "--format", "json", "--no-color", "--direct", "*", "test.ping"}
@@ -554,8 +573,8 @@ func TestCmdRun_Job(t *testing.T) {
 func TestMultiPeel_Fanout_Direct(t *testing.T) {
 	results := execCLI(t, "*", "test.ping")
 
-	if len(results) != 5 {
-		t.Fatalf("expected 5 results, got %d", len(results))
+	if len(results) != len(allNodes) {
+		t.Fatalf("expected %d results, got %d", len(allNodes), len(results))
 	}
 
 	seen := make(map[string]bool)
@@ -564,7 +583,7 @@ func TestMultiPeel_Fanout_Direct(t *testing.T) {
 		seen[r.PeelID] = true
 	}
 
-	for _, id := range allPeels {
+	for _, id := range allNodes {
 		if !seen[id] {
 			t.Errorf("missing result for peel %s", id)
 		}
@@ -574,8 +593,8 @@ func TestMultiPeel_Fanout_Direct(t *testing.T) {
 func TestMultiPeel_Fanout_Job(t *testing.T) {
 	results := execCLIJob(t, "*", "test.ping")
 
-	if len(results) != 5 {
-		t.Fatalf("expected 5 results, got %d", len(results))
+	if len(results) != len(allNodes) {
+		t.Fatalf("expected %d results, got %d", len(allNodes), len(results))
 	}
 
 	seen := make(map[string]bool)
@@ -584,7 +603,7 @@ func TestMultiPeel_Fanout_Job(t *testing.T) {
 		seen[r.PeelID] = true
 	}
 
-	for _, id := range allPeels {
+	for _, id := range allNodes {
 		if !seen[id] {
 			t.Errorf("missing result for peel %s", id)
 		}

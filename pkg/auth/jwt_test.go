@@ -634,3 +634,45 @@ func TestAccountJWT_WithSigningKeys(t *testing.T) {
 		t.Error("signing key not found in account claims")
 	}
 }
+
+// TestPeelUserJWTOptions_UpdatePlaneGrants pins the update-plane grants the
+// colocated zester-watchdog needs when connecting with the peel's creds:
+// own-id command subscribe, own-key status put + bucket handle, and
+// read-only update-binaries object-store download.
+func TestPeelUserJWTOptions_UpdatePlaneGrants(t *testing.T) {
+	opts := PeelUserJWTOptions("web-01", "AXXXX")
+
+	contains := func(list []string, want string) bool {
+		for _, s := range list {
+			if s == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	wantPub := []string{
+		"$KV.update-status.web-01",
+		"$JS.API.STREAM.INFO.KV_update-status",
+		"$JS.API.STREAM.INFO.OBJ_update-binaries",
+		"$JS.API.DIRECT.GET.OBJ_update-binaries.>",
+		"$JS.API.STREAM.MSG.GET.OBJ_update-binaries",
+		"$JS.API.CONSUMER.CREATE.OBJ_update-binaries",
+		"$JS.API.CONSUMER.CREATE.OBJ_update-binaries.>",
+		"$JS.API.CONSUMER.DELETE.OBJ_update-binaries.>",
+	}
+	for _, w := range wantPub {
+		if !contains(opts.AllowPub, w) {
+			t.Errorf("AllowPub missing %q", w)
+		}
+	}
+	if !contains(opts.AllowSub, "zester.update.cmd.web-01") {
+		t.Errorf("AllowSub missing zester.update.cmd.web-01")
+	}
+	// The grants must be own-id-scoped, never fleet-wide.
+	for _, banned := range []string{"$KV.update-status.>", "zester.update.cmd.>", "zester.update.>"} {
+		if contains(opts.AllowPub, banned) || contains(opts.AllowSub, banned) {
+			t.Errorf("grant %q must not be present (own-id scoping)", banned)
+		}
+	}
+}

@@ -16,9 +16,10 @@ import (
 // after a restart, and (b) is capped with insertion-order eviction, fixing
 // the unbounded growth of the old in-memory map.
 const (
-	// defaultDedupPath is the well-known on-disk location of the jid→epoch
-	// snapshot (msgpack, 0600), alongside the other /data peel state.
-	defaultDedupPath = "/data/peel-dedup.msgpack"
+	// dedupFileName is the file name of the jid→epoch dedup snapshot
+	// (msgpack, 0600), created under the peel's data_dir alongside the
+	// other peel runtime state.
+	dedupFileName = "peel-dedup.msgpack"
 
 	// dedupCapacity bounds the number of tracked JIDs; the oldest entry (by
 	// first observation) is evicted when a new JID would exceed it.

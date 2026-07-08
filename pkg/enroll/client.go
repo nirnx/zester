@@ -56,8 +56,18 @@ type ClientConfig struct {
 	PeelID string
 
 	// CAFile is the path to the CA certificate for server TLS verification.
-	// If empty, the system CA pool is used.
+	// If empty, the system CA pool is used. Ignored when TLSConfig is set.
 	CAFile string
+
+	// TLSConfig, when set, is the verified TLS config for the enrollment
+	// endpoint produced by ResolveTrust (trust ladder / pin / TOFU). Takes
+	// precedence over CAFile.
+	TLSConfig *tls.Config
+
+	// TrustedCASPKI, when set, is the sha256:<hex> pin of the CA the client
+	// trusted (from ResolveTrust). It is bound under the peel's signature in
+	// the enrollment submission so the master can flag first-contact MITM.
+	TrustedCASPKI string
 
 	// PollInterval is the base interval for polling enrollment status.
 	// Defaults to 10 seconds.
@@ -73,12 +83,13 @@ type ClientConfig struct {
 
 // Client is the peel-side enrollment HTTP client.
 type Client struct {
-	httpClient *http.Client
-	masterURLs []string
-	peelID     string
-	pollBase   time.Duration
-	pollMax    time.Duration
-	logger     *slog.Logger
+	httpClient    *http.Client
+	masterURLs    []string
+	peelID        string
+	pollBase      time.Duration
+	pollMax       time.Duration
+	logger        *slog.Logger
+	trustedCASPKI string
 
 	urlMu  sync.Mutex
 	urlIdx int
@@ -113,20 +124,23 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		cfg.Logger = slog.Default()
 	}
 
-	tlsCfg := &tls.Config{
-		MinVersion: tls.VersionTLS13,
-	}
-
-	if cfg.CAFile != "" {
-		caPEM, err := os.ReadFile(cfg.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("enroll: read CA file: %w", err)
+	var tlsCfg *tls.Config
+	switch {
+	case cfg.TLSConfig != nil:
+		tlsCfg = cfg.TLSConfig
+	default:
+		tlsCfg = &tls.Config{MinVersion: tls.VersionTLS13}
+		if cfg.CAFile != "" {
+			caPEM, err := os.ReadFile(cfg.CAFile)
+			if err != nil {
+				return nil, fmt.Errorf("enroll: read CA file: %w", err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(caPEM) {
+				return nil, fmt.Errorf("enroll: failed to parse CA certificate")
+			}
+			tlsCfg.RootCAs = pool
 		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("enroll: failed to parse CA certificate")
-		}
-		tlsCfg.RootCAs = pool
 	}
 
 	return &Client{
@@ -136,11 +150,12 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 				TLSClientConfig: tlsCfg,
 			},
 		},
-		masterURLs: urls,
-		peelID:     cfg.PeelID,
-		pollBase:   cfg.PollInterval,
-		pollMax:    cfg.MaxPollInterval,
-		logger:     cfg.Logger,
+		masterURLs:    urls,
+		peelID:        cfg.PeelID,
+		pollBase:      cfg.PollInterval,
+		pollMax:       cfg.MaxPollInterval,
+		logger:        cfg.Logger,
+		trustedCASPKI: cfg.TrustedCASPKI,
 	}, nil
 }
 
@@ -366,16 +381,29 @@ func (c *Client) tryEnroll(ctx context.Context, keyBundle *auth.KeyBundle, curve
 			return nil, fmt.Errorf("sign challenge: %w", err)
 		}
 
-		// Step 3: Submit enrollment.
-		c.logger.Info("submitting enrollment request", "peel_id", c.peelID)
-		resp, err := c.submitEnrollment(ctx, EnrollRequest{
+		// Bind the CA we trusted for this TLS connection under the same
+		// nkey + challenge, so the master can flag first-contact MITM and a
+		// relay MITM cannot strip the fields to look like a legacy peel.
+		req := EnrollRequest{
 			PeelID:         c.peelID,
 			PublicKey:      keyBundle.PublicKey,
 			CurvePublicKey: curveKey,
 			Hostname:       hostname,
 			ChallengeID:    nonce.ChallengeID,
 			Signature:      sig,
-		})
+		}
+		if c.trustedCASPKI != "" {
+			trustSig, err := SignTrustBinding(keyBundle.Seed, nonce.Challenge, c.trustedCASPKI)
+			if err != nil {
+				return nil, fmt.Errorf("sign trust binding: %w", err)
+			}
+			req.TrustedCASPKI = c.trustedCASPKI
+			req.TrustSignature = trustSig
+		}
+
+		// Step 3: Submit enrollment.
+		c.logger.Info("submitting enrollment request", "peel_id", c.peelID)
+		resp, err := c.submitEnrollment(ctx, req)
 		if err == nil {
 			return resp, nil
 		}

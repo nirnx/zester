@@ -34,6 +34,11 @@ COPY --from=builder /bin/zester-peel /usr/local/bin/zester-peel
 
 RUN mkdir -p /etc/zester
 
+# The compose/playground stack mounts its volumes under /data; binary
+# defaults are /var/lib/zester + /var/cache/zester, so pin the layout here.
+# Flags passed via compose (--id, --master-url, ...) still override.
+RUN printf 'auth_dir: "/data/auth"\ndata_dir: "/data"\nstates_cache: "/data/states-cache"\nnats_ca: "/data/auth/nats-ca.crt"\n' > /etc/zester/peel.yaml
+
 ARG PEEL_ROLE=default
 ARG PEEL_CLUSTER=default
 RUN echo "role: ${PEEL_ROLE}\ncluster_name: ${PEEL_CLUSTER}" > /etc/zester/facts

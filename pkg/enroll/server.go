@@ -22,6 +22,13 @@ type ServerConfig struct {
 	// TLSKey is the path to the server TLS private key.
 	TLSKey string
 
+	// GetCertificate, when set, supplies the server certificate dynamically
+	// on every TLS handshake (embedded-CA mode: the master self-issues the
+	// enrollment leaf and renews it in-process, swapping the returned
+	// certificate without a restart). When set it takes precedence over
+	// TLSCert/TLSKey, so those may be empty.
+	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
 	// Handler is the enrollment HTTP handler.
 	Handler *Handler
 
@@ -47,8 +54,8 @@ type Server struct {
 // TLS is mandatory — the enrollment API must never be served over plaintext
 // because it handles credential delivery to unauthenticated peels.
 func NewServer(cfg ServerConfig) (*Server, error) {
-	if cfg.TLSCert == "" || cfg.TLSKey == "" {
-		return nil, fmt.Errorf("enroll: TLS certificate and key are required; the enrollment API must not run without TLS")
+	if cfg.GetCertificate == nil && (cfg.TLSCert == "" || cfg.TLSKey == "") {
+		return nil, fmt.Errorf("enroll: TLS certificate and key (or GetCertificate) are required; the enrollment API must not run without TLS")
 	}
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8443"
@@ -62,9 +69,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	cfg.Handler.maxStreamDuration = cfg.MaxStreamDuration
 
-	cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
-	if err != nil {
-		return nil, fmt.Errorf("enroll: load TLS cert: %w", err)
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
+	if cfg.GetCertificate != nil {
+		tlsConfig.GetCertificate = cfg.GetCertificate
+	} else {
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+		if err != nil {
+			return nil, fmt.Errorf("enroll: load TLS cert: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
 	}
 
 	mux := http.NewServeMux()
@@ -97,10 +110,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS13,
-		},
+		TLSConfig:    tlsConfig,
 	}
 
 	return &Server{
@@ -109,10 +119,17 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}, nil
 }
 
-// isEnrollPath reports whether the request path belongs to the enrollment
-// API. Note /api/v1/enrollments (the REST admin route) is NOT an enrollment
-// path — only /api/v1/enroll and its subpaths are.
+// isEnrollPath reports whether the request path belongs to the strictly
+// rate-limited enrollment API. Note /api/v1/enrollments (the REST admin
+// route) is NOT an enrollment path — only /api/v1/enroll and its subpaths
+// are. The bootstrap route /api/v1/enroll/ca is EXCLUDED: it serves only
+// public, cacheable material (CA bundle + NATS endpoints) and is fetched by
+// every peel at boot — often many behind one NAT during provisioning — so
+// it uses the relaxed bucket to avoid throttling fleet bring-up.
 func isEnrollPath(path string) bool {
+	if path == "/api/v1/enroll/ca" {
+		return false
+	}
 	return path == "/api/v1/enroll" || strings.HasPrefix(path, "/api/v1/enroll/")
 }
 

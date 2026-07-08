@@ -59,7 +59,20 @@ import (
 	"github.com/nirnx/zester/pkg/template"
 )
 
-const authDir = "/data/auth"
+// defaultAuthDir and defaultDataDir are the binary defaults for the peel's
+// credential/trust directory and runtime-state directory (FHS: package state
+// lives under /var/lib); both are configurable via peel.yaml
+// auth_dir/data_dir (the compose/playground stacks pin /data explicitly).
+const (
+	defaultAuthDir = "/var/lib/zester/auth"
+	defaultDataDir = "/var/lib/zester"
+)
+
+// defaultConventionMasterURL is the Salt-style well-known master endpoint
+// tried when no master_urls/master_url is configured (parallels Salt's
+// "salt" and Puppet's "puppet" hostnames). Enrollment-path only — it is
+// never used to re-enroll a peel that already has credentials.
+const defaultConventionMasterURL = "https://zester:8443"
 
 // connectedReadyWait bounds how long Run waits for the connected phase before
 // logging "zester-peel ready" when NATS is reachable at boot. It preserves
@@ -219,16 +232,24 @@ type Agent struct {
 
 // New creates a peel Agent from a fully resolved config (flag/YAML precedence
 // already applied by the caller) and a logger already scoped with peel_id.
+// Empty AuthDir/DataDir (configs built programmatically, e.g. in tests) fall
+// back to the binary defaults so path derivation below never joins onto "".
 func New(cfg *config.PeelConfig, logger *slog.Logger) *Agent {
+	if cfg.AuthDir == "" {
+		cfg.AuthDir = defaultAuthDir
+	}
+	if cfg.DataDir == "" {
+		cfg.DataDir = defaultDataDir
+	}
 	return &Agent{
 		cfg:                  cfg,
 		logger:               logger,
 		peelID:               cfg.ID,
 		cancelFuncs:          make(map[string]context.CancelFunc),
 		execQueue:            make(chan execTask, execQueueSize),
-		dedup:                newDedupTracker(defaultDedupPath, dedupCapacity, dedupSaveDelay, logger),
-		settingsSnapshotPath: defaultSettingsSnapshotPath,
-		bakedStatesDir:       bakedStatesDirDefault,
+		dedup:                newDedupTracker(filepath.Join(cfg.DataDir, dedupFileName), dedupCapacity, dedupSaveDelay, logger),
+		settingsSnapshotPath: filepath.Join(cfg.DataDir, settingsSnapshotFileName),
+		bakedStatesDir:       filepath.Join(cfg.DataDir, bakedStatesDirName),
 	}
 }
 
@@ -271,7 +292,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// Keep the uptime gauge fresh on a coarse ticker.
 	go a.runUptimeGauge(runCtx)
 
-	a.credsPath = filepath.Join(authDir, peelID+".creds")
+	a.credsPath = filepath.Join(a.cfg.AuthDir, peelID+".creds")
 
 	// If no credentials exist, run enrollment flow. Enrollment polls on the
 	// caller's ctx (not runCtx): a SIGINT/SIGTERM while waiting for approval
@@ -284,23 +305,22 @@ func (a *Agent) Run(ctx context.Context) error {
 	// Create the NATS client. With RetryConnect an unreachable server is
 	// non-fatal: the client keeps retrying in the background and the daemon
 	// continues booting offline-first from local state.
-	logger.Info("connecting to NATS", "peel", peelID, "url", cfg.NatsURL)
-	natsURLs := bus.NormalizeNATSURLs([]string{cfg.NatsURL})
+	natsURLs := a.resolveNATSURLs()
+	logger.Info("connecting to NATS", "peel", peelID, "urls", natsURLs)
 	if err := bus.ValidateTLSNATSURLs(natsURLs); err != nil {
 		return fmt.Errorf("rejecting NATS configuration: %w", err)
 	}
 
-	natsTLS, err := bus.NATSClientTLS(natsURLs, cfg.NatsCA)
-	if err != nil {
-		return fmt.Errorf("configure NATS TLS: %w", err)
-	}
+	natsTLS, natsCA, caOptional := bus.NATSClientTLS(natsURLs, cfg.NatsCA, cfg.AuthDir)
 	client, err := bus.NewClient(bus.ClientConfig{
-		URLs:         natsURLs,
-		Name:         "zester-peel-" + peelID,
-		CredsFile:    a.credsPath,
-		TLS:          natsTLS,
-		Logger:       logger,
-		RetryConnect: true,
+		URLs:           natsURLs,
+		Name:           "zester-peel-" + peelID,
+		CredsFile:      a.credsPath,
+		TLS:            natsTLS,
+		CAFile:         natsCA,
+		CAFileOptional: caOptional,
+		Logger:         logger,
+		RetryConnect:   true,
 		OnReconnect: func() {
 			a.metrics.NATSReconnects.Inc()
 			a.metrics.PeelConnected.Set(1)
@@ -404,7 +424,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// local inputs; the master curve public key (KV) is loaded in the
 	// connected phase via resolver.SetSenderPub.
 	eng, err := template.NewEngine(template.EngineConfig{
-		BasePath: "/data",
+		BasePath: a.cfg.DataDir,
 		ModuleFn: a.moduleDispatch,
 		BasketFn: makeBasketFunc(client.JetStream(), a.ps, logger, a.basketScope),
 	})
@@ -641,7 +661,7 @@ func (a *Agent) runUptimeGauge(ctx context.Context) {
 // configured master URLs are tried in order (multi-master failover); the
 // single master_url field is kept for back-compat.
 func (a *Agent) ensureEnrolled(ctx context.Context) error {
-	if enroll.HasCredentials(authDir, a.peelID) {
+	if enroll.HasCredentials(a.cfg.AuthDir, a.peelID) {
 		return nil
 	}
 	masterURLs := a.cfg.MasterURLs
@@ -649,20 +669,44 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		masterURLs = []string{a.cfg.MasterURL}
 	}
 	if len(masterURLs) == 0 {
-		return fmt.Errorf("no credentials found and no master URL configured (--master-url / --master-urls); cannot enroll")
+		// Salt-style convention: with nothing configured, try the
+		// well-known "zester" hostname. On a network with a `zester` DNS
+		// record (+ TOFU or a pin), a truly empty peel.yaml enrolls.
+		masterURLs = []string{defaultConventionMasterURL}
+		a.logger.Warn("no master_urls configured; trying convention hostname (Salt-style default) — set master_urls to silence",
+			"url", defaultConventionMasterURL)
 	}
 	a.logger.Info("no credentials found, starting enrollment", "peel", a.peelID, "master_urls", masterURLs)
 
-	kb, err := enroll.LoadOrGenerateKey(authDir, a.peelID)
+	kb, err := enroll.LoadOrGenerateKey(a.cfg.AuthDir, a.peelID)
 	if err != nil {
 		return fmt.Errorf("load or generate enrollment key: %w", err)
 	}
 
+	// Resolve enrollment TLS trust via the ladder: enroll_ca file > pin >
+	// persisted anchor > system trust > TOFU. TOFU fires only on genuine
+	// first contact (no credentials — guaranteed here by the HasCredentials
+	// early return above).
+	trust, err := enroll.ResolveTrust(enroll.TrustConfig{
+		EnrollCAFile: a.cfg.EnrollCA,
+		Pins:         a.cfg.EnrollCAPin,
+		AnchorFile:   filepath.Join(a.cfg.AuthDir, "enroll-ca.crt"),
+		Mode:         enroll.TrustMode(a.cfg.EnrollTrust),
+		FirstContact: true,
+		MasterURLs:   masterURLs,
+		Logger:       a.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("resolve enrollment trust: %w", err)
+	}
+	a.logger.Info("enrollment trust resolved", "source", trust.Source, "ca_pin", trust.RootSPKI)
+
 	enrollClient, err := enroll.NewClient(enroll.ClientConfig{
-		MasterURLs: masterURLs,
-		PeelID:     a.peelID,
-		CAFile:     a.cfg.EnrollCA,
-		Logger:     a.logger,
+		MasterURLs:    masterURLs,
+		PeelID:        a.peelID,
+		TLSConfig:     trust.TLSConfig,
+		TrustedCASPKI: trust.RootSPKI,
+		Logger:        a.logger,
 	})
 	if err != nil {
 		return fmt.Errorf("create enrollment client: %w", err)
@@ -673,9 +717,14 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		return fmt.Errorf("enrollment failed: %w", err)
 	}
 
-	if _, err := enroll.SaveCredentials(authDir, a.peelID, result.JWT, kb.Seed); err != nil {
+	if _, err := enroll.SaveCredentials(a.cfg.AuthDir, a.peelID, result.JWT, kb.Seed); err != nil {
 		return fmt.Errorf("save enrollment credentials: %w", err)
 	}
+
+	// Persist the delivered CA bundle + NATS endpoint list so the connected
+	// phase (and future boots) need no master. The bootstrap doc arrives from
+	// the trust fetch (pin/TOFU) or can be fetched now for the file-CA path.
+	a.persistBootstrap(trust)
 
 	a.logger.Info("enrollment complete, credentials saved", "peel", a.peelID, "expires_at", result.ExpiresAt)
 	return nil

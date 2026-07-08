@@ -29,6 +29,23 @@ type MasterDaemonConfig struct {
 	API               MasterAPI     `yaml:"api"`
 	GitFS             GitFSConfig   `yaml:"gitfs"`
 	Reactor           MasterReactor `yaml:"reactor"`
+	CA                MasterCA      `yaml:"ca"`
+	NatsAdvertise     []string      `yaml:"nats_advertise_urls" flag:"nats-advertise-urls" usage:"Fleet-facing NATS URLs served to peels via enrollment discovery (tls:// only, no loopback); empty disables discovery"`
+}
+
+// MasterCA configures the embedded certificate authority. Mode selects how
+// the enrollment TLS certificate is obtained:
+//
+//	auto      embedded iff <ca-dir>/root.crt exists, else external (default)
+//	embedded  load the embedded CA and self-issue/renew the enroll cert;
+//	          fail startup if CA material is absent
+//	external  never touch CA material; require operator-provided enroll certs
+//	          (today's behavior)
+type MasterCA struct {
+	Mode               string   `yaml:"mode" flag:"ca-mode" usage:"CA mode: auto|embedded|external (default auto)"`
+	Dir                string   `yaml:"dir" flag:"ca-dir" usage:"Directory holding embedded CA material (default <auth_dir>/ca)"`
+	EnrollCertValidity Duration `yaml:"enroll_cert_validity" flag:"ca-enroll-cert-validity" usage:"Validity of the self-issued enrollment certificate"`
+	EnrollSANs         []string `yaml:"enroll_sans" flag:"ca-enroll-sans" usage:"Extra DNS/IP SANs for the self-issued enrollment certificate (hostname and localhost always included)"`
 }
 
 // MasterReactor holds reactor engine configuration (event-driven reactions).
@@ -89,23 +106,27 @@ type GitFSConfig struct {
 func MasterDaemonDefaults() MasterDaemonConfig {
 	return MasterDaemonConfig{
 		NatsURL:     "tls://nats:4222",
-		AuthDir:     "/data/auth",
-		StatesDir:   "/data/states",
-		SettingsDir: "/data/settings",
+		AuthDir:     "/var/lib/zester/auth",
+		StatesDir:   "/var/lib/zester/states",
+		SettingsDir: "/var/lib/zester/settings",
 		HealthAddr:  "127.0.0.1:9091",
 		LogLevel:    "info",
 		LogFormat:   "json",
 		Enroll: MasterEnroll{
 			Addr:    ":8443",
-			TLSCert: "/data/auth/enroll.crt",
-			TLSKey:  "/data/auth/enroll.key",
+			TLSCert: "/var/lib/zester/auth/enroll.crt",
+			TLSKey:  "/var/lib/zester/auth/enroll.key",
 		},
 		GitFS: GitFSConfig{
 			Interval: 5 * time.Minute,
 		},
+		CA: MasterCA{
+			Mode:               "auto",
+			EnrollCertValidity: Duration(90 * 24 * time.Hour),
+		},
 		Reactor: MasterReactor{
 			Enabled:         true,
-			Dir:             "/data/reactor",
+			Dir:             "/var/lib/zester/reactor",
 			Workers:         4,
 			MaxChainDepth:   3,
 			EnableChaining:  true,

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/signal"
@@ -26,6 +28,7 @@ type watchdogFlags struct {
 	childBin       string
 	childArgs      string
 	natsURL        string
+	bootstrapCache string
 	natsCA         string
 	natsCreds      string
 	healthURL      string
@@ -46,6 +49,7 @@ func registerFlags(fs *flag.FlagSet) *watchdogFlags {
 	fs.StringVar(&f.childBin, "child-bin", "", "Path to child binary (required)")
 	fs.StringVar(&f.childArgs, "child-args", "", "Arguments to pass to child (space-separated)")
 	fs.StringVar(&f.natsURL, "nats-url", "tls://localhost:4222", "NATS server URL")
+	fs.StringVar(&f.bootstrapCache, "bootstrap-cache", "", "Peel bootstrap cache file (discovery): when set, NATS URLs are read from it (polled until present) instead of --nats-url")
 	fs.StringVar(&f.natsCA, "nats-ca", "", "CA certificate for NATS TLS server verification")
 	fs.StringVar(&f.natsCreds, "nats-creds", "", "NATS credentials file")
 	fs.StringVar(&f.healthURL, "health-url", "http://127.0.0.1:9090/healthz", "Child health endpoint")
@@ -108,19 +112,6 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	// Validate the NATS configuration before starting the child so a bad
-	// config fails fast with nothing to clean up.
-	natsURLs := bus.NormalizeNATSURLs([]string{f.natsURL})
-	if err := bus.ValidateTLSNATSURLs(natsURLs); err != nil {
-		logger.Error("rejecting NATS configuration", "error", err)
-		os.Exit(1)
-	}
-	natsTLS, err := bus.NATSClientTLS(natsURLs, f.natsCA)
-	if err != nil {
-		logger.Error("configure NATS TLS", "error", err)
-		os.Exit(1)
-	}
-
 	slots := update.NewSlotManager(f.childBin)
 	if err := slots.Recover(); err != nil {
 		logger.Warn("slot recovery error", "error", err)
@@ -146,18 +137,44 @@ func main() {
 
 	go supervisor.AutoRestart(ctx)
 
+	stopChild := func() {
+		if err := supervisor.Stop(); err != nil {
+			logger.Warn("supervisor stop error", "error", err)
+		}
+	}
+
+	// Resolve NATS URLs AFTER the child starts. With --bootstrap-cache the
+	// watchdog follows the peel's discovered endpoints, polling the cache
+	// file the peel writes during enrollment (child-first ordering avoids the
+	// deadlock where the watchdog waits for a file only the child produces).
+	var natsURLs []string
+	if f.bootstrapCache != "" {
+		natsURLs = waitForBootstrapURLs(ctx, f.bootstrapCache, logger)
+		if natsURLs == nil {
+			stopChild() // ctx cancelled while waiting
+			return
+		}
+	} else {
+		natsURLs = bus.NormalizeNATSURLs([]string{f.natsURL})
+	}
+	if err := bus.ValidateTLSNATSURLs(natsURLs); err != nil {
+		logger.Error("rejecting NATS configuration", "error", err)
+		stopChild()
+		os.Exit(1)
+	}
+	// The CA file is deliberately not read here: bus.NewClient re-reads it
+	// on every (re)connect attempt, so a CA that has not been provisioned
+	// yet (fresh install; dropped out-of-band by the operator or init
+	// tooling) no longer fatals the watchdog before the child ever started —
+	// the connect loop heals once the file appears.
+	natsTLS, natsCA, caOptional := bus.NATSClientTLS(natsURLs, f.natsCA, "")
+
 	// Connect to NATS — enrollment-aware
 	var connectCh <-chan struct{}
 	if f.natsCreds != "" {
 		if _, err := os.Stat(f.natsCreds); os.IsNotExist(err) {
 			logger.Info("creds file not found, entering offline mode", "path", f.natsCreds)
 			connectCh = waitForCreds(ctx, f.natsCreds)
-		}
-	}
-
-	stopChild := func() {
-		if err := supervisor.Stop(); err != nil {
-			logger.Warn("supervisor stop error", "error", err)
 		}
 	}
 
@@ -189,12 +206,14 @@ func main() {
 	for attempt := 1; ; attempt++ {
 		var err error
 		client, err = bus.NewClient(bus.ClientConfig{
-			URLs:         natsURLs,
-			Name:         "zester-watchdog-" + f.id,
-			CredsFile:    f.natsCreds,
-			TLS:          natsTLS,
-			Logger:       logger,
-			RetryConnect: true,
+			URLs:           natsURLs,
+			Name:           "zester-watchdog-" + f.id,
+			CredsFile:      f.natsCreds,
+			TLS:            natsTLS,
+			CAFile:         natsCA,
+			CAFileOptional: caOptional,
+			Logger:         logger,
+			RetryConnect:   true,
 		})
 		if err == nil {
 			break
@@ -344,4 +363,38 @@ func waitForCreds(ctx context.Context, path string) <-chan struct{} {
 		}
 	}()
 	return ch
+}
+
+// watchdogBootstrapCache mirrors the peel's on-disk bootstrap cache JSON
+// (only the NATS URL list is read here).
+type watchdogBootstrapCache struct {
+	NATSURLs []string `json:"nats_urls"`
+}
+
+// waitForBootstrapURLs reads validated NATS URLs from the peel's bootstrap
+// cache, polling (10s) until the file appears and yields at least one valid
+// tls:// URL. Read-only — the peel owns the cache. Returns nil only on
+// context cancellation.
+func waitForBootstrapURLs(ctx context.Context, path string, logger *slog.Logger) []string {
+	logged := false
+	for {
+		if data, err := os.ReadFile(path); err == nil {
+			var c watchdogBootstrapCache
+			if json.Unmarshal(data, &c) == nil {
+				if urls, _ := bus.ValidateAdvertisableNATSURLs(c.NATSURLs); len(urls) > 0 {
+					logger.Info("watchdog: using NATS endpoints from bootstrap cache", "path", path, "count", len(urls))
+					return urls
+				}
+			}
+		}
+		if !logged {
+			logger.Info("watchdog: waiting for peel bootstrap cache", "path", path)
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(10 * time.Second):
+		}
+	}
 }

@@ -168,8 +168,8 @@ func TestMultiMaster(t *testing.T) {
 
 		// All 5 peels should respond to test.ping.
 		results := execCLI(t, "*", "test.ping")
-		if len(results) != 5 {
-			t.Fatalf("expected 5 ping results, got %d", len(results))
+		if len(results) != len(allNodes) {
+			t.Fatalf("expected %d ping results, got %d", len(allNodes), len(results))
 		}
 		for _, r := range results {
 			r.checkSuccess(t, fmt.Sprintf("peel %s ping", r.PeelID))
@@ -198,8 +198,8 @@ func TestMultiMaster(t *testing.T) {
 		// All peels should still respond (zester --direct uses NATS request/reply,
 		// which bypasses masters entirely).
 		results := execCLI(t, "*", "test.ping")
-		if len(results) != 5 {
-			t.Fatalf("expected 5 ping results after primary failure, got %d", len(results))
+		if len(results) != len(allNodes) {
+			t.Fatalf("expected %d ping results after primary failure, got %d", len(allNodes), len(results))
 		}
 		for _, r := range results {
 			r.checkSuccess(t, fmt.Sprintf("peel %s after primary master stop", r.PeelID))
@@ -226,8 +226,8 @@ func TestMultiMaster(t *testing.T) {
 		}
 
 		results := execCLI(t, "*", "test.ping")
-		if len(results) != 5 {
-			t.Fatalf("expected 5 ping results after secondary failure, got %d", len(results))
+		if len(results) != len(allNodes) {
+			t.Fatalf("expected %d ping results after secondary failure, got %d", len(allNodes), len(results))
 		}
 		for _, r := range results {
 			r.checkSuccess(t, fmt.Sprintf("peel %s after secondary master stop", r.PeelID))
@@ -284,8 +284,8 @@ func TestMultiMaster(t *testing.T) {
 
 		// All peels should respond after the master comes back.
 		results := execCLI(t, "*", "test.ping")
-		if len(results) != 5 {
-			t.Fatalf("expected 5 ping results after restart, got %d", len(results))
+		if len(results) != len(allNodes) {
+			t.Fatalf("expected %d ping results after restart, got %d", len(allNodes), len(results))
 		}
 		for _, r := range results {
 			r.checkSuccess(t, fmt.Sprintf("peel %s after master restart", r.PeelID))

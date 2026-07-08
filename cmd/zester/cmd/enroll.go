@@ -73,8 +73,10 @@ func runEnrollAdmin(cmd *cobra.Command, subject, action, enrollmentID, reason st
 	ctx, cancel := context.WithTimeout(context.Background(), enrollAdminTimeout)
 	defer cancel()
 
+	force, _ := cmd.Flags().GetBool("force")
+
 	if directKV, _ := cmd.Flags().GetBool("direct-kv"); directKV {
-		return runEnrollAdminKV(ctx, action, enrollmentID, reason)
+		return runEnrollAdminKV(ctx, action, enrollmentID, reason, force)
 	}
 
 	client, err := connectClient()
@@ -87,6 +89,7 @@ func runEnrollAdmin(cmd *cobra.Command, subject, action, enrollmentID, reason st
 		ID:       enrollmentID,
 		Operator: currentUsername(),
 		Reason:   reason,
+		Force:    force,
 	}
 	var resp enroll.AdminResponse
 	if err := client.Request(ctx, subject, &req, &resp); err != nil {
@@ -107,7 +110,7 @@ func runEnrollAdmin(cmd *cobra.Command, subject, action, enrollmentID, reason st
 // runEnrollAdminKV is the --direct-kv path: the state transition is applied
 // straight to the enrollment KV bucket with the CLI's own credentials, as
 // all admin operations were before the request/reply service existed.
-func runEnrollAdminKV(ctx context.Context, action, enrollmentID, reason string) (*enroll.Record, error) {
+func runEnrollAdminKV(ctx context.Context, action, enrollmentID, reason string, force bool) (*enroll.Record, error) {
 	store, client, err := enrollStore(ctx)
 	if err != nil {
 		return nil, err
@@ -117,7 +120,7 @@ func runEnrollAdminKV(ctx context.Context, action, enrollmentID, reason string) 
 	var rec *enroll.Record
 	switch action {
 	case "approve":
-		rec, err = store.Approve(ctx, enrollmentID, currentUsername())
+		rec, err = store.ApproveForce(ctx, enrollmentID, currentUsername(), force)
 	case "reject":
 		rec, err = store.Reject(ctx, enrollmentID, currentUsername(), reason)
 	case "revoke":

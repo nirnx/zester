@@ -1,0 +1,327 @@
+---
+title: "Embedded CA & Zero-Config Bootstrap"
+---
+
+This guide covers Zester's embedded certificate authority and the zero-config peel bootstrap it enables: initializing the CA, issuing the NATS server certificate, starting the master in embedded mode, distributing the SPKI pin, the peel trust ladder (including TOFU), NATS endpoint discovery, verifying trust at the approval gate, and the CA rotation runbook.
+
+For the general enrollment workflow (approve, reject, revoke, state machine), see the [Enrollment Operations Guide](/docs/operations/enrollment).
+
+---
+
+## Why an Embedded CA
+
+Zester requires TLS everywhere: the enrollment HTTPS API refuses to start without a certificate, and only `tls://` NATS URLs are accepted fleet-wide. Without an embedded CA, that means bringing your own PKI (OpenSSL ceremony, Vault, cert-manager) before the first peel can enroll — a significant barrier for a fresh cluster.
+
+The embedded CA removes that requirement. A single offline command generates a root + signing-intermediate hierarchy (stdlib `crypto/x509`, ECDSA P-256 — no external dependencies, no NATS connection needed):
+
+```bash
+zester ca init --dir /var/lib/zester/auth/ca
+```
+
+This produces:
+
+```
+/var/lib/zester/auth/ca/
+  root.crt           # Root CA certificate (long-lived trust anchor)
+  root.key           # Root private key
+  intermediate.crt   # Signing intermediate
+  intermediate.key   # Intermediate private key
+```
+
+and prints the root fingerprint and its **SPKI pin** (`sha256:<hex>`) — the one value you distribute to peels. You can reprint it at any time:
+
+```bash
+zester ca fingerprint     # prints the root SPKI pin (sha256:<hex>)
+zester ca print           # certificate details + PEM bundle
+```
+
+With the CA in place, the master self-issues its enrollment HTTPS certificate, peels verify the master against a two-line config (or nothing at all, via TOFU), and NATS endpoints are discovered rather than configured. Everything the enrollment guide describes still applies — the embedded CA only changes *how trust is established*, not the enrollment state machine.
+
+<Callout type="info" title="Intermediate does the signing">
+Leaf certificates (enrollment HTTPS, NATS server) are signed by the intermediate, never by the root directly. Peels trust the **root**, which is what makes intermediate rotation invisible to the fleet (see the rotation runbook below).
+</Callout>
+
+---
+
+## Bootstrap Sequence
+
+Bringing up a new cluster from zero:
+
+### 1. Initialize the CA (on the master host)
+
+```bash
+zester ca init --dir /var/lib/zester/auth/ca
+```
+
+Record the printed SPKI pin — you will put it in every `peel.yaml`. The default CA directory is `/var/lib/zester/auth/ca`; the master's `ca.dir` config must point at the same location if you choose a different one.
+
+### 2. Issue the NATS server certificate
+
+```bash
+zester ca issue nats-server \
+  --dns nats-1.example.com,nats-2.example.com \
+  --ip 10.0.1.10 \
+  --out /etc/nats/tls
+```
+
+This writes the server certificate as a **leaf + intermediate chain** plus its key. Install them on the NATS host and configure the NATS server's TLS block to use them. Peels validate the chain against the root they trust, so the served chain must include the intermediate.
+
+An enrollment certificate can be issued explicitly with `zester ca issue enroll`, but in embedded mode you normally do not need to — the master self-issues it (next step).
+
+### 3. Start the master in embedded mode
+
+```yaml title="/etc/zester/master.yaml"
+nats_url: tls://nats-1.example.com:4222
+nats_advertise_urls:
+  - tls://nats-1.example.com:4222
+  - tls://nats-2.example.com:4222
+
+ca:
+  mode: embedded          # or leave at the default "auto"
+  dir: /var/lib/zester/auth/ca
+```
+
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `ca.mode` | `string` | `auto` | `auto` \| `embedded` \| `external`. `auto` selects embedded iff `<auth_dir>/ca/root.crt` exists |
+| `ca.dir` | `string` | `<auth_dir>/ca` | Directory holding the CA material from `zester ca init` |
+| `ca.enroll_cert_validity` | `duration` | `90d` | Validity of the self-issued enrollment HTTPS certificate |
+| `ca.enroll_sans` | `[]string` | *(empty)* | Extra SANs for the enrollment certificate; the master's hostname and `localhost` are always included |
+| `nats_advertise_urls` | `[]string` | *(empty)* | Fleet-facing NATS URLs served to peels during discovery (see below) |
+
+In embedded mode the master **self-issues its enrollment HTTPS certificate** from the CA and hot-renews it in-process (via `GetCertificate`) — `enroll.tls_cert` / `enroll.tls_key` are unused and no cron or reload is needed for renewal. A `ca` readiness check on `/readyz` reports OK, `degraded` when the certificate is near expiry, or `down`.
+
+<Callout type="warn" title="Embedded mode fails closed">
+`ca.mode: embedded` with absent or unreadable CA material is a **fatal startup error** — the master will not silently fall back to external certificates. In `auto` mode, a missing `<auth_dir>/ca/root.crt` simply selects external mode.
+</Callout>
+
+If you already run your own PKI, set `ca.mode: external` and keep configuring `enroll.tls_cert` / `enroll.tls_key` as described in the enrollment guide — the embedded CA is entirely optional.
+
+### 4. Distribute the SPKI pin to peels
+
+Put the pin from step 1 into each peel's config (see the next section). This is the only secret-free trust artifact that needs to travel — one string, safe to bake into provisioning templates, cloud-init, or AMIs.
+
+### 5. Enroll peels as usual
+
+Peels start, discover the master, enroll, get approved, and then discover the NATS endpoints automatically. The enrollment approval workflow is unchanged, with one addition: the TRUST column (see [Verifying Trust at the Approval Gate](#verifying-trust-at-the-approval-gate)).
+
+---
+
+## Zero-Config Peel Configuration
+
+With the embedded CA, a production peel config is two lines:
+
+```yaml title="/etc/zester/peel.yaml"
+master_urls: ["https://master-1.example.com:8443"]
+enroll_ca_pin: "sha256:9f2a4c...e81b"
+```
+
+Everything else is discovered: the peel verifies the master's enrollment TLS against the pinned root, enrolls, fetches the bootstrap document, learns the fleet's NATS URLs from `nats_advertise_urls`, caches them locally, and connects. No `nats_url`, no `nats_ca`, no certificate files on the peel.
+
+The packaged `zester-peel.service` runs the peel under `zester-watchdog` with `--bootstrap-cache`, so the watchdog follows the peel's discovered NATS endpoints too — self-updates keep working against discovered infrastructure.
+
+If you rely on the [convention master](#the-convention-master-httpszester8443) (`zester` resolving in DNS), the config shrinks to one line — just the pin.
+
+---
+
+## The Peel Trust Ladder
+
+When the peel opens a TLS connection to the enrollment API, it establishes trust by walking a strict ladder — the **first configured rung wins**, and higher rungs are never consulted:
+
+| Rung | Condition | Behavior |
+|-|-|-|
+| 1. `enroll_ca` file | Config points at a CA certificate file | Strict: only that CA is trusted. Mismatch is fatal |
+| 2. `enroll_ca_pin` | Config carries a `sha256:<hex>` SPKI pin | Strict: only a root matching the pin is trusted. Mismatch is fatal |
+| 3. Persisted anchor | `<auth_dir>/enroll-ca.crt` exists (from a previous TOFU or enrollment) | Strict: only the anchored CA is trusted. Mismatch is fatal |
+| 4. System trust | The master's certificate chains to the OS trust store | Accepted (e.g. a public ACME certificate on the master) |
+| 5. TOFU | None of the above, **and** the peel has no credentials yet | Trust on first use: accept, log the CA fingerprint, persist it as the anchor (rung 3 for all future contacts) |
+
+`enroll_trust` controls whether the last rung exists: `tofu` (the default) allows first-contact trust; `strict` removes it, so an unverifiable master is always fatal.
+
+Two properties of the ladder are worth internalizing:
+
+- **A configured pin or anchor that mismatches is FATAL — never a downgrade.** The peel does not fall through to system trust or TOFU when a strict rung fails. There is no configuration in which an attacker's certificate is "tried against the next rung".
+- **Pins gate the handshake anchor itself.** The pin selects which root is allowed to anchor the TLS chain — the peel never blindly trusts a whole CA bundle served by the master. A poisoned bundle (legitimate CA plus an attacker CA appended) buys the attacker nothing: only the pinned root verifies.
+
+<Callout type="warn" title="Typos fail loudly">
+Peel config parsing is strict-YAML (`KnownFields`): a misspelled key such as `enroll_ca_pin:` → `enroll_capin:` fails startup with an error instead of being silently ignored — which would otherwise drop the peel from rung 2 down to TOFU without anyone noticing.
+</Callout>
+
+---
+
+## TOFU and the Persisted Anchor
+
+With no `enroll_ca`, no pin, and no system-trusted certificate, a **brand-new** peel accepts the master's CA on first contact — the same model as Salt's auto-accepted `minion_master.pub` or Puppet's first-run cert exchange. On acceptance the peel:
+
+1. Logs the trusted CA fingerprint (`sha256:<hex>`) at INFO — capture this in provisioning logs if you want an after-the-fact audit trail.
+2. Persists the CA certificate to `<auth_dir>/enroll-ca.crt` as the **anchor**.
+
+From then on the anchor is rung 3 of the ladder: every future contact must present a chain rooted in that exact CA. TOFU fires **only on genuine first contact** — a peel that already holds credentials and encounters an unknown authority fails hard, it never re-TOFUs. This is the equivalent of Salt's "The master key has changed" refusal: an infrastructure that silently re-trusted a new CA would hand a MITM every re-connecting node.
+
+**Break-glass** — when the master's CA legitimately changed outside the rotation procedure (e.g. rebuilt from scratch without restoring `/var/lib/zester/auth/ca`):
+
+```bash
+# On the affected peel — deliberate operator action, not automation:
+rm /data/auth/enroll-ca.crt
+systemctl restart zester-peel
+```
+
+Note that an already-enrolled peel also holds NATS credentials signed by the old deployment; a full master rebuild typically means re-enrollment (see the enrollment guide's disaster-recovery section), not just anchor removal.
+
+<Callout type="info" title="TOFU vs. pin">
+TOFU's residual risk is the first-contact window: a network attacker positioned at exactly the moment a fresh peel first dials out can present their own CA. Distributing the SPKI pin (rung 2) closes that window completely, at the cost of one string in the config. An attacker who can *also* rewrite `peel.yaml` to change the pin is outside the threat model — that is host compromise, and it is the same residual Salt and Puppet carry.
+</Callout>
+
+---
+
+## The Convention Master: `https://zester:8443`
+
+When neither `master_urls` nor `master_url` is configured, the peel tries `https://zester:8443` — the same convention Salt (`salt`) and Puppet (`puppet`) use. Point a DNS record (or search-domain entry) named `zester` at your master and unconfigured peels find it automatically.
+
+This applies to the **enrollment path only**: a peel that already has credentials never contacts the convention host and never re-enrolls through it.
+
+<Callout type="warn" title="DNS is untrusted input">
+Whoever controls DNS resolution for `zester` on the peel's network controls where first contact lands. The convention host pairs safely with a pin (`enroll_ca_pin` makes the DNS answer irrelevant — a wrong host simply fails the handshake) but pairs with plain TOFU only on networks where you trust DNS. For unattended provisioning on untrusted networks, always ship the pin.
+</Callout>
+
+---
+
+## NATS Endpoint Discovery
+
+### What the master advertises
+
+`nats_advertise_urls` is the list of **fleet-facing** NATS URLs the master hands to peels. It is validated at startup: every entry must be `tls://`, and loopback (`localhost`, `127.0.0.0/8`, numeric-loopback forms), unspecified (`0.0.0.0`), and link-local addresses are **rejected**. This mandate exists because the master's *own* NATS view is frequently `tls://localhost:4222` (co-located NATS) — a view that must never leak to peels, which would then dial their own loopback and fail confusingly. If a URL is not reachable from a peel's network position, it does not belong in `nats_advertise_urls`.
+
+### The bootstrap document
+
+The master serves the advertised URLs plus the CA bundle in one place:
+
+```
+GET /api/v1/enroll/ca      (unauthenticated, cacheable, relaxed rate limit)
+```
+
+```json
+{
+  "v": 1,
+  "ca_bundle_pem": "-----BEGIN CERTIFICATE-----\n...",
+  "fingerprint": "sha256:9f2a4c...e81b",
+  "nats_urls": ["tls://nats-1.example.com:4222", "tls://nats-2.example.com:4222"],
+  "issued_at": "2026-07-08T10:00:00Z"
+}
+```
+
+The same document is republished to the secrets KV bucket under the key `_cluster_info`; peel JWTs carry a read grant for `$KV.secrets._cluster_info`, so already-connected peels receive endpoint updates live over their NATS connection, without touching the HTTP API.
+
+### How the peel picks its NATS servers
+
+At boot the peel resolves its NATS server list by precedence:
+
+1. **Explicit `nats_url`** in config (non-empty) — always wins; discovery is bypassed.
+2. **Bootstrap cache** — `<data_dir>/nats-bootstrap.msgpack` from a previous discovery. The cache is keyed by an identity hash of `master_urls` + pins, so repointing the peel at a different cluster invalidates it rather than replaying stale endpoints.
+3. **Enrollment discovery** — fetch the bootstrap document over anchor/pin-verified TLS.
+4. **Builtin tail** — `tls://nats:4222`, the historical convention default.
+
+Because rung 2 works without any master reachable, discovery is **offline-first**: a peel rebooting during a full master outage connects to NATS from its cache and enforces from local state, consistent with the rest of the peel's offline-first design.
+
+Two mechanisms keep the endpoint list current on a running peel:
+
+- **KV watch**: updates to `_cluster_info` are applied to the live connection as they arrive.
+- **Recovery loop**: if NATS stays unhealthy for more than 5 minutes, the peel re-fetches the bootstrap document over anchor/pin-verified TLS and repoints the live connection via `SetServerPool` + `ForceReconnect` (nats.go v1.52.0) — no process restart. This is the path that saves a fleet whose NATS cluster moved to new addresses while peels were disconnected.
+
+Every candidate URL list — freshly fetched, KV-delivered, or cached — passes the same `tls://` + no-loopback validator before use. A poisoned or corrupt list cannot point a peel at a plaintext or loopback endpoint.
+
+---
+
+## Verifying Trust at the Approval Gate
+
+TOFU's first-contact window has a second line of defense at approval time. During enrollment the peel **signs the SPKI of the CA it decided to trust** into its submission (`trusted_ca_spki` + `trust_signature`, Ed25519 — domain-separated, challenge-bound, and capability-bound, so a relay MITM cannot strip or replay the fields). The master compares that fingerprint against its own root and flags a `TrustMismatch` on the record.
+
+`zester enroll list` shows the result in the TRUST column:
+
+```
+ID                              PEEL ID   HOSTNAME               STATE     TRUST      CREATED
+enr-2JFK0003ABCD1234567890      web-03    web-03.prod.internal   pending   ok         2026-07-08 10:00:12
+enr-2JFK0006EFGH9876543210      app-01    app-01.prod.internal   pending   MISMATCH!  2026-07-08 10:02:33
+enr-2JFK0007IJKL5555555555      db-02     db-02.prod.internal    pending   -          2026-07-08 10:03:01
+```
+
+| Value | Meaning |
+|-|-|
+| `ok` | The peel trusted the same root this master holds |
+| `MISMATCH!` | The peel trusted a **different** CA than this master's root — it talked to someone else on first contact |
+| `-` | No trust attestation on the record (e.g. a pre-feature peel version) |
+
+A `MISMATCH!` means the peel's first TLS contact terminated at a CA that is not yours — the signature proves it end-to-end, so a relay MITM that forwarded the enrollment to your real master is **caught here**, at the human approval gate. `zester enroll show <id>` prints both fingerprints (the peel's trusted SPKI and the master's root) for comparison.
+
+Enforcement:
+
+- `zester enroll approve` **refuses** a mismatched record. `--force` overrides — use it only when you have positively explained the mismatch (e.g. the peel enrolled through a TLS-terminating proxy you own, and you have verified the proxy's CA fingerprint is the one on the record).
+- Reactor auto-approval rules refuse mismatched records **unconditionally** — there is no force path for automation. A mismatch always requires a human.
+
+<Callout type="warn" title="What a mismatch does NOT protect against">
+The signed fingerprint catches a *relay* MITM (attacker in the middle, real master behind them). A *blocking* MITM — an attacker who fully impersonates a fake master and never forwards anything — yields a captive node: it enrolls against the attacker, and its credentials are useless on your real NATS, so it never joins your fleet. Recovering such a node requires deleting its nkey seed (the identity key was exposed to the attacker) and re-enrolling from scratch. The pin prevents both scenarios outright.
+</Callout>
+
+---
+
+## The All-In-One Box Exception
+
+A single machine running NATS + master + peel **cannot** be zero-config. The master's `nats_advertise_urls` must contain fleet-reachable URLs — it may legitimately advertise nothing loopback — so a co-located peel relying on discovery would receive URLs meant for the outside network (or none at all). On an all-in-one box, keep the explicit setting:
+
+```yaml title="/etc/zester/peel.yaml (all-in-one box)"
+master_urls: ["https://localhost:8443"]
+enroll_ca_pin: "sha256:9f2a4c...e81b"
+nats_url: tls://localhost:4222     # explicit — bypasses discovery (rung 1 of the precedence)
+```
+
+Explicit `nats_url` is precedence rung 1, so discovery, the cache, and the recovery loop are all bypassed for this peel. Fleet peels on the same cluster remain zero-config.
+
+---
+
+## CA Rotation Runbook
+
+### Intermediate rotation (routine)
+
+Peels trust the **root**; the intermediate only signs leaves. Rotating it is invisible to the fleet:
+
+1. Issue a new intermediate from the root (replace `intermediate.crt`/`intermediate.key` in `ca.dir`).
+2. Re-issue the NATS server certificate (`zester ca issue nats-server ...`) and drop the new chain on the NATS host.
+3. Restart or reload the master — it self-issues a fresh enrollment certificate chained through the new intermediate.
+
+No peel-side action. No pin change (the pin is the *root* SPKI). Anchors remain valid.
+
+### Root rollover (rare, two-phase)
+
+The root is the fleet's trust anchor, so rollover uses an **overlap bundle** — at no point does any peel see a chain it cannot verify:
+
+**Phase 1 — introduce the new root alongside the old:**
+
+1. Generate the new root hierarchy (new `zester ca init` into a staging dir).
+2. Distribute the **overlap bundle** (old root + new root concatenated) as the trust source: update peels' `nats_ca`-equivalent trust material and, where pins are used, stage the new pin into provisioning for *new* peels. During overlap, chains from either root verify.
+3. Re-issue the NATS server certificate from the **new** CA and drop the new chain files on the NATS hosts. No NATS or peel process restarts are needed: the NATS client's `RootCAs` callback re-reads the CA file on every reconnect, so the rollover is literally a file drop — peels pick up the new trust on their next reconnect.
+4. Switch the master's `ca.dir` to the new hierarchy; it self-issues a new enrollment certificate. Peels' persisted anchors are refreshed through the bootstrap document / `_cluster_info` path.
+
+**Phase 2 — retire the old root:**
+
+5. Once the whole fleet has reconnected under the new root (verify via `zester peel list` — everyone ONLINE — and the `ca` readiness check), drop the old root from the bundle.
+6. Update any remaining `enroll_ca_pin` values in configuration management to the new pin (`zester ca fingerprint` on the new CA dir).
+
+<Callout type="warn" title="Never rotate during a rollout soak">
+Do not perform root rollover (or any NATS TLS change) while a self-update rollout is in its soak window. A peel whose NATS connection drops during soak fails readiness and **auto-rolls back a perfectly good binary** — the same caveat as NATS maintenance in the self-update documentation. Finish or abort the rollout first.
+</Callout>
+
+---
+
+## Threat Model Summary
+
+| Scenario | Outcome |
+|-|-|
+| Passive network attacker | Nothing — TLS 1.3 everywhere, `tls://` mandated fleet-wide |
+| First-contact MITM vs. a pinned peel | Handshake fails (pin gates the anchor); fatal, no downgrade |
+| First-contact MITM vs. a TOFU peel (relay) | Enrollment lands with `MISMATCH!`; approve refuses without `--force`, reactor refuses unconditionally |
+| First-contact MITM vs. a TOFU peel (blocking) | Captive node with useless credentials; recover by deleting the seed and re-enrolling |
+| CA swap against an already-enrolled peel | Fatal "master key changed"-style refusal (anchor mismatch); never re-TOFU |
+| Served CA-bundle poisoning | Ineffective — pins/anchors gate the handshake anchor, never a whole served bundle |
+| Attacker who can rewrite `peel.yaml` | Out of scope (host compromise) — same residual as Salt/Puppet |
+
+The default (TOFU) is deliberate Salt/Puppet parity: zero-friction bootstrap with an auditable, sticky anchor. Shipping the SPKI pin — one string in a two-line config — upgrades every peel to strict verification and closes the first-contact window entirely. There is no configuration in which a verification failure silently degrades to a weaker rung.

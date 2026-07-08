@@ -23,6 +23,8 @@ type Handler struct {
 	logger            *slog.Logger
 	maxStreamDuration time.Duration
 	onPending         func(Record)
+	bootstrap         BootstrapProvider
+	caRootPin         func() string
 }
 
 // HandlerConfig configures the enrollment HTTP handler.
@@ -39,6 +41,16 @@ type HandlerConfig struct {
 	// zester.event._master.enroll.pending.<id> reactor event; implementations
 	// must be fast and must never fail the enrollment.
 	OnPending func(Record)
+
+	// Bootstrap, when non-nil, enables GET /api/v1/enroll/ca serving the CA
+	// trust bundle + fleet NATS endpoints (embedded-CA / discovery mode).
+	Bootstrap BootstrapProvider
+
+	// CARootPin, when non-nil, returns the master's own CA root SPKI pin.
+	// handleEnroll compares each peel's reported TrustedCASPKI against it to
+	// flag first-contact MITM (TrustMismatch). Nil in external mode (no
+	// embedded CA to compare against).
+	CARootPin func() string
 }
 
 // NewHandler creates enrollment HTTP handlers.
@@ -52,6 +64,8 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		issuer:     cfg.Issuer,
 		logger:     cfg.Logger,
 		onPending:  cfg.OnPending,
+		bootstrap:  cfg.Bootstrap,
+		caRootPin:  cfg.CARootPin,
 	}
 }
 
@@ -65,6 +79,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/enroll/{id}/status", h.handleStatus)
 	mux.HandleFunc("GET /api/v1/enroll/{id}/stream", h.handleStream)
 	mux.HandleFunc("GET /api/v1/enroll/{id}/creds", h.handleCreds)
+	h.registerBootstrapRoute(mux)
 }
 
 // --- Request/Response types ---
@@ -78,6 +93,13 @@ type EnrollRequest struct {
 	ChallengeID    string            `json:"challenge_id"`
 	Signature      []byte            `json:"signature"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
+
+	// TrustedCASPKI + TrustSignature bind the CA the peel trusted for this
+	// TLS connection to its Ed25519 key (additive; pre-feature peels omit
+	// them). The signature covers the challenge and a capability marker, so
+	// a relay MITM cannot strip the fields and masquerade as a legacy peel.
+	TrustedCASPKI  string `json:"trusted_ca_spki,omitempty"`
+	TrustSignature []byte `json:"trust_signature,omitempty"`
 }
 
 // EnrollResponse is the response body for POST /api/v1/enroll.
@@ -212,6 +234,46 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Trust binding. On an embedded-CA master (a non-public root), the
+	// binding is REQUIRED: every legitimate peel that completes the TLS
+	// handshake resolved a non-empty trusted-CA SPKI and sends it, so a
+	// missing binding means a relay MITM stripped the fields to masquerade as
+	// a legacy peel — reject it. A present binding must verify (a
+	// present-but-forged binding is an integrity failure). When the master
+	// has a root to compare against, the comparison result is recorded
+	// (TrustChecked) and mismatches are flagged for the approval gate.
+	masterPin := ""
+	if h.caRootPin != nil {
+		masterPin = h.caRootPin()
+	}
+	trustMismatch := false
+	trustChecked := false
+	if req.TrustedCASPKI == "" {
+		if masterPin != "" {
+			h.logger.Warn("enroll: missing trust binding on an embedded-CA master (possible relay MITM strip)",
+				"peel_id", req.PeelID, "source_ip", remoteIP(r))
+			h.writeError(w, http.StatusUnauthorized, "trust binding required")
+			return
+		}
+		// External-CA master: no root to compare against; nothing to check.
+	} else {
+		if err := VerifyTrustBinding(req.PublicKey, challenge.Challenge, req.TrustedCASPKI, req.TrustSignature); err != nil {
+			h.logger.Warn("enroll: trust-binding verification failed",
+				"peel_id", req.PeelID, "source_ip", remoteIP(r))
+			h.writeError(w, http.StatusUnauthorized, "trust binding verification failed")
+			return
+		}
+		if masterPin != "" {
+			trustChecked = true
+			if !strings.EqualFold(masterPin, req.TrustedCASPKI) {
+				trustMismatch = true
+				h.logger.Warn("enroll: TRUST MISMATCH — peel reported a CA that is not this master's root (possible first-contact MITM)",
+					"peel_id", req.PeelID, "source_ip", remoteIP(r),
+					"reported_ca", req.TrustedCASPKI, "master_ca", masterPin)
+			}
+		}
+	}
+
 	// Check for existing enrollment.
 	existing, err := h.store.FindByPeelID(r.Context(), req.PeelID)
 	if err != nil {
@@ -258,6 +320,9 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 		RemoteAddr:     remoteIP(r),
+		TrustedCASPKI:  req.TrustedCASPKI,
+		TrustMismatch:  trustMismatch,
+		TrustChecked:   trustChecked,
 	}
 
 	if err := h.store.Create(r.Context(), rec); err != nil {

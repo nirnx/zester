@@ -9,6 +9,7 @@ package masterd
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -163,6 +164,15 @@ type Daemon struct {
 
 	enrollStore *enroll.Store
 
+	// caManager is the embedded-CA state (nil in external mode): holds the
+	// loaded Authority, the in-memory self-issued enrollment leaf served via
+	// GetCertificate, and the renewal loop. Read by the 'ca' readiness check.
+	caManager *caManager
+
+	// enrollGetCert is the enrollment TLS GetCertificate callback from
+	// startCA (nil in external mode); startEnrollment hands it to the server.
+	enrollGetCert func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
 	// enrollState tracks the enrollment server goroutine's state
 	// (health.CheckResult) for the 'enroll-server' readiness check: OK is
 	// stored just before Start blocks; if Start returns with a real error
@@ -281,11 +291,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer d.client.Shutdown(runCtx)
 	d.js = d.client.JetStream()
 	d.busClient.Store(d.client) // 'nats' readiness check goes live
-	d.logger.Info("NATS connected", "url", d.cfg.NatsURL)
+	if d.client.IsHealthy() {
+		d.logger.Info("NATS connected", "url", d.cfg.NatsURL)
+	} else {
+		d.logger.Info("NATS client created; connecting in background", "url", d.cfg.NatsURL)
+	}
 
 	if err := d.initStorage(runCtx); err != nil {
 		return err
 	}
+
+	// Start the embedded CA (if any) BEFORE the settings publisher so the
+	// cluster-info bootstrap document published from startSettingsPublisher
+	// carries the CA bundle. The GetCertificate callback is handed to the
+	// enrollment server later.
+	getCert, err := d.startCA(runCtx)
+	if err != nil {
+		return err
+	}
+	d.enrollGetCert = getCert
 
 	if err := d.startSettingsPublisher(runCtx); err != nil {
 		return err

@@ -23,6 +23,12 @@ import (
 // is stored, so peels can read it for secret decryption.
 const MasterCurvePubKey = "_master_curve_pub"
 
+// ClusterInfoKey is the well-known KV key (secrets bucket) where the master
+// publishes the JSON bootstrap document (CA trust bundle + fleet NATS
+// endpoints) for the peel discovery/refresh channel. Published by every
+// master, not lease-gated, idempotent — the MasterCurvePubKey pattern.
+const ClusterInfoKey = "_cluster_info"
+
 // ManifestKey is the well-known KV key holding the file manifest for the
 // current publish batch: a MessagePack-encoded, key-sorted []ManifestEntry.
 // It is written after all file keys and before the _revision bump, so a

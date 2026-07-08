@@ -15,6 +15,11 @@ var enrollApproveCmd = &cobra.Command{
 	RunE:  runEnrollApprove,
 }
 
+func init() {
+	enrollApproveCmd.Flags().Bool("force", false,
+		"approve a trust-mismatched record (possible first-contact MITM) — use only after verifying the node out of band")
+}
+
 func runEnrollApprove(cmd *cobra.Command, args []string) error {
 	rec, err := runEnrollAdmin(cmd, bus.SubjectAdminEnrollApprove, "approve", args[0], "")
 	if err != nil {

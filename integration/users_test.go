@@ -163,14 +163,13 @@ func TestUsersFormula_AllPeels(t *testing.T) {
 		cleanupUsers(t, peel)
 	}
 
-	results := execCLI(t, "*", "state.apply", "users")
-
-	if len(results) != 5 {
-		t.Fatalf("expected 5 results, got %d", len(results))
-	}
-
-	for _, r := range results {
-		r.checkSuccess(t, fmt.Sprintf("peel %s user state", r.PeelID))
+	// Apply per-peel over the Ubuntu peels: the users formula needs real
+	// useradd/group tooling, so it deliberately excludes wd-01 (Alpine,
+	// watchdog-supervised). A '*' fan-out would include wd-01.
+	for _, peel := range allPeels {
+		results := execCLI(t, peel, "state.apply", "users")
+		r := requireSuccess(t, results, peel)
+		r.checkSuccess(t, fmt.Sprintf("peel %s user state", peel))
 	}
 
 	// Spot-check: verify deploy user exists on db-01.

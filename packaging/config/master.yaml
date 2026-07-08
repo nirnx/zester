@@ -3,7 +3,7 @@
 # NATS connection. Only tls:// URLs are accepted — plaintext nats:// is
 # rejected at startup. Point nats_ca at the CA that signed the NATS
 # server certificate (falls back to NATS_CA_FILE, then
-# /data/auth/nats-ca.crt when present, then the system trust store).
+# /var/lib/zester/auth/nats-ca.crt when present, then the system trust store).
 nats_url: "tls://localhost:4222"
 nats_ca: "/var/lib/zester/auth/nats-ca.crt"
 
@@ -30,6 +30,23 @@ enroll:
   addr: ":8443"
   tls_cert: "/var/lib/zester/auth/enroll.crt"
   tls_key: "/var/lib/zester/auth/enroll.key"
+
+# Embedded certificate authority (optional). With ca.mode auto (default), the
+# master runs the embedded CA iff <auth_dir>/ca/root.crt exists — create it
+# once with:  zester ca init --dir /var/lib/zester/auth/ca
+# In embedded mode the master self-issues and renews its enrollment cert (the
+# enroll.tls_cert/key above are then unused) and serves the CA bundle to peels
+# via discovery. Distribute the printed SPKI pin to peels as enroll_ca_pin.
+# ca:
+#   mode: auto
+#   dir: "/var/lib/zester/auth/ca"
+
+# Fleet-facing NATS endpoints served to peels via enrollment discovery.
+# tls:// only; loopback/unspecified/link-local are rejected (a master's own
+# tls://localhost view never leaks). Required for zero-config peels — without
+# it, peels must set nats_url themselves.
+# nats_advertise_urls:
+#   - "tls://nats.example.com:4222"
 
 # REST API for automation, served on the enrollment listener.
 # Routes are only registered when at least one token is configured.

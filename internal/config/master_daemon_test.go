@@ -14,20 +14,20 @@ func TestMasterDaemonDefaults(t *testing.T) {
 	if cfg.NatsURL != "tls://nats:4222" {
 		t.Errorf("NatsURL = %q, want %q", cfg.NatsURL, "tls://nats:4222")
 	}
-	if cfg.StatesDir != "/data/states" {
-		t.Errorf("StatesDir = %q, want %q", cfg.StatesDir, "/data/states")
+	if cfg.StatesDir != "/var/lib/zester/states" {
+		t.Errorf("StatesDir = %q, want %q", cfg.StatesDir, "/var/lib/zester/states")
 	}
-	if cfg.SettingsDir != "/data/settings" {
-		t.Errorf("SettingsDir = %q, want %q", cfg.SettingsDir, "/data/settings")
+	if cfg.SettingsDir != "/var/lib/zester/settings" {
+		t.Errorf("SettingsDir = %q, want %q", cfg.SettingsDir, "/var/lib/zester/settings")
 	}
 	if cfg.Enroll.Addr != ":8443" {
 		t.Errorf("Enroll.Addr = %q, want %q", cfg.Enroll.Addr, ":8443")
 	}
-	if cfg.Enroll.TLSCert != "/data/auth/enroll.crt" {
-		t.Errorf("Enroll.TLSCert = %q, want %q", cfg.Enroll.TLSCert, "/data/auth/enroll.crt")
+	if cfg.Enroll.TLSCert != "/var/lib/zester/auth/enroll.crt" {
+		t.Errorf("Enroll.TLSCert = %q, want %q", cfg.Enroll.TLSCert, "/var/lib/zester/auth/enroll.crt")
 	}
-	if cfg.Enroll.TLSKey != "/data/auth/enroll.key" {
-		t.Errorf("Enroll.TLSKey = %q, want %q", cfg.Enroll.TLSKey, "/data/auth/enroll.key")
+	if cfg.Enroll.TLSKey != "/var/lib/zester/auth/enroll.key" {
+		t.Errorf("Enroll.TLSKey = %q, want %q", cfg.Enroll.TLSKey, "/var/lib/zester/auth/enroll.key")
 	}
 	if cfg.GitFS.Interval != 5*time.Minute {
 		t.Errorf("GitFS.Interval = %v, want %v", cfg.GitFS.Interval, 5*time.Minute)
@@ -52,7 +52,7 @@ func TestMasterDaemonDefaultsReactor(t *testing.T) {
 	if !cfg.Reactor.Enabled {
 		t.Error("Reactor.Enabled = false, want true by default")
 	}
-	if cfg.Reactor.Dir != "/data/reactor" {
+	if cfg.Reactor.Dir != "/var/lib/zester/reactor" {
 		t.Errorf("Reactor.Dir = %q, want %q", cfg.Reactor.Dir, "/data/reactor")
 	}
 	if cfg.Reactor.Workers != 4 {
@@ -373,7 +373,7 @@ func TestLoadMasterDaemonMissing(t *testing.T) {
 	if cfg.NatsURL != "tls://nats:4222" {
 		t.Errorf("NatsURL = %q, want default", cfg.NatsURL)
 	}
-	if cfg.StatesDir != "/data/states" {
+	if cfg.StatesDir != "/var/lib/zester/states" {
 		t.Errorf("StatesDir = %q, want default", cfg.StatesDir)
 	}
 }
@@ -405,7 +405,7 @@ func TestLoadMasterDaemonPartial(t *testing.T) {
 		t.Errorf("NatsURL = %q, want %q", cfg.NatsURL, "tls://partial:4222")
 	}
 	// Unset fields keep defaults.
-	if cfg.StatesDir != "/data/states" {
+	if cfg.StatesDir != "/var/lib/zester/states" {
 		t.Errorf("StatesDir = %q, want default %q", cfg.StatesDir, "/data/states")
 	}
 	if cfg.Enroll.Addr != ":8443" {

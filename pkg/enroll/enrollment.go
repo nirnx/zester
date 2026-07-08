@@ -86,6 +86,24 @@ type Record struct {
 	// RemoteAddr is the IP address the enrollment request came from.
 	RemoteAddr string `msgpack:"remote_addr,omitempty" json:"remote_addr,omitempty"`
 
+	// TrustedCASPKI is the CA SPKI pin the peel reported it trusted for the
+	// enrollment TLS connection (bound under the peel's signature). Empty
+	// for pre-feature peels.
+	TrustedCASPKI string `msgpack:"trusted_ca_spki,omitempty" json:"trusted_ca_spki,omitempty"`
+
+	// TrustMismatch is true when the peel's reported TrustedCASPKI did not
+	// match the master's own CA root — a first-contact MITM artifact. A
+	// mismatched record is flagged in `zester enroll list/show`, and
+	// `enroll approve` refuses it without --force.
+	TrustMismatch bool `msgpack:"trust_mismatch,omitempty" json:"trust_mismatch,omitempty"`
+
+	// TrustChecked is true when the master actually compared the reported
+	// TrustedCASPKI against its own CA root (embedded-CA mode). In external
+	// mode there is no master root to compare against, so a reported CA is
+	// recorded but unverified — the CLI shows "present (unverified)" rather
+	// than a false "ok".
+	TrustChecked bool `msgpack:"trust_checked,omitempty" json:"trust_checked,omitempty"`
+
 	// Revision is the KV CAS revision for optimistic concurrency control.
 	Revision uint64 `msgpack:"-" json:"-"`
 }

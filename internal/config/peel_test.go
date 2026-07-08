@@ -9,11 +9,11 @@ import (
 func TestPeelDefaults(t *testing.T) {
 	cfg := PeelDefaults()
 
-	if cfg.NatsURL != "tls://nats:4222" {
-		t.Errorf("NatsURL = %q, want %q", cfg.NatsURL, "tls://nats:4222")
+	if cfg.NatsURL != "" {
+		t.Errorf("NatsURL = %q, want empty (discovery sentinel)", cfg.NatsURL)
 	}
-	if cfg.StatesCache != "/data/states-cache" {
-		t.Errorf("StatesCache = %q, want %q", cfg.StatesCache, "/data/states-cache")
+	if cfg.StatesCache != "/var/cache/zester/states" {
+		t.Errorf("StatesCache = %q, want %q", cfg.StatesCache, "/var/cache/zester/states")
 	}
 	if cfg.ID != "" {
 		t.Errorf("ID = %q, want empty", cfg.ID)
@@ -113,10 +113,10 @@ func TestLoadPeelMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.NatsURL != "tls://nats:4222" {
-		t.Errorf("NatsURL = %q, want default", cfg.NatsURL)
+	if cfg.NatsURL != "" {
+		t.Errorf("NatsURL = %q, want empty (discovery sentinel)", cfg.NatsURL)
 	}
-	if cfg.StatesCache != "/data/states-cache" {
+	if cfg.StatesCache != "/var/cache/zester/states" {
 		t.Errorf("StatesCache = %q, want default", cfg.StatesCache)
 	}
 }
@@ -301,10 +301,10 @@ func TestLoadPeelPartial(t *testing.T) {
 		t.Errorf("ID = %q, want %q", cfg.ID, "db-01")
 	}
 	// Unset fields keep defaults.
-	if cfg.NatsURL != "tls://nats:4222" {
-		t.Errorf("NatsURL = %q, want default %q", cfg.NatsURL, "tls://nats:4222")
+	if cfg.NatsURL != "" {
+		t.Errorf("NatsURL = %q, want empty (discovery sentinel)", cfg.NatsURL)
 	}
-	if cfg.StatesCache != "/data/states-cache" {
-		t.Errorf("StatesCache = %q, want default %q", cfg.StatesCache, "/data/states-cache")
+	if cfg.StatesCache != "/var/cache/zester/states" {
+		t.Errorf("StatesCache = %q, want default %q", cfg.StatesCache, "/var/cache/zester/states")
 	}
 }

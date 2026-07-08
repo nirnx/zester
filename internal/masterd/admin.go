@@ -28,7 +28,7 @@ func (d *Daemon) startAdminService(ps bus.RequestPubSub) (func(), error) {
 		op      adminOp
 	}{
 		{bus.SubjectAdminEnrollApprove, "approve", func(ctx context.Context, req enroll.AdminRequest) (*enroll.Record, error) {
-			return d.enrollStore.Approve(ctx, req.ID, req.Operator)
+			return d.enrollStore.ApproveForce(ctx, req.ID, req.Operator, req.Force)
 		}},
 		{bus.SubjectAdminEnrollReject, "reject", func(ctx context.Context, req enroll.AdminRequest) (*enroll.Record, error) {
 			return d.enrollStore.Reject(ctx, req.ID, req.Operator, req.Reason)
