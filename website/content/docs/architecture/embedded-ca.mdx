@@ -70,7 +70,8 @@ Note the layering: the bootstrap document is **discovery data, not trust**. Noth
 Peels pin the root's **SubjectPublicKeyInfo** hash, in the RFC 7469 style:
 
 ```
-enroll_ca_pin: "sha256:<64 hex chars>"
+enroll_ca_pin:
+  - "sha256:<64 hex chars>"
 ```
 
 `zester ca init` prints the pin at generation time; `zester ca fingerprint` prints it any time after (one line, for provisioning templates). It is verifiable out of band with standard tooling:

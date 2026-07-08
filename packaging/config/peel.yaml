@@ -7,8 +7,8 @@
 #
 # master_urls:
 #   - "https://master-1.example.com:8443"
-# enroll_ca_pin: "sha256:<hex>"   # from 'zester ca fingerprint' — verified
-#                                 # first contact (omit for TOFU on first use)
+# enroll_ca_pin:                   # from 'zester ca fingerprint' — verified
+#   - "sha256:<hex>"               # first contact (omit for TOFU on first use)
 
 id: ""    # set to a sanitized hostname by postinstall
 

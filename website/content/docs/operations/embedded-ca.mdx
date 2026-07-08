@@ -113,7 +113,8 @@ With the embedded CA, a production peel config is two lines:
 
 ```yaml title="/etc/zester/peel.yaml"
 master_urls: ["https://master-1.example.com:8443"]
-enroll_ca_pin: "sha256:9f2a4c...e81b"
+enroll_ca_pin:
+  - "sha256:9f2a4c...e81b"
 ```
 
 Everything else is discovered: the peel verifies the master's enrollment TLS against the pinned root, enrolls, fetches the bootstrap document, learns the fleet's NATS URLs from `nats_advertise_urls`, caches them locally, and connects. No `nats_url`, no `nats_ca`, no certificate files on the peel.
@@ -270,7 +271,8 @@ A single machine running NATS + master + peel **cannot** be zero-config. The mas
 
 ```yaml title="/etc/zester/peel.yaml (all-in-one box)"
 master_urls: ["https://localhost:8443"]
-enroll_ca_pin: "sha256:9f2a4c...e81b"
+enroll_ca_pin:
+  - "sha256:9f2a4c...e81b"
 nats_url: tls://localhost:4222     # explicit — bypasses discovery (rung 1 of the precedence)
 ```
 

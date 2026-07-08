@@ -81,6 +81,30 @@ All notable changes to Zester are documented here. The format follows
   runtime-state directory (settings snapshot, job dedup state, baked states
   fallback, template base path) are now configurable instead of hardcoded.
 
+### Fixed (embedded-CA field testing)
+- **Credential-loss recovery is no longer a dead-end.** A peel that lost its
+  credentials but still holds its identity key would re-enroll and hit a
+  permanent 409 ("already has an active enrollment"). The enrollment handler
+  now allows a **same-key** re-enrollment from approved/issued/active states
+  (the challenge-response already proved key ownership, so a matching key is
+  provably the same peel recovering); a *different* key still gets 409 — the
+  peel-ID uniqueness guard blocks impersonation. The 409 message now names the
+  `revoke`-to-recover path.
+- **A never-connected discovery peel no longer wedges.** The re-discovery
+  recovery loop was gated behind a successful NATS connection, so an
+  already-enrolled peel booting with no bootstrap cache and a stale/
+  unresolvable endpoint stayed offline forever. The recovery loop now runs
+  from the local phase (fires even when NATS never connects), and boot-time
+  resolution attempts one verified discovery fetch before falling back to the
+  builtin `tls://nats:4222` tail.
+- **Packaged peels no longer auto-start unconfigured.** `postinstall` enables
+  but only starts `zester-peel` when `master_urls` is set — an unconfigured
+  peel could otherwise fall to the convention master `https://zester:8443` and
+  silently TOFU-enroll into a half-state during provisioning.
+- Docs: the `enroll_ca_pin` examples used the scalar form
+  (`enroll_ca_pin: "sha256:…"`), which fails strict-YAML parsing against the
+  `[]string` field; corrected to the list form.
+
 ### Changed
 - **Default filesystem layout moved from `/data` to FHS-proper locations.**
   Binary defaults are now `/var/lib/zester/...` for state (master:

@@ -354,6 +354,16 @@ func (a *Agent) Run(ctx context.Context) error {
 	// the TCP connection is up.
 	a.checker.Register("kv", a.kvHealthCheck)
 
+	// Discovery recovery loop: for a discovery-driven peel, re-discover NATS
+	// endpoints when the connection stays unhealthy. Started from the LOCAL
+	// phase (not the connected phase) so it fires even for a peel that has
+	// NEVER connected — e.g. booted with creds but a stale/unresolvable
+	// endpoint and no cache; the connected phase would otherwise gate it
+	// behind a successful NATS connection that never happens.
+	if a.discoveryDriven() {
+		go a.recoveryLoop(runCtx)
+	}
+
 	// Pub/sub wrapper (exec handler, scheduler, job returns, and the basket
 	// target-resolution service client). Created before the template engines
 	// so makeBasketFunc can route through the master-side resolve service.

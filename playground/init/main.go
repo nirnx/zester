@@ -212,22 +212,15 @@ settings_dir: "/data/settings"
 enroll:
   tls_cert: "/data/auth/enroll.crt"
   tls_key: "/data/auth/enroll.key"
-# The init step wrote the embedded CA to /data/auth/ca, so ca.mode auto
-# enables embedded mode: the master self-issues its enrollment cert from the
-# CA and serves discovery. nats_advertise_urls feeds the /enroll/ca bootstrap
-# document (peels with an explicit --nats-url still override it).
+# The compose playground runs the master in EXTERNAL CA mode using the
+# operator-provided enroll cert/key above (one CA still issues them + the NATS
+# cert, so ENROLL-TLS-3 holds). Embedded mode is exercised separately by the
+# dedicated embedded-CA overlay; running it against the whole failover suite
+# destabilizes it, so ca.mode is pinned external here. ca.mode must be set
+# explicitly: auto would detect the CA dir the init step writes and switch to
+# embedded.
 ca:
-  mode: auto
-  dir: "/data/auth/ca"
-  # Peels dial https://master:8443; the container hostname is not "master",
-  # so the self-issued enrollment cert must carry these SANs explicitly.
-  enroll_sans:
-    - "master"
-    - "master-2"
-nats_advertise_urls:
-  - "tls://nats:4222"
-  - "tls://nats-2:4222"
-  - "tls://nats-3:4222"
+  mode: external
 reactor:
   dir: "/data/reactor"
 api:

@@ -293,8 +293,25 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		case StateApproved, StateIssued, StateActive:
-			h.writeError(w, http.StatusConflict, "peel already has an active enrollment")
-			return
+			// A peel that lost its credentials (deleted/corrupted) but still
+			// holds its identity key is otherwise wedged: it re-enrolls and
+			// hits this 409 forever. The challenge above already proved the
+			// submitter owns req.PublicKey, so if that matches the existing
+			// record's key it is provably the SAME peel recovering — release
+			// the index and let it re-enroll (back to pending → re-approval /
+			// reactor auto-approve). A DIFFERENT key still gets 409: the
+			// peel-ID uniqueness guard blocks a new key from claiming an
+			// active identity (impersonation).
+			if existing.PublicKey != req.PublicKey {
+				h.writeError(w, http.StatusConflict, "peel already has an active enrollment under a different key; revoke it first (zester enroll revoke) to re-enroll a new key")
+				return
+			}
+			h.logger.Info("enroll: same-key re-enrollment of an active peel (credential recovery)",
+				"peel_id", req.PeelID, "prior_state", existing.State, "source_ip", remoteIP(r))
+			if err := h.store.ReleaseIndex(r.Context(), req.PeelID); err != nil {
+				h.logger.Warn("enroll: failed to release old peel index for re-enrollment",
+					"peel_id", req.PeelID, "error", err)
+			}
 		case StateRejected, StateRevoked:
 			// Allow re-enrollment: release the old peel index so the new
 			// record can atomically claim it via Store.Create.

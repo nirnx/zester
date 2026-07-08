@@ -65,12 +65,13 @@ func (a *Agent) runConnectedPhase(ctx context.Context) {
 	// Peel presence heartbeat (finding 24 / roadmap B11).
 	go a.runHeartbeat(ctx)
 
-	// Discovery refresh: watch the cluster-info KV for live NATS-endpoint /
-	// CA updates, and run the recovery loop that re-discovers when every
-	// cached endpoint is dead. Only meaningful when the peel is
-	// discovery-driven (has master URLs and no explicit nats_url override).
-	if a.cfg.NatsURL == "" && (len(a.cfg.MasterURLs) > 0 || a.cfg.MasterURL != "") {
-		go a.startDiscoveryRefresh(ctx)
+	// Cluster-info KV watch: live NATS-endpoint / CA updates on a healthy
+	// connection. (The recovery loop that re-discovers when endpoints are
+	// dead runs from the LOCAL phase — see Run — so it fires even for a peel
+	// that has NEVER connected, e.g. booted with a stale/unresolvable
+	// endpoint and no cache.)
+	if a.discoveryDriven() {
+		go a.watchClusterInfo(ctx)
 	}
 
 	logger.Info("connected-phase subsystems started", "peel", a.peelID)

@@ -56,11 +56,50 @@ func (a *Agent) resolveNATSURLs() []string {
 		a.logger.Info("using NATS endpoints from bootstrap cache", "count", len(cached))
 		return cached
 	}
-	if len(a.cfg.MasterURLs) > 0 || a.cfg.MasterURL != "" {
-		a.logger.Warn("no explicit nats_url and no bootstrap cache yet; using builtin default until enrollment discovery populates it",
+	// Discovery-driven, no cache: an already-enrolled peel skips enrollment
+	// (and thus its discovery fetch), so without this it would wedge on the
+	// unresolvable builtin tail. Try one verified boot-time fetch; the
+	// recovery loop retries on failure.
+	if a.discoveryDriven() {
+		if urls := a.bootFetchDiscovery(); len(urls) > 0 {
+			a.logger.Info("using NATS endpoints from boot-time discovery", "count", len(urls))
+			return urls
+		}
+		a.logger.Warn("no explicit nats_url, no cache, and boot-time discovery did not resolve endpoints; using builtin default until the recovery loop re-discovers",
 			"builtin", builtinNATSTail)
 	}
 	return []string{builtinNATSTail}
+}
+
+// bootFetchDiscovery does one best-effort verified bootstrap fetch at boot
+// (resolve trust via the persisted anchor/pin, fetch /enroll/ca over verified
+// TLS), persists the result, and returns the validated NATS URLs. Returns nil
+// on any failure — non-fatal; the recovery loop retries.
+func (a *Agent) bootFetchDiscovery() []string {
+	trust, err := enroll.ResolveTrust(enroll.TrustConfig{
+		EnrollCAFile: a.cfg.EnrollCA,
+		Pins:         a.cfg.EnrollCAPin,
+		AnchorFile:   filepath.Join(a.cfg.AuthDir, "enroll-ca.crt"),
+		Mode:         enroll.TrustMode(a.cfg.EnrollTrust),
+		FirstContact: false, // already enrolled: never TOFU here
+		MasterURLs:   a.peelMasterURLs(),
+		Logger:       a.logger,
+	})
+	if err != nil {
+		a.logger.Debug("boot discovery: trust resolve failed", "error", err)
+		return nil
+	}
+	doc, err := enroll.FetchBootstrap(a.peelMasterURLs(), trust.TLSConfig)
+	if err != nil {
+		a.logger.Debug("boot discovery: fetch failed", "error", err)
+		return nil
+	}
+	accepted, _ := bus.ValidateAdvertisableNATSURLs(doc.NATSURLs)
+	if len(accepted) == 0 {
+		return nil
+	}
+	a.writeBootstrapCache(accepted, string(trust.Source), doc.Fingerprint)
+	return accepted
 }
 
 // identityHash keys the cache to the bootstrap identity (master URLs + pins),
@@ -166,14 +205,11 @@ func (a *Agent) peelMasterURLs() []string {
 	return nil
 }
 
-// startDiscoveryRefresh runs the two live-refresh mechanisms for a
-// discovery-driven peel: the cluster-info KV watch (fast path on a running
-// connection) and the recovery loop (unhealthy > T → re-discover via the
-// enrollment channel). Both apply new NATS endpoints via SetServers without a
-// process restart.
-func (a *Agent) startDiscoveryRefresh(ctx context.Context) {
-	go a.watchClusterInfo(ctx)
-	a.recoveryLoop(ctx)
+// discoveryDriven reports whether the peel resolves its NATS endpoints via
+// enrollment discovery (no explicit nats_url override, and a master URL to
+// discover against).
+func (a *Agent) discoveryDriven() bool {
+	return a.cfg.NatsURL == "" && (len(a.cfg.MasterURLs) > 0 || a.cfg.MasterURL != "")
 }
 
 // watchClusterInfo watches the secrets-bucket cluster-info key and applies new
