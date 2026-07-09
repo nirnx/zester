@@ -118,6 +118,90 @@ func ValidatePeelID(peelID string) error {
 	return nil
 }
 
+// peelIDDotSub is the byte a '.' becomes when a value is sanitized into a peel
+// ID. It is '_', NOT '-', on purpose: a valid hostname uses '-' and '.' but
+// never '_' (RFC 1123), so mapping '.' -> '_' keeps hostname-derived IDs
+// COLLISION-FREE — the distinct hostnames "web01.pl" and "web01-pl" become the
+// distinct IDs "web01_pl" and "web01-pl" instead of colliding on "web01-pl".
+const peelIDDotSub = '_'
+
+// SanitizePeelID maps an arbitrary string (typically a hostname or an operator
+// value that may contain dots, e.g. an FQDN) into a valid peel ID: '.' becomes
+// '_' (see peelIDDotSub), every other byte outside [a-zA-Z0-9_-] becomes '-',
+// the leading run of '_'/'-' is stripped (the leading char must be
+// alphanumeric), and the result is truncated to maxPeelIDLength bytes. It
+// returns "" when nothing survives (e.g. all punctuation) — the caller decides
+// the fallback. For any non-empty result, ValidatePeelID(result) == nil.
+//
+// Bytes are mapped individually (a multibyte rune becomes one '-' per byte).
+func SanitizePeelID(raw string) string {
+	b := []byte(raw)
+	for i, c := range b {
+		switch {
+		case isPeelIDByte(c):
+			// already valid
+		case c == '.':
+			b[i] = peelIDDotSub
+		default:
+			b[i] = '-'
+		}
+	}
+	// Strip the leading run of '-'/'_' (the only non-alphanumerics that can now
+	// lead), so the first surviving char is alphanumeric.
+	j := 0
+	for j < len(b) && (b[j] == '-' || b[j] == '_') {
+		j++
+	}
+	b = b[j:]
+	if len(b) > maxPeelIDLength {
+		b = b[:maxPeelIDLength]
+	}
+	return string(b)
+}
+
+// SanitizeGlobDots applies ONLY the '.' -> peelIDDotSub substitution that
+// SanitizePeelID performs, to a target glob pattern — leaving glob metachars
+// (*, ?, [...]) intact. Peel IDs never contain '.', so a target written with
+// the original hostname dots ("web01.pl") still matches the sanitized ID
+// ("web01_pl"); this only ever adds matches. It shares peelIDDotSub with
+// SanitizePeelID so the two can never drift.
+//
+// Dots INSIDE a [...] character class (and backslash-escaped chars) are left
+// alone: rewriting a '.' used as a range endpoint would silently widen the
+// class (e.g. [!-.] -> [!-_] pulls in digits and uppercase), matching peels
+// the operator never targeted. An untouched '.' class member is inert — it
+// can never match a real peel ID.
+func SanitizeGlobDots(pattern string) string {
+	var b []byte // allocated lazily on the first substitution
+	inClass := false
+	for i := 0; i < len(pattern); i++ {
+		switch c := pattern[i]; {
+		case c == '\\' && i+1 < len(pattern):
+			i++ // escaped char, never substituted
+		case inClass:
+			if c == ']' {
+				inClass = false
+			}
+		case c == '[':
+			inClass = true
+		case c == '.':
+			if b == nil {
+				b = []byte(pattern)
+			}
+			b[i] = peelIDDotSub
+		}
+	}
+	if b == nil {
+		return pattern
+	}
+	return string(b)
+}
+
+func isPeelIDByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') || c == '_' || c == '-'
+}
+
 // ValidateCurvePublicKey checks that a curve public key has the X prefix
 // and is well-formed.
 func ValidateCurvePublicKey(curvePub string) error {

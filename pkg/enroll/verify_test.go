@@ -307,6 +307,69 @@ func TestValidatePeelID(t *testing.T) {
 	}
 }
 
+func TestSanitizePeelID(t *testing.T) {
+	// '.' maps to '_' (peelIDDotSub), every other invalid byte to '-', the
+	// leading run of '_'/'-' is stripped, and the result is truncated to 128.
+	exact := []struct{ in, want string }{
+		{"web-01", "web-01"},                                 // already valid, unchanged
+		{"web01.example.com", "web01_example_com"},           // FQDN dots -> underscores
+		{"devops-hetzner.oxm", "devops-hetzner_oxm"},         // the field case
+		{"web01.pl", "web01_pl"},                             // distinct from...
+		{"web01-pl", "web01-pl"},                             // ...this: '.'->'_' never collides with '-'
+		{"_web01", "web01"},                                  // strip leading underscore
+		{"__--web01", "web01"},                               // strip leading run of _/-
+		{".web01", "web01"},                                  // leading dot -> '_' then stripped
+		{"web@01", "web-01"},                                 // other punctuation -> hyphen
+		{"web 01", "web-01"},                                 // space -> hyphen
+		{"wéb", "w--b"},                                      // multibyte rune -> one '-' per byte
+		{strings.Repeat("a", 200), strings.Repeat("a", 128)}, // truncated to 128
+		{"", ""},       // empty stays empty
+		{".", ""},      // all-punctuation -> empty
+		{"...___", ""}, // all leading -> empty
+	}
+	for _, tc := range exact {
+		if got := enroll.SanitizePeelID(tc.in); got != tc.want {
+			t.Errorf("SanitizePeelID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	// Property: for any input, the result is either "" or a valid peel ID.
+	inputs := []string{
+		"web-01", "web01.example.com", "_master", "*", ">", "узел-01", "web-01-🔥",
+		"web\x0001", strings.Repeat("a", 300), "---", "1.2.3.4", "HOST.Example.COM",
+		"a", "", ".", "@@@", "-x-",
+	}
+	for _, in := range inputs {
+		got := enroll.SanitizePeelID(in)
+		if got == "" {
+			continue
+		}
+		if err := enroll.ValidatePeelID(got); err != nil {
+			t.Errorf("SanitizePeelID(%q) = %q which fails ValidatePeelID: %v", in, got, err)
+		}
+	}
+}
+
+func TestSanitizeGlobDots(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"web01.pl", "web01_pl"},                   // literal dots -> underscore
+		{"*.oxm", "*_oxm"},                         // glob metachars untouched
+		{"web??.example.com", "web??_example_com"}, // ? untouched
+		{"web01_pl", "web01_pl"},                   // nothing to do -> unchanged
+		{"web[0-9].pl", "web[0-9]_pl"},             // class untouched, outside dot substituted
+		{"web[!-.]01", "web[!-.]01"},               // '.' as a range endpoint stays — substituting would widen the class
+		{"web[a.z]01", "web[a.z]01"},               // '.' class member stays (inert: ids never contain '.')
+		{`web\.01`, `web\.01`},                     // escaped dot stays escaped
+		{"[unterminated.", "[unterminated."},       // unterminated class: conservatively treated as in-class
+		{"a.b[c.d]e.f", "a_b[c.d]e_f"},             // mixed: outside substituted, inside preserved
+	}
+	for _, c := range cases {
+		if got := enroll.SanitizeGlobDots(c.in); got != c.want {
+			t.Errorf("SanitizeGlobDots(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestValidatePublicKey(t *testing.T) {
 	// Generate a valid user key.
 	userKB, err := auth.GenerateKeyBundle(auth.RoleUser)

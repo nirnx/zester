@@ -10,7 +10,12 @@
 # enroll_ca_pin:                   # from 'zester ca fingerprint' — verified
 #   - "sha256:<hex>"               # first contact (omit for TOFU on first use)
 
-id: ""    # set to a sanitized hostname by postinstall
+# id: "my-node"   # optional — defaults to the machine hostname (`hostname -f`,
+#                 # sanitized: '.' -> '_', other invalid chars -> '-', so
+#                 # host.example.com -> host_example_com). A hostname-derived
+#                 # id is pinned to <auth_dir>/node-id so a DNS hiccup can't
+#                 # re-identify the node (delete that file to re-derive). Set
+#                 # to pin an explicit id; the watchdog reads the same value.
 
 # --- Enrollment trust (optional) --------------------------------------------
 # enroll_trust: tofu   # tofu (default): trust the CA on first contact and
@@ -27,9 +32,9 @@ id: ""    # set to a sanitized hostname by postinstall
 # nats_ca:  "/var/lib/zester/auth/nats-ca.crt"
 
 # --- Filesystem layout (package defaults; rarely changed) -------------------
-# Credentials/trust material and runtime state. Keep auth_dir in sync with the
-# --nats-creds path in zester-peel.service — the watchdog reads the peel's
-# <id>.creds from here.
+# Credentials/trust material and runtime state. The watchdog derives the peel's
+# <id>.creds path, the NATS CA, and the bootstrap cache from auth_dir/data_dir
+# automatically, so these stay in sync with no extra wiring.
 auth_dir: "/var/lib/zester/auth"
 data_dir: "/var/lib/zester"
 states_cache: "/var/cache/zester/states"

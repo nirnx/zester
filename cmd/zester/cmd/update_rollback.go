@@ -65,7 +65,10 @@ func runUpdateRollback(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no nodes found matching target %q", targetExpr)
 	}
 
-	rollbackCmd := &update.UpdateCommand{Command: update.CmdRollback}
+	// Component is stamped so a colocated watchdog of the OTHER component
+	// (same node id, same command subject) drops the command instead of
+	// rolling back the wrong binary.
+	rollbackCmd := &update.UpdateCommand{Command: update.CmdRollback, Component: component}
 	for _, id := range nodeIDs {
 		var resp update.UpdateResponse
 		subject := bus.UpdateCmdSubject(id)

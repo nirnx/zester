@@ -35,6 +35,38 @@ func TestGlobMatcher(t *testing.T) {
 	}
 }
 
+// A target may be written with the original hostname dots (web01.pl), but the
+// peel ID has those dots sanitized to '_' (web01_pl). The glob matcher applies
+// the same '.'->'_' substitution to the pattern so the two still match. Because
+// a real peel ID can never contain '.', this only ever adds matches — it never
+// makes an unrelated hyphenated host (web01-pl) match a dotted pattern.
+func TestGlobMatcherDotNormalization(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		peelID  string
+		want    bool
+	}{
+		{"dotted exact matches sanitized", "web01.pl", "web01_pl", true},
+		{"dotted fqdn matches sanitized", "devops-hetzner.oxm", "devops-hetzner_oxm", true},
+		{"dotted suffix glob matches sanitized", "*.oxm", "devops-hetzner_oxm", true},
+		{"dotted does not match hyphenated host", "web01.pl", "web01-pl", false},
+		{"sanitized pattern still matches directly", "web01_pl", "web01_pl", true},
+		{"unrelated still no match", "web01.pl", "db01_pl", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := NewGlobMatcher(tt.pattern)
+			if err != nil {
+				t.Fatalf("NewGlobMatcher(%q): %v", tt.pattern, err)
+			}
+			if got := m.Match(tt.peelID, nil); got != tt.want {
+				t.Errorf("GlobMatcher(%q).Match(%q) = %v, want %v", tt.pattern, tt.peelID, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGlobMatcherInvalid(t *testing.T) {
 	_, err := NewGlobMatcher("")
 	if err == nil {

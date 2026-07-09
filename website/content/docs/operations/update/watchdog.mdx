@@ -3,29 +3,53 @@ title: "Watchdog Runtime"
 description: "The watchdog (cmd/zester-watchdog) is the node-local process responsible for child lifecycle supervision and atomic binary swaps."
 ---
 
-## Flags
+## Invocation
 
-Source of truth: `registerFlags` in `cmd/zester-watchdog/main.go` (plain `flag` package, no YAML config).
+`--component peel|master` is the only flag you need — everything else is derived from the component and the child's config. The packaged systemd units are simply:
+
+```
+ExecStart=/usr/local/bin/zester-watchdog --component peel
+# or
+ExecStart=/usr/local/bin/zester-watchdog --component master
+```
+
+Any derived value can be overridden by passing the flag explicitly (explicit always wins).
+
+### What `--component` derives
+
+Source: `deriveComponentDefaults` in `cmd/zester-watchdog/derive.go`, run after `flag.Parse` (explicit flags are detected via `flag.Visit`).
+
+| Derived flag | `peel` | `master` |
+|---|---|---|
+| `--child-bin` | `/usr/local/bin/zester-peel` | `/usr/local/bin/zester-master` |
+| `--child-args` | `--config /etc/zester/peel.yaml` | `--config /etc/zester/master.yaml` |
+| `--id` | `id` from `peel.yaml`, else the hostname (sanitized) | the hostname (sanitized) |
+| `--nats-creds` | `<auth_dir>/<id>.creds` | `<auth_dir>/master.creds` |
+| `--nats-ca` | config `nats_ca`, else `<auth_dir>/nats-ca.crt` | same |
+| `--bootstrap-cache` | `<data_dir>/nats-bootstrap.msgpack` | *(none)* |
+| `--health-url` | `http://<health_addr>/healthz` (`:9090`) | `http://<health_addr>/healthz` (`:9091`) |
+
+`auth_dir`, `data_dir`, `health_addr`, and `nats_ca` are read from the child's config (a missing config falls back to the per-component defaults, never fatal). The watchdog resolves `--id` from the **same source** the peel does (`config.ResolveNodeID`), so the two can never disagree about the node's identity — no separate `ZESTER_PEEL_ID` to keep in sync.
+
+<Callout type="info" title="Node id = hostname, sanitized and pinned">
+With no `id` in `peel.yaml`, the id defaults to the machine hostname (`hostname -f`), sanitized into a valid NATS subject token: `.` becomes `_` and other invalid chars become `-`, so `web01.example.com` → `web01_example_com`. Dots map to `_` (which a valid hostname never contains) so the transform is collision-free — `web01.pl` and `web01-pl` stay distinct ids. The derived id is **pinned to `<auth_dir>/node-id`** on first resolution (Salt `minion_id` semantics): `hostname -f` depends on DNS and would otherwise silently fall back to the short kernel name during a resolver outage, re-identifying the node on reboot. The pin also guarantees the watchdog and the peel converge on one identity. An explicit `id` is never pinned; to re-derive from the hostname, delete the file. A derived id that is a localhost placeholder (`localhost`, `localhost.localdomain`, …) is refused at startup — set an explicit `id`.
+</Callout>
+
+<Callout type="warn" title="Colocated master + peel">
+Both watchdogs on one host share the node id and therefore the command subject `zester.update.cmd.<id>`. Every update command carries the target component, and a watchdog silently drops commands for the other component — a peel rollout can never swap the master binary.
+</Callout>
+
+### Non-derived / override flags
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--child-bin` | (required) | Path to child binary |
-| `--child-args` | `""` | Arguments to pass to child (space-separated) |
-| `--nats-url` | `tls://localhost:4222` | NATS server URL |
-| `--nats-ca` | `""` | CA certificate for NATS TLS server verification |
-| `--nats-creds` | `""` | NATS credentials file |
-| `--health-url` | `http://127.0.0.1:9090/healthz` | Child liveness endpoint (restart monitoring, `WaitForHealthy`) |
-| `--ready-url` | `""` = derived from `--health-url` by replacing the path with `/readyz` | Child readiness endpoint, polled only during update soak |
+| `--nats-url` | `tls://localhost:4222` | Not derived (the peel's discovery sentinel is empty; a master's config default differs) |
+| `--ready-url` | derived from `--health-url` → `/readyz` | Polled only during update soak; restart monitoring stays on `--health-url` liveness |
 | `--health-timeout` | `5s` | Health check timeout |
 | `--health-interval` | `10s` | Health check interval |
 | `--health-retries` | `3` | Consecutive health failures before rollback |
 | `--soak-time` | `60s` | Post-update soak period |
-| `--id` | (required) | Node identity |
-| `--component` | (required) | `peel` or `master` |
-| `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
-| `--log-format` | `json` | `json`, `text` |
-
-Because `--ready-url` defaults to a derivation of `--health-url`, overriding `--health-url` alone (e.g. `http://127.0.0.1:9091/healthz` for a master child) keeps soak probing the right port. An explicit `--ready-url` wins. The packaged systemd units pass both flags explicitly.
+| `--log-level` / `--log-format` | `info` / `json` | |
 
 ## Startup Sequence
 

@@ -3,6 +3,8 @@ package target
 import (
 	"fmt"
 	"strings"
+
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 // ListMatcher matches peels against an explicit comma-separated list.
@@ -25,8 +27,17 @@ func NewListMatcher(expr string) (*ListMatcher, error) {
 	peels := make(map[string]struct{}, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p != "" {
-			peels[p] = struct{}{}
+		if p == "" {
+			continue
+		}
+		peels[p] = struct{}{}
+		// A list entry written with the original hostname dots (web01.pl) also
+		// matches the sanitized peel ID (web01_pl) — same normalization as the
+		// glob matcher. A real ID can never contain '.', so the extra entry
+		// only ever ADDS matches. (Entries are exact IDs, so the sanitizer's
+		// character-class handling never applies here.)
+		if norm := enroll.SanitizeGlobDots(p); norm != p {
+			peels[norm] = struct{}{}
 		}
 	}
 

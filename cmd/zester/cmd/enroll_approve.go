@@ -91,7 +91,11 @@ func resolveApproveTargets(args []string, peelID string, allPending bool) ([]str
 	defer client.Shutdown(ctx)
 
 	if peelID != "" {
-		rec, err := store.FindByPeelID(ctx, peelID)
+		// Accept the natural dotted-hostname form: ids are stored sanitized
+		// ('.' -> '_'), and a dotted id can never exist, so normalizing the
+		// lookup key only ever finds the record the operator meant.
+		lookupID := enroll.SanitizeGlobDots(peelID)
+		rec, err := store.FindByPeelID(ctx, lookupID)
 		if err != nil {
 			return nil, fmt.Errorf("look up peel %q: %w", peelID, err)
 		}

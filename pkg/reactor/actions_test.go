@@ -87,6 +87,11 @@ func TestMatchRequirePeel(t *testing.T) {
 		{"", "web-01", false},   // fails closed
 		{"web-*", "", false},    // fails closed
 		{"[z-a]", "web", false}, // invalid glob fails closed
+		// A dotted-hostname glob matches the sanitized peel id ('.' -> '_'),
+		// consistent with CLI glob targeting.
+		{"web*.pl", "web01_pl", true},
+		{"devops-hetzner.oxm", "devops-hetzner_oxm", true},
+		{"web01.pl", "web01-pl", false}, // never crosses to the hyphenated host
 	}
 	for _, tt := range tests {
 		if got := MatchRequirePeel(tt.glob, tt.peel); got != tt.want {

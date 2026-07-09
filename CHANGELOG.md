@@ -4,7 +4,79 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
-## [Unreleased]
+## [0.3.7] - 2026-07-09
+
+Zero-config node identity: `zester-watchdog --component peel` is a complete
+invocation, the peel id defaults to the (sanitized, pinned) hostname, and
+dotted-hostname targets match everywhere. Plus the fixes from this release's
+adversarial review — most notably the colocated master+peel rollout-command
+cross-execution.
+
+### Changed
+- **The watchdog is now component-aware: a packaged unit is just
+  `zester-watchdog --component peel` (or `--component master`).** Everything
+  else — child binary, child config, node id, creds path, CA path,
+  bootstrap-cache, health/ready URLs — is derived from `--component` and the
+  child's config; explicit flags still override. This removes the
+  hand-maintained flag list and the per-host `ZESTER_PEEL_ID` systemd drop-in
+  that had to be kept in sync with `peel.yaml` (the source of an entire class
+  of "the drop-in and the config disagree" failures). The peel and the watchdog
+  now resolve the node id from the same source, so they can never diverge on
+  identity or the `<id>.creds` filename. Deriving `--health-url` from the
+  child's `health_addr` also fixes the footgun where a master watchdog had to
+  remember to override the default `:9090` to `:9091`.
+- **The peel id now defaults to the machine hostname.** With no `id` in
+  `peel.yaml`, `zester-peel` derives it from `hostname -f`, sanitized into a
+  valid NATS subject token: `.` → `_`, other invalid chars → `-`, e.g.
+  `web01.example.com` → `web01_example_com`. Mapping dots to `_` (which a valid
+  hostname never contains) keeps the transform collision-free — the distinct
+  hosts `web01.pl` and `web01-pl` map to the distinct ids `web01_pl` and
+  `web01-pl` instead of colliding. An explicit `id` is sanitized the same way
+  rather than rejected — so a dotted FQDN just works instead of failing
+  enrollment with a cryptic "create enrollment client" error. New
+  `enroll.SanitizePeelID` / `enroll.SanitizeGlobDots` and `config.ResolveNodeID`.
+- **A hostname-derived node id is pinned to `<auth_dir>/node-id`** (Salt
+  `minion_id` semantics): `hostname -f` depends on DNS, and a reboot during a
+  resolver outage would silently re-identify the node (fresh enrollment,
+  orphaned creds) without the pin. The pin also guarantees the peel and its
+  watchdog converge on one identity even when they resolve at different times.
+  An explicit `id` is never pinned; delete the file to re-derive. A derived id
+  that is a localhost placeholder (`localhost`, `localhost.localdomain`, …) is
+  refused at startup — it would collide across every misconfigured host — with
+  a message asking for an explicit `id`.
+- **Dotted-hostname targets match everywhere, not just globs.** The `.` → `_`
+  normalization that lets `zester 'web01.pl' test.ping` match the sanitized id
+  now also applies to list targets (`L@web01.pl,web02.pl`), the reactor's
+  `require_peel` gate, and `zester enroll approve --peel web01.pl`. It is
+  applied only where the pattern matches peel IDs (never to reactor match-key
+  globs, where a `.` may be a mistyped dotted tag), and never inside glob
+  `[...]` character classes, where rewriting a `.` range endpoint could widen
+  the class to unintended peels.
+
+### Fixed
+- **A colocated master + peel watchdog pair no longer executes each other's
+  rollout commands.** Both watchdogs on one host resolve the same node id and
+  therefore subscribe the same id-only command subject
+  (`zester.update.cmd.<id>`) — a peel rollout could swap the MASTER binary
+  (staged peel binary renamed over `/usr/local/bin/zester-master`, master
+  restarted as the wrong binary until the confirm-deadline rollback). The
+  update handler now drops — without replying, so the matching watchdog's
+  reply is never raced — any command whose `component` doesn't match its own,
+  and every sender stamps it (`zester update rollback` previously didn't).
+- **An explicit watchdog `--id` is sanitized like every other id source.** A
+  dotted `--id web01.example.com` previously stayed raw, deriving an
+  `<auth_dir>/web01.example.com.creds` path no 0.3.7 peel can ever write — the
+  watchdog waited for creds forever and the node's self-update plane was
+  silently dead. Both id paths now flow through `config.ResolveNodeID`.
+- **The watchdog honors child flag overrides in `--child-args`.** The child
+  applies its CLI flags over its config (flag > YAML), so `--id`, `--auth-dir`,
+  `--data-dir`, `--health-addr`, and `--nats-ca` inside `--child-args` now
+  overlay the derivation too — previously the watchdog derived creds paths and
+  health URLs from config values the child wasn't actually using.
+- **A config-less box no longer crash-loops the child.** The derived
+  child-args pass `--config /etc/zester/{peel,master}.yaml` only when the file
+  exists: the daemons treat an explicitly passed missing config as fatal,
+  while with no flag they run on built-in defaults.
 
 ## [0.3.6] - 2026-07-09
 

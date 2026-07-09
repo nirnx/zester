@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/enroll"
 	"github.com/nirnx/zester/pkg/event"
 	"github.com/nirnx/zester/pkg/job"
 	"github.com/nirnx/zester/pkg/proto"
@@ -89,11 +90,26 @@ type EmitFn func(ctx context.Context, subject string, ev event.Event, msgID stri
 // MatchRequirePeel reports whether an enrollment's peel ID satisfies a
 // require_peel glob (fnmatch semantics, same compiler as rule globs).
 // Invalid globs and empty inputs never match — the gate fails closed.
+//
+// A glob written with the original hostname dots (require_peel: 'web*.pl')
+// also matches the sanitized peel ID (web01_pl) via the same '.' -> '_'
+// normalization the CLI's glob targeting applies. Peel IDs can never contain
+// '.', so the normalized fallback only ever ADDS the matches the rule author
+// wrote the dotted form for. (This applies ONLY to require_peel, which
+// matches peel IDs; rule match-key globs are never normalized — a '.' there
+// may be a mistyped dotted TAG, and rewriting it could match an unintended
+// literal tag segment.)
 func MatchRequirePeel(glob, peelID string) bool {
 	if glob == "" || peelID == "" {
 		return false
 	}
-	return MatchGlob(glob, peelID)
+	if MatchGlob(glob, peelID) {
+		return true
+	}
+	if norm := enroll.SanitizeGlobDots(glob); norm != glob {
+		return MatchGlob(norm, peelID)
+	}
+	return false
 }
 
 // DeriveJID returns the deterministic, content-addressed JID for a reaction

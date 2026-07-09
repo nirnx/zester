@@ -5,22 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# ZESTER_PEEL_ID is written by postinstall into
-# /etc/systemd/system/zester-peel.service.d/10-peel-id.conf as the sanitized
-# short hostname, and the same value is written into peel.yaml's id: — the
-# peel saves its credentials as <id>.creds under auth_dir, so the two MUST
-# match. If you change id in peel.yaml, update the drop-in to match.
-ExecStart=/usr/local/bin/zester-watchdog \
-  --child-bin /usr/local/bin/zester-peel \
-  --child-args '--config /etc/zester/peel.yaml' \
-  --id ${ZESTER_PEEL_ID} \
-  --component peel \
-  --bootstrap-cache /var/lib/zester/nats-bootstrap.msgpack \
-  --nats-ca /var/lib/zester/auth/nats-ca.crt \
-  --nats-creds /var/lib/zester/auth/${ZESTER_PEEL_ID}.creds \
-  --health-url http://127.0.0.1:9090/healthz \
-  --ready-url http://127.0.0.1:9090/readyz \
-  --soak-time 60s
+# --component peel is all that's needed: zester-watchdog derives the child
+# binary and config (/etc/zester/peel.yaml), the node id ('id' in peel.yaml,
+# else the sanitized hostname), and the creds / CA / bootstrap-cache / health
+# paths from the config's auth_dir, data_dir and health_addr. The peel and the
+# watchdog resolve the id from the same source, so they can never disagree.
+# Override any of them by appending an explicit flag.
+ExecStart=/usr/local/bin/zester-watchdog --component peel
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

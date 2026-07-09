@@ -69,22 +69,39 @@ func main() {
 	f := registerFlags(flag.CommandLine)
 	flag.Parse()
 
-	if f.childBin == "" {
-		fmt.Fprintln(os.Stderr, "watchdog: --child-bin is required")
-		os.Exit(1)
-	}
-	if f.id == "" {
-		fmt.Fprintln(os.Stderr, "watchdog: --id is required")
-		os.Exit(1)
-	}
+	// Flags the operator set explicitly always win over the component-derived
+	// defaults below (stdlib flag has no per-value "was set" bit; Visit only
+	// reports flags that were actually provided).
+	explicit := map[string]bool{}
+	flag.CommandLine.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
+
+	// --component is the derivation key and is always required.
 	if f.component == "" {
-		fmt.Fprintln(os.Stderr, "watchdog: --component is required")
+		fmt.Fprintln(os.Stderr, "watchdog: --component is required (peel or master)")
 		os.Exit(1)
 	}
 
 	logger, err := logging.Setup(os.Stdout, "watchdog", f.logLevel, f.logFormat)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "watchdog: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Derive child-bin, child-args, id, nats-creds, nats-ca, bootstrap-cache,
+	// and health-url from --component and the child's config, unless the
+	// operator set them explicitly. Lets a packaged unit be just
+	// `zester-watchdog --component peel`.
+	if err := deriveComponentDefaults(f, explicit, logger); err != nil {
+		fmt.Fprintf(os.Stderr, "watchdog: %v\n", err)
+		os.Exit(1)
+	}
+
+	if f.childBin == "" {
+		fmt.Fprintln(os.Stderr, "watchdog: --child-bin is required")
+		os.Exit(1)
+	}
+	if f.id == "" {
+		fmt.Fprintln(os.Stderr, "watchdog: could not resolve a node id (set --id, or configure 'id' / a valid hostname)")
 		os.Exit(1)
 	}
 

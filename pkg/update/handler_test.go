@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nirnx/zester/pkg/bus"
 )
 
 // sha256hex returns the hex-encoded SHA-256 digest of data.
@@ -389,6 +391,47 @@ func TestHandler_Status(t *testing.T) {
 	}
 	if resp.Uptime == "" {
 		t.Error("Uptime field should not be empty")
+	}
+}
+
+// TestHandler_ComponentGate verifies handleMessage drops (without replying)
+// commands stamped for the OTHER component. A colocated master and peel
+// watchdog share the node id — and therefore the id-only command subject
+// zester.update.cmd.<id> — so without this gate a peel rollout would swap the
+// master binary. The mismatch must be a silent drop: the colocated watchdog
+// whose component matches is the responder, and an error reply here would
+// race it for the controller's reply inbox.
+func TestHandler_ComponentGate(t *testing.T) {
+	h, _ := setupHandlerTest(t) // Component: "peel"
+
+	send := func(cmd UpdateCommand) (replied bool) {
+		data, err := bus.Encode(&cmd)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		h.handleMessage(bus.NewMsg("zester.update.cmd.test-01", data, "reply", func([]byte) error {
+			replied = true
+			return nil
+		}))
+		return replied
+	}
+
+	// Mismatched component: dropped, no reply, no state change.
+	if send(UpdateCommand{Command: CmdPrepare, Component: "master", ObjectKey: "k", SHA256: "h", Version: "v1"}) {
+		t.Error("command for the other component was answered; want silent drop")
+	}
+	if h.State() != StateIdle {
+		t.Errorf("state after mismatched command: got %q, want %q", h.State(), StateIdle)
+	}
+
+	// Matching component: processed and answered.
+	if !send(UpdateCommand{Command: CmdStatus, Component: "peel"}) {
+		t.Error("command for our component got no reply")
+	}
+
+	// Empty component (legacy/hand-rolled sender): still processed.
+	if !send(UpdateCommand{Command: CmdStatus}) {
+		t.Error("component-less command got no reply; want grandfathered processing")
 	}
 }
 

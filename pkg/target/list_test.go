@@ -16,6 +16,13 @@ func TestListMatcher(t *testing.T) {
 		{"multi no match", "L@web-01,web-02,web-03", "web-04", false},
 		{"with spaces", "L@web-01, web-02, web-03", "web-02", true},
 		{"without prefix", "web-01,web-02", "web-01", true},
+		// A dotted hostname entry matches the sanitized id ('.' -> '_'), same
+		// normalization as glob targets. A dotted id can never exist, so this
+		// only adds matches — the hyphenated host stays distinct.
+		{"dotted entry matches sanitized id", "L@web01.pl,web02.pl", "web01_pl", true},
+		{"dotted entry second", "L@web01.pl,web02.pl", "web02_pl", true},
+		{"dotted entry no hyphen crosstalk", "L@web01.pl", "web01-pl", false},
+		{"sanitized entry still exact", "L@web01_pl", "web01_pl", true},
 	}
 
 	for _, tt := range tests {

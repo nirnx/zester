@@ -33,7 +33,7 @@ The packaged config installed by the `.deb`/`.rpm` (`packaging/config/peel.yaml`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `id` | string | (required) | Peel identifier |
+| `id` | string | machine hostname | Peel identifier. When unset, defaults to `hostname -f`, sanitized into a valid NATS subject token (`.` → `_`, other invalid chars → `-`, e.g. `web01.example.com` → `web01_example_com`; mapping dots to `_` keeps it collision-free, since a valid hostname never contains `_`). The derived id is pinned to `<auth_dir>/node-id` so a DNS-degraded `hostname -f` can't re-identify the node across reboots (delete the file to re-derive); a derived localhost placeholder is refused. An explicit value is sanitized the same way and never pinned. Targets written with the original dots (`zester 'web01.pl' …`, `L@web01.pl`, reactor `require_peel`) still match the sanitized id. Must resolve to `^[a-zA-Z0-9][a-zA-Z0-9_-]*$` (no dots — it becomes a NATS subject token). |
 | `nats_url` | string | `tls://nats:4222` | NATS server URL. Must use the `tls://` scheme — plaintext `nats://` URLs are rejected at startup. |
 | `nats_ca` | string | `""` | CA certificate file for NATS TLS server verification (see [CA resolution order](#nats-tls-and-ca-resolution)) |
 | `master_url` | string | `""` | Master enrollment API URL (single URL; superseded by `master_urls` when that is set) |

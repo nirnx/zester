@@ -45,10 +45,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cfg.ID == "" {
-		fmt.Fprintln(os.Stderr, "error: --id is required (or set 'id' in config file)")
+	// Resolve the peel id: an explicit configured id, else the identity
+	// pinned at <auth_dir>/node-id, else the machine hostname (`hostname -f`),
+	// sanitized into a valid NATS subject token. An FQDN like
+	// "web01.example.com" becomes "web01_example_com".
+	id, err := config.ResolveNodeID(cfg.ID, cfg.AuthDir, logger)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+	cfg.ID = id
 	logger = logger.With("peel_id", cfg.ID)
 	slog.SetDefault(logger)
 

@@ -143,6 +143,22 @@ func (h *Handler) handleMessage(msg *bus.Msg) {
 		return
 	}
 
+	// The command subject is id-only (zester.update.cmd.<id>), and a colocated
+	// master and peel watchdog share the node id — BOTH receive every command
+	// sent to it. Gate on the command's component so a peel rollout can never
+	// swap the master binary (or vice versa). A mismatch is dropped WITHOUT a
+	// reply: the colocated watchdog whose component matches is the responder,
+	// and an error reply here would race it for the controller's reply inbox.
+	if cmd.Component != "" && h.config.Component != "" && cmd.Component != h.config.Component {
+		h.logger.Info("update: ignoring command for other component",
+			"command", cmd.Command, "command_component", cmd.Component, "component", h.config.Component)
+		return
+	}
+	if cmd.Component == "" {
+		h.logger.Warn("update: command carries no component; processing (sender should stamp it)",
+			"command", cmd.Command)
+	}
+
 	h.logger.Info("update command received", "command", cmd.Command, "version", cmd.Version)
 
 	var resp UpdateResponse
