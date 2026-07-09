@@ -4,7 +4,14 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
-## [Unreleased]
+## [0.4.0] - 2026-07-09
+
+Live file distribution: on-disk edits reach the fleet in seconds with no
+master restart, multi-master dirs converge through KV (settings via a sealed
+masters-only channel), failover can no longer revert the fleet, and operators
+can always tell which master is the publisher. Plus embedded-CA rotation
+tooling and tests. One behavior change: out-of-band writes to the file
+buckets are now healed back to disk truth.
 
 ### Added
 - **Embedded-CA rotation is now implemented and tested, not just documented.**
@@ -30,6 +37,93 @@ All notable changes to Zester are documented here. The format follows
   multi-master steps (replicate the rotated intermediate to every master;
   roll masters one at a time — the divergence warning during a root-rollover
   overlap window is expected and clears when the last master switches).
+
+- **On-disk file edits reach the fleet without a master restart.** The
+  publisher-lease holder previously walked the settings/states/reactor trees
+  ONCE per lease acquisition — adding a state file meant restarting the
+  master. Three mechanisms replace that: an fsnotify **file watcher**
+  (`files_watch`, default on — inotify on Linux; publishes ~1s after an
+  edit), a **republish interval** as the correctness backstop
+  (`files_republish_interval`, default 30s; covers NFS/remote mounts and
+  missed events; 0 disables), and **`zester fileserver update [--force]`**
+  (Salt `fileserver.update` parity) — a request answered only by the
+  publisher-lease holder, reporting per-set files/changed; `--force`
+  rewrites every key (heals a tampered or torn bucket). Settings edits also
+  refresh the per-peel secret-encryption inputs (extracted secrets +
+  top.zy) live.
+
+- **Multi-master file convergence: standby masters mirror published truth.**
+  Standby masters (holding no publisher lease ~2 lease TTLs after boot or
+  after a loss) now sync the **states and reactor** file sets from KV into
+  their local source dirs (`files_mirror`, default on) using the same
+  manifest-verified atomic-swap machinery peels use. On failover the new
+  lease holder stops its mirror, runs one catch-up sync, and its initial
+  publish hash-gates to a **no-op** — a takeover can no longer revert the
+  fleet to a stale tree (previously the new holder unconditionally
+  republished whatever its disk contained). A fresh boot that wins the lease
+  immediately skips the catch-up, so the single-master offline-edit workflow
+  keeps today's disk-wins semantics; a lease loss re-arms the standby timer
+  rather than mirroring instantly, so a transient NATS blip can't race the
+  re-acquisition. Local edits on a standby are overwritten by the mirror
+  with a loud warning naming the files; mirrored dirs are managed trees.
+  **Settings converge through a dedicated sealed channel**: the peel-facing
+  sanitized bucket is never mirrored (that would destroy `!encrypted`
+  plaintext); instead the lease holder replicates the raw settings tree into
+  the new masters-only `master-settings` bucket with every file sealed to
+  the shared account curve key (NaCl box) — any master opens it (they all
+  hold `account.seed`), peel credentials have no grant for the bucket, and
+  JetStream at-rest/backups never contain plaintext. The manifest hashes are
+  **HMAC-keyed under the account seed** (not raw SHA-256), so a `$KV.>`
+  reader without `account.seed` cannot use them as an offline brute-force
+  oracle on secret values — while staying deterministic, so the hash-gate is
+  unaffected. The sealed replica publishes FIRST (before the peel-facing
+  sanitized publish, from the same file set), so an interruption rolls
+  forward rather than reverting settings on the next failover. Standbys
+  decrypt on sync and refresh their in-memory secret-extraction state (a
+  `facts-secrets`-lease-holding standby always encrypts current values, on
+  own-disk and shared-volume topologies alike). Auto-excluded for
+  GitFS-sourced states (masters converge through git); disable
+  `files_mirror` when masters share one filesystem for these dirs.
+- **GitFS exclusively owns states publishing when configured.** The
+  watcher/interval/`fileserver update` paths skip the states set under GitFS
+  (`skipped: gitfs-managed` in the update reply) instead of walking the dir
+  directly — bypassing GitFS's clone-validity gate could have published a
+  half-cloned tree and propagated fleet-wide state deletions during a
+  self-healing re-clone.
+- **The hash-gate verifies publish integrity, not just manifest equality.**
+  A publish interrupted between the `_manifest` write and the `_revision`
+  bump — or a manifest-listed key deleted by a dual-leader prune — is now
+  detected at the next gated publish and repaired automatically, instead of
+  being pinned forever by the byte-equality check.
+- **Secret VALUE rotations reach the fleet without a restart.** A rotated
+  `!encrypted` value changes neither the sanitized bytes (hash-gate) nor
+  stable peels' facts (their publishes hash-skip), so previously only a
+  master restart's facts replay delivered it. The live settings publish now
+  fingerprints the extracted secrets and, on change, re-encrypts for every
+  indexed peel (per-peel hash-gated).
+- **Behavior change: out-of-band writes to the file buckets are healed.**
+  The master's on-disk trees are the source of truth; anything writing the
+  settings/state/reactor KV buckets directly (scripts, manual `nats kv put`)
+  is reverted to disk truth within one republish interval. Edit the files on
+  the lease holder (or use GitFS) instead.
+- **Operators can always tell which master is the publisher.** New
+  `zester fileserver status` names the lease holder (hostname + hold time;
+  answered only by the holder). The master maintains
+  `/run/zester/publisher-status` (`publisher_status_file`) on every lease
+  transition, and the master `.deb` ships an `/etc/update-motd.d` snippet
+  that warns at SSH login when the host is a standby ("edits here are not
+  published"). `/readyz` gains an informational `publisher-lease` entry and
+  `/metrics` a `zester_master_publisher_leader` gauge.
+
+### Changed
+- **All three file publishers are hash-gated.** A publish whose manifest is
+  byte-identical to the bucket's writes nothing — no file puts, no
+  `_revision` bump, no peel resyncs — so the watcher, the ticker, and
+  repeated `fileserver update` runs are free when nothing changed. GitFS
+  republishes get the same gate.
+- `statefiles.Cache` is generalized (bucket, key prefix, ignore keys,
+  manifest decoder, local-edit warnings) so the same cache implementation
+  backs both the peel state-file cache and the master standby mirrors.
 
 ## [0.3.8] - 2026-07-09
 

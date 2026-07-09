@@ -2,10 +2,15 @@ package statefiles_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/nirnx/zester/pkg/auth"
 	"github.com/nirnx/zester/pkg/bus"
 	"github.com/nirnx/zester/pkg/bus/bustest"
 	"github.com/nirnx/zester/pkg/statefiles"
@@ -34,12 +39,12 @@ func TestPublish(t *testing.T) {
 		KV:        kv,
 	})
 
-	count, err := pub.Publish(ctx)
+	res, err := pub.Publish(ctx)
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if count != 3 {
-		t.Errorf("count: got %d, want 3", count)
+	if res.Files != 3 {
+		t.Errorf("count: got %d, want 3", res.Files)
 	}
 
 	// Verify KV keys and values.
@@ -91,12 +96,12 @@ func TestPublishSkipsHiddenAndVCS(t *testing.T) {
 		KV:        kv,
 	})
 
-	count, err := pub.Publish(ctx)
+	res, err := pub.Publish(ctx)
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if count != 3 {
-		t.Errorf("count: got %d, want 3", count)
+	if res.Files != 3 {
+		t.Errorf("count: got %d, want 3", res.Files)
 	}
 
 	// Verify visible files were published.
@@ -125,12 +130,12 @@ func TestPublishEmptyDir(t *testing.T) {
 		KV:        kv,
 	})
 
-	count, err := pub.Publish(ctx)
+	res, err := pub.Publish(ctx)
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if count != 0 {
-		t.Errorf("count: got %d, want 0", count)
+	if res.Files != 0 {
+		t.Errorf("count: got %d, want 0", res.Files)
 	}
 }
 
@@ -153,8 +158,12 @@ func TestPublishBumpsRevision(t *testing.T) {
 		KV:        kv,
 	})
 
-	if _, err := pub.Publish(ctx); err != nil {
+	res, err := pub.Publish(ctx)
+	if err != nil {
 		t.Fatalf("publish: %v", err)
+	}
+	if !res.Changed {
+		t.Error("first publish must report Changed")
 	}
 
 	// Verify _revision exists and equals "1".
@@ -166,16 +175,49 @@ func TestPublishBumpsRevision(t *testing.T) {
 		t.Errorf("revision: got %q, want %q", got, "1")
 	}
 
-	// Publish again — revision should increment to "2".
-	if _, err := pub.Publish(ctx); err != nil {
+	// HASH-GATE: republishing the identical tree writes nothing — the
+	// revision must NOT bump (no peel resyncs on a no-op republish tick).
+	res, err = pub.Publish(ctx)
+	if err != nil {
 		t.Fatalf("publish 2: %v", err)
+	}
+	if res.Changed {
+		t.Error("unchanged republish must report Changed=false")
 	}
 	entry, err = kv.Get(ctx, bus.KeyRevision)
 	if err != nil {
 		t.Fatalf("get revision 2: %v", err)
 	}
+	if got := string(entry.Value()); got != "1" {
+		t.Errorf("revision after unchanged republish: got %q, want %q (gate must skip the bump)", got, "1")
+	}
+
+	// A CONTENT change publishes and bumps.
+	os.WriteFile(filepath.Join(dir, "init.zy"), []byte("state v2"), 0644)
+	res, err = pub.Publish(ctx)
+	if err != nil {
+		t.Fatalf("publish 3: %v", err)
+	}
+	if !res.Changed {
+		t.Error("changed republish must report Changed")
+	}
+	entry, _ = kv.Get(ctx, bus.KeyRevision)
 	if got := string(entry.Value()); got != "2" {
-		t.Errorf("revision: got %q, want %q", got, "2")
+		t.Errorf("revision after change: got %q, want %q", got, "2")
+	}
+
+	// PublishForce bypasses the gate even with identical content — the
+	// operator's tamper-heal path rewrites everything and bumps.
+	res, err = pub.PublishForce(ctx)
+	if err != nil {
+		t.Fatalf("force publish: %v", err)
+	}
+	if !res.Changed {
+		t.Error("forced publish must report Changed")
+	}
+	entry, _ = kv.Get(ctx, bus.KeyRevision)
+	if got := string(entry.Value()); got != "3" {
+		t.Errorf("revision after force: got %q, want %q", got, "3")
 	}
 }
 
@@ -356,12 +398,12 @@ func TestPublishPreservesPath(t *testing.T) {
 		KV:        kv,
 	})
 
-	count, err := pub.Publish(ctx)
+	res, err := pub.Publish(ctx)
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if count != 1 {
-		t.Errorf("count: got %d, want 1", count)
+	if res.Files != 1 {
+		t.Errorf("count: got %d, want 1", res.Files)
 	}
 
 	// Verify forward-slash key.
@@ -371,5 +413,230 @@ func TestPublishPreservesPath(t *testing.T) {
 	}
 	if got := string(entry.Value()); got != "deep" {
 		t.Errorf("value: got %q, want %q", got, "deep")
+	}
+}
+
+// TestGateIntegrity_TornPublishHeals: a publish interrupted between the
+// _manifest Put and the _revision bump must NOT be pinned by the hash-gate —
+// the next gated publish detects the missing bump and repairs.
+func TestGateIntegrity_TornPublishHeals(t *testing.T) {
+	js := bustest.NewFakeJS()
+	ctx := context.Background()
+	if err := bus.InitializeStorage(ctx, js); err != nil {
+		t.Fatal(err)
+	}
+	kv, err := js.KeyValue(ctx, bus.BucketStateFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "init.zy"), []byte("v1"), 0644)
+	pub := statefiles.NewPublisher(statefiles.PublisherConfig{StatesDir: dir, KV: kv})
+
+	if _, err := pub.Publish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a TORN publish: the file and manifest for v2 land, but the
+	// process dies before BumpRevision.
+	os.WriteFile(filepath.Join(dir, "init.zy"), []byte("v2"), 0644)
+	if _, err := kv.Put(ctx, "init.zy", []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	m := statefiles.BuildManifest(map[string][]byte{"init.zy": []byte("v2")})
+	encoded, _ := bus.Encode(m)
+	if _, err := kv.Put(ctx, statefiles.KeyManifest, encoded); err != nil {
+		t.Fatal(err)
+	}
+	revBefore := bus.GetRevision(ctx, kv)
+
+	// The gated publish sees a byte-identical manifest BUT detects the
+	// missing bump (revision entry older than the manifest entry) and
+	// completes the publish.
+	res, err := pub.Publish(ctx)
+	if err != nil {
+		t.Fatalf("healing publish: %v", err)
+	}
+	if !res.Changed {
+		t.Fatal("torn publish was pinned by the hash-gate (Changed=false)")
+	}
+	if rev := bus.GetRevision(ctx, kv); rev <= revBefore {
+		t.Fatalf("revision not bumped by the healing publish: %d <= %d", rev, revBefore)
+	}
+
+	// And now the gate holds again.
+	res, err = pub.Publish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Changed {
+		t.Error("healed bucket must gate subsequent identical publishes")
+	}
+}
+
+// TestGateIntegrity_MissingListedKeyHeals: a manifest-listed file key deleted
+// out from under the manifest (dual-leader prune casualty) is detected and
+// repaired by the next gated publish.
+func TestGateIntegrity_MissingListedKeyHeals(t *testing.T) {
+	js := bustest.NewFakeJS()
+	ctx := context.Background()
+	if err := bus.InitializeStorage(ctx, js); err != nil {
+		t.Fatal(err)
+	}
+	kv, err := js.KeyValue(ctx, bus.BucketStateFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "init.zy"), []byte("v1"), 0644)
+	pub := statefiles.NewPublisher(statefiles.PublisherConfig{StatesDir: dir, KV: kv})
+	if _, err := pub.Publish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// A losing dual-leader's stale-key prune deletes a listed key.
+	if err := kv.Delete(ctx, "init.zy"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := pub.Publish(ctx)
+	if err != nil {
+		t.Fatalf("healing publish: %v", err)
+	}
+	if !res.Changed {
+		t.Fatal("pruned listed key was not repaired (gate skipped)")
+	}
+	if _, err := kv.Get(ctx, "init.zy"); err != nil {
+		t.Fatalf("listed key not restored: %v", err)
+	}
+}
+
+// TestSealedRoundTrip pins the sealed-replication contract: the publisher
+// seals values at Put (EncodeValue) while manifests hash the PLAINTEXT, the
+// hash-gate therefore stays deterministic despite randomized NaCl boxes, the
+// bucket never stores plaintext, and a cache with the matching DecodeValue
+// verifies plaintext hashes and lands plaintext on disk. Tampered ciphertext
+// fails the sync.
+func TestSealedRoundTrip(t *testing.T) {
+	js := bustest.NewFakeJS()
+	ctx := context.Background()
+	if err := bus.InitializeStorage(ctx, js); err != nil {
+		t.Fatal(err)
+	}
+	kv, err := js.KeyValue(ctx, bus.BucketMasterSettings)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The shared account key: every master derives the same encryptor.
+	accountKB, err := auth.GenerateKeyBundle(auth.RoleAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := auth.NewEncryptor(accountKB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srcDir := t.TempDir()
+	plaintext := "app:\n  db_password: !encrypted \"hunter2\"\n"
+	os.WriteFile(filepath.Join(srcDir, "app.zy"), []byte(plaintext), 0644)
+
+	// KEYED manifest hash (HMAC), as the master-settings publisher uses:
+	// the stored manifest must NOT be the plaintext SHA-256, or a $KV.>
+	// reader could brute-force low-entropy secrets offline.
+	hmacKey := []byte("test-account-seed")
+	keyedHash := func(data []byte) string {
+		mac := hmac.New(sha256.New, hmacKey)
+		mac.Write(data)
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	pub := statefiles.NewPublisher(statefiles.PublisherConfig{
+		StatesDir: srcDir,
+		KV:        kv,
+		EncodeValue: func(_ string, data []byte) ([]byte, error) {
+			return enc.Seal(data, enc.PublicKey()) // seal to self = to every master
+		},
+		HashValue: keyedHash,
+	})
+
+	res, err := pub.Publish(ctx)
+	if err != nil {
+		t.Fatalf("sealed publish: %v", err)
+	}
+	if !res.Changed || res.Files != 1 {
+		t.Fatalf("sealed publish = %+v", res)
+	}
+
+	// The bucket must NOT contain the plaintext.
+	entry, err := kv.Get(ctx, "app.zy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(entry.Value()), "hunter2") {
+		t.Fatal("plaintext secret leaked into the sealed bucket")
+	}
+
+	// ORACLE CLOSED: the stored _manifest must carry the KEYED hash, never
+	// the plaintext SHA-256 a $KV.> reader could recompute offline.
+	mEntry, err := kv.Get(ctx, statefiles.KeyManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var man statefiles.Manifest
+	if err := bus.Decode(mEntry.Value(), &man); err != nil {
+		t.Fatal(err)
+	}
+	if len(man.Files) != 1 {
+		t.Fatalf("manifest entries: %d", len(man.Files))
+	}
+	if man.Files[0].SHA256 == statefiles.HashFile([]byte(plaintext)) {
+		t.Fatal("manifest stores the UNKEYED plaintext SHA-256 — offline brute-force oracle open")
+	}
+	if man.Files[0].SHA256 != keyedHash([]byte(plaintext)) {
+		t.Fatal("manifest hash is not the keyed HMAC")
+	}
+
+	// GATE DETERMINISM: an identical republish must gate to a no-op even
+	// though a fresh seal would produce different ciphertext.
+	res, err = pub.Publish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Changed {
+		t.Fatal("identical sealed republish did not hash-gate (manifest must hash plaintext)")
+	}
+
+	// The mirror side: decode + verify + land plaintext.
+	dstDir := filepath.Join(t.TempDir(), "settings")
+	cache := statefiles.NewCache(statefiles.CacheConfig{
+		CacheDir: dstDir,
+		JS:       js,
+		Bucket:   bus.BucketMasterSettings,
+		DecodeValue: func(_ string, stored []byte) ([]byte, error) {
+			return enc.Open(stored, enc.PublicKey())
+		},
+		HashValue: keyedHash,
+	})
+	if _, err := cache.Sync(ctx); err != nil {
+		t.Fatalf("sealed sync: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dstDir, "app.zy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != plaintext {
+		t.Fatalf("mirrored plaintext mismatch:\n%s", got)
+	}
+
+	// Tampered ciphertext fails the sync (decode error), leaving disk intact.
+	if _, err := kv.Put(ctx, "app.zy", []byte("garbage-not-a-box")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.Sync(ctx); err == nil {
+		t.Fatal("tampered ciphertext must fail the sync")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dstDir, "app.zy")); string(got) != plaintext {
+		t.Fatal("failed sync must leave the previous plaintext tree intact")
 	}
 }

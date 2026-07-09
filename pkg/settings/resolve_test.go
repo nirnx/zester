@@ -365,7 +365,7 @@ func TestResolve_UnresolvedPlaceholderFails(t *testing.T) {
 		"top.zy": []byte("base:\n  '*':\n    - app\n"),
 		"app.zy": []byte("app_name: myapp\ndb_password: !encrypted \"prod-pass\"\n"),
 	}
-	if _, err := pub.PublishRawFiles(ctx, rawFiles); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, rawFiles); err != nil {
 		t.Fatalf("publish raw files: %v", err)
 	}
 	// Deliberately do NOT publish secrets: the peel resolves before the
@@ -404,7 +404,7 @@ func TestResolve_SecretsArriveAfterFailedResolve(t *testing.T) {
 		"top.zy": []byte("base:\n  '*':\n    - app\n"),
 		"app.zy": []byte("db_password: !encrypted \"prod-pass\"\n"),
 	}
-	extracted, err := pub.PublishRawFiles(ctx, rawFiles)
+	extracted, _, err := pub.PublishRawFiles(ctx, rawFiles)
 	if err != nil {
 		t.Fatalf("publish raw files: %v", err)
 	}

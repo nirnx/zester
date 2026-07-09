@@ -3,6 +3,7 @@ module github.com/nirnx/zester
 go 1.25.5
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/nats-io/jwt/v2 v2.8.2
 	github.com/nats-io/nats.go v1.52.0
 	github.com/nats-io/nkeys v0.4.16

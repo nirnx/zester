@@ -48,22 +48,71 @@ func (d *Daemon) handleFactsUpdate(peelID string, f facts.Facts) {
 	// re-encrypts per facts update instead of every master doing N× the
 	// work; PublishSecrets itself stays hash-gated, so the brief
 	// advisory-lease overlap at worst duplicates one publish.
-	curveKey := ""
-	if ck, ok := f["_curve_public_key"]; ok {
-		curveKey = fmt.Sprintf("%v", ck)
-	}
-	if len(d.allSecrets) > 0 && curveKey != "" && d.topFile != nil {
+	// Snapshot the secret-encryption inputs: publishSettingsFiles refreshes
+	// them when the on-disk tree changes (ticker / watcher / fileserver
+	// update), and this callback runs on the facts watcher goroutine.
+	d.settingsMu.RLock()
+	allSecrets, topFile := d.allSecrets, d.topFile
+	d.settingsMu.RUnlock()
+	if len(allSecrets) > 0 && topFile != nil {
 		if !d.secretsLeader() {
 			d.logger.Debug("skipping secrets publish; not facts-secrets lease holder", "peel", peelID)
 			return
 		}
-		matcher := &settings.SimpleTargetMatcher{}
-		refs := d.topFile.ResolveForPeel(peelID, map[string]any(f), matcher)
-		peelSecrets := d.allSecrets.ForRefs(refs)
-		if len(peelSecrets) > 0 {
-			if err := d.publisher.PublishSecrets(ctx, peelID, peelSecrets, curveKey); err != nil {
-				d.logger.Error("failed to publish secrets", "peel", peelID, "error", err)
-			}
+		d.publishSecretsForPeel(ctx, peelID, map[string]any(f), allSecrets, topFile)
+	}
+}
+
+// publishSecretsForPeel encrypts and publishes one peel's targeted secrets
+// (hash-gated inside PublishSecrets). Shared by the facts watcher callback
+// and the live-settings fleet republish.
+func (d *Daemon) publishSecretsForPeel(ctx context.Context, peelID string, f map[string]any, allSecrets settings.FileSecrets, topFile *settings.TopFile) {
+	curveKey := ""
+	if ck, ok := f["_curve_public_key"]; ok {
+		curveKey = fmt.Sprintf("%v", ck)
+	}
+	if curveKey == "" {
+		return
+	}
+	matcher := &settings.SimpleTargetMatcher{}
+	refs := topFile.ResolveForPeel(peelID, f, matcher)
+	peelSecrets := allSecrets.ForRefs(refs)
+	if len(peelSecrets) > 0 {
+		if err := d.publisher.PublishSecrets(ctx, peelID, peelSecrets, curveKey); err != nil {
+			d.logger.Error("failed to publish secrets", "peel", peelID, "error", err)
 		}
+	}
+}
+
+// republishSecretsToFleet re-encrypts targeted secrets for EVERY indexed
+// peel. Called when a live settings publish changed the extracted secrets:
+// stable peels hash-skip their periodic facts publishes, so without this a
+// rotated !encrypted VALUE (which is even hash-gate-invisible — the
+// sanitized placeholder derives from the key alone) would reach a peel only
+// on its next facts change. Before live publishing, rotation implied a
+// master restart, whose facts-watch replay re-encrypted everyone; this is
+// that replay's equivalent. Per-peel PublishSecrets stays hash-gated, so
+// unchanged peels cost one fingerprint check.
+func (d *Daemon) republishSecretsToFleet(ctx context.Context) {
+	if !d.secretsLeader() {
+		return
+	}
+	idx := d.factsIndex.Load()
+	if idx == nil {
+		return
+	}
+	d.settingsMu.RLock()
+	allSecrets, topFile := d.allSecrets, d.topFile
+	d.settingsMu.RUnlock()
+	if len(allSecrets) == 0 || topFile == nil {
+		return
+	}
+	all := idx.AllRawFacts()
+	d.logger.Info("settings secrets changed; re-encrypting for the fleet", "peels", len(all))
+	for peelID, f := range all {
+		if ctx.Err() != nil {
+			return
+		}
+		d.publishSecretsForPeel(ctx, peelID, f, allSecrets, topFile)
 	}
 }

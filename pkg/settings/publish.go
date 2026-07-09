@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -229,26 +230,41 @@ func (fs FileSecrets) Flat() map[string]string {
 // PublishRawFiles reads all .zy files from the settings directory, sanitizes
 // them (replacing !encrypted values with placeholders), and stores the
 // sanitized templates in the shared settings-files KV bucket. Returns
-// per-file secrets so callers can filter by peel targeting.
+// per-file secrets so callers can filter by peel targeting, plus whether
+// anything was written: the publish is HASH-GATED — when the computed
+// manifest is byte-identical to the bucket's _manifest, all KV writes
+// (files, manifest, prune, _revision bump) are skipped, so periodic and
+// watcher-triggered republishes cause no peel churn. Secrets are extracted
+// and returned regardless (per-peel encryption needs them on every master).
 //
-// After all file keys are written, a _manifest key (sorted list of
-// {key, sha256} entries) is published, stale bucket keys absent from the
-// manifest are deleted (deletion propagation), and finally _revision is
+// When publishing, after all file keys are written a _manifest key (sorted
+// list of {key, sha256} entries) is published, stale bucket keys absent from
+// the manifest are deleted (deletion propagation), and finally _revision is
 // bumped. Well-known keys (_revision, _manifest, the master curve public
 // key) are never deleted.
-func (p *Publisher) PublishRawFiles(ctx context.Context, files map[string][]byte) (FileSecrets, error) {
+func (p *Publisher) PublishRawFiles(ctx context.Context, files map[string][]byte) (FileSecrets, bool, error) {
+	return p.publishRawFiles(ctx, files, false)
+}
+
+// PublishRawFilesForce is PublishRawFiles without the hash-gate: every key
+// is rewritten and _revision bumps even when nothing changed. Used by the
+// operator's `zester fileserver update --force` (also self-heals tampered or
+// torn file keys under an intact manifest).
+func (p *Publisher) PublishRawFilesForce(ctx context.Context, files map[string][]byte) (FileSecrets, bool, error) {
+	return p.publishRawFiles(ctx, files, true)
+}
+
+func (p *Publisher) publishRawFiles(ctx context.Context, files map[string][]byte, force bool) (FileSecrets, bool, error) {
 	allSecrets := make(FileSecrets)
 	manifest := make([]ManifestEntry, 0, len(files))
+	sanitizedFiles := make(map[string][]byte, len(files))
 
 	for key, data := range files {
 		sanitized, err := SanitizeFile(data)
 		if err != nil {
-			return nil, fmt.Errorf("settings: sanitize %s: %w", key, err)
+			return nil, false, fmt.Errorf("settings: sanitize %s: %w", key, err)
 		}
-
-		if _, err := p.filesKV.Put(ctx, key, sanitized.Content); err != nil {
-			return nil, fmt.Errorf("settings: publish file %s to KV: %w", key, err)
-		}
+		sanitizedFiles[key] = sanitized.Content
 
 		sum := sha256.Sum256(sanitized.Content)
 		manifest = append(manifest, ManifestEntry{
@@ -263,8 +279,33 @@ func (p *Publisher) PublishRawFiles(ctx context.Context, files map[string][]byte
 
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].Key < manifest[j].Key })
 
-	if _, err := bus.KVPut(ctx, p.filesKV, ManifestKey, manifest); err != nil {
-		return nil, fmt.Errorf("settings: publish manifest: %w", err)
+	encoded, err := bus.Encode(manifest)
+	if err != nil {
+		return nil, false, fmt.Errorf("settings: encode manifest: %w", err)
+	}
+
+	// Hash-gate: the manifest is sorted and msgpack encoding deterministic,
+	// so byte equality with the stored _manifest means the identical
+	// sanitized file set. Secrets were already extracted above. Equality
+	// alone is not enough — gateIntegrityOK verifies the matched publish
+	// COMPLETED (revision bumped after the manifest; all listed keys
+	// present), so a torn bucket falls through to a repairing publish.
+	if !force {
+		if cur, err := p.filesKV.Get(ctx, ManifestKey); err == nil && bytes.Equal(cur.Value(), encoded) &&
+			p.gateIntegrityOK(ctx, cur, manifest) {
+			p.logger.Debug("settings: publish skipped, manifest unchanged", "files", len(files))
+			return allSecrets, false, nil
+		}
+	}
+
+	for key, content := range sanitizedFiles {
+		if _, err := p.filesKV.Put(ctx, key, content); err != nil {
+			return nil, false, fmt.Errorf("settings: publish file %s to KV: %w", key, err)
+		}
+	}
+
+	if _, err := p.filesKV.Put(ctx, ManifestKey, encoded); err != nil {
+		return nil, false, fmt.Errorf("settings: publish manifest: %w", err)
 	}
 
 	// Prune is best-effort garbage collection and must never block the
@@ -277,10 +318,40 @@ func (p *Publisher) PublishRawFiles(ctx context.Context, files map[string][]byte
 	p.pruneStaleFiles(ctx, manifest)
 
 	if err := bus.BumpRevision(ctx, p.filesKV); err != nil {
-		return nil, fmt.Errorf("settings: bump revision: %w", err)
+		return nil, false, fmt.Errorf("settings: bump revision: %w", err)
 	}
 
-	return allSecrets, nil
+	return allSecrets, true, nil
+}
+
+// gateIntegrityOK verifies that a byte-identical stored manifest reflects a
+// COMPLETED publish (statefiles.Publisher has the same guard): the
+// _revision bump landed after the manifest write, and every manifest-listed
+// key still exists. A torn publish (interrupted between manifest and bump)
+// or a dual-leader prune casualty falls through to a full repairing publish
+// instead of being pinned by the gate forever.
+func (p *Publisher) gateIntegrityOK(ctx context.Context, manifestEntry bus.KVEntry, manifest []ManifestEntry) bool {
+	revEntry, err := p.filesKV.Get(ctx, bus.KeyRevision)
+	if err != nil || revEntry.Revision() <= manifestEntry.Revision() {
+		p.logger.Info("settings: gate integrity check failed (revision bump missing or older than manifest); republishing")
+		return false
+	}
+	lister, err := p.filesKV.ListKeys(ctx)
+	if err != nil {
+		return false
+	}
+	present := make(map[string]struct{})
+	for key := range lister.Keys() {
+		present[key] = struct{}{}
+	}
+	lister.Stop()
+	for _, e := range manifest {
+		if _, ok := present[e.Key]; !ok {
+			p.logger.Info("settings: gate integrity check failed (manifest-listed key missing); republishing", "key", e.Key)
+			return false
+		}
+	}
+	return true
 }
 
 // pruneStaleFiles deletes settings-files KV keys that are not part of the

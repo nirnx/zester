@@ -260,7 +260,7 @@ func TestResolve_PublisherManifestRoundTrip(t *testing.T) {
 		"app.zy": []byte("app_name: roundtrip\n"),
 		"old.zy": []byte("gone: soon\n"),
 	}
-	if _, err := env.pub.PublishRawFiles(ctx, files); err != nil {
+	if _, _, err := env.pub.PublishRawFiles(ctx, files); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 
@@ -283,7 +283,7 @@ func TestResolve_PublisherManifestRoundTrip(t *testing.T) {
 
 	// Second publish drops old.zy — pruning must not break resolution.
 	delete(files, "old.zy")
-	if _, err := env.pub.PublishRawFiles(ctx, files); err != nil {
+	if _, _, err := env.pub.PublishRawFiles(ctx, files); err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
 	if _, err := env.filesKV.Get(ctx, "old.zy"); !errors.Is(err, bus.ErrKeyNotFound) {

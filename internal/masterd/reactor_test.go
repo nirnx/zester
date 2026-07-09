@@ -288,7 +288,7 @@ func TestPublishReactorFilesEmptyDirGuard(t *testing.T) {
 	if err := d.startReactorPublisher(ctx); err != nil {
 		t.Fatalf("startReactorPublisher: %v", err)
 	}
-	d.publishReactorFiles(ctx)
+	d.publishReactorFiles(ctx, false)
 
 	for _, key := range []string{"reactor/top.zy", "reactor/restart.zy", "reactor/sub/extra.zy", reactor.KeyManifest, bus.KeyRevision} {
 		if !kvHasKey(t, js, bus.BucketReactorFiles, key) {
@@ -318,14 +318,14 @@ func TestPublishReactorFilesEmptyDirGuard(t *testing.T) {
 
 	// An empty local dir must NOT wipe the populated bucket.
 	cfg.Reactor.Dir = t.TempDir()
-	d.publishReactorFiles(ctx)
+	d.publishReactorFiles(ctx, false)
 	if !kvHasKey(t, js, bus.BucketReactorFiles, "reactor/top.zy") {
 		t.Fatal("empty local dir wiped a populated reactor-files bucket")
 	}
 
 	// A missing local dir must not wipe it either.
 	cfg.Reactor.Dir = filepath.Join(t.TempDir(), "does-not-exist")
-	d.publishReactorFiles(ctx)
+	d.publishReactorFiles(ctx, false)
 	if !kvHasKey(t, js, bus.BucketReactorFiles, "reactor/top.zy") {
 		t.Fatal("missing local dir wiped a populated reactor-files bucket")
 	}
@@ -340,7 +340,7 @@ func TestPublishReactorFilesEmptyDirGuard(t *testing.T) {
 	if err := d2.startReactorPublisher(ctx); err != nil {
 		t.Fatalf("startReactorPublisher: %v", err)
 	}
-	d2.publishReactorFiles(ctx)
+	d2.publishReactorFiles(ctx, false)
 	if !kvHasKey(t, js2, bus.BucketReactorFiles, reactor.KeyManifest) {
 		t.Fatal("empty publish over an empty bucket must still write the manifest")
 	}

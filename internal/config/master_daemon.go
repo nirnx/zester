@@ -31,6 +31,32 @@ type MasterDaemonConfig struct {
 	Reactor           MasterReactor `yaml:"reactor"`
 	CA                MasterCA      `yaml:"ca"`
 	NatsAdvertise     []string      `yaml:"nats_advertise_urls" flag:"nats-advertise-urls" usage:"Fleet-facing NATS URLs served to peels via enrollment discovery (tls:// only, no loopback); empty disables discovery"`
+
+	// FilesRepublishInterval is the lease holder's periodic re-walk of the
+	// settings/states/reactor dirs (hash-gated: an unchanged tree writes
+	// nothing). The backstop for edits the file watcher misses; 0 disables.
+	FilesRepublishInterval Duration `yaml:"files_republish_interval" flag:"files-republish-interval" usage:"Periodic republish of settings/state/reactor files by the lease holder (hash-gated; 0 disables)"`
+
+	// FilesWatch enables the fsnotify watcher on the settings/states/reactor
+	// dirs: on-disk edits publish within ~1s instead of waiting for the
+	// republish tick. inotify on Linux; unreliable on NFS/remote mounts,
+	// which is why the interval backstop stays on.
+	FilesWatch bool `yaml:"files_watch" flag:"files-watch" usage:"Watch settings/state/reactor dirs and publish on change (lease holder only)"`
+
+	// FilesMirror makes STANDBY masters mirror the published file sets from
+	// KV into their local source dirs, so every master's dirs track fleet
+	// truth and a failover never republishes a stale tree. Disable when
+	// masters share one filesystem for these dirs (shared volume/NFS — the
+	// holder's publishes already ARE the standby's dirs) or when a set is
+	// GitFS-sourced (auto-excluded).
+	FilesMirror bool `yaml:"files_mirror" flag:"files-mirror" usage:"Standby masters mirror published settings/state/reactor files from KV into their local dirs"`
+
+	// PublisherStatusFile is rewritten on every publisher-lease transition
+	// (role, master id, hostname, since) — the packaged MOTD snippet reads
+	// it to warn operators logging into a standby that file edits there are
+	// not published. Empty disables. The packaged unit's RuntimeDirectory
+	// provides /run/zester.
+	PublisherStatusFile string `yaml:"publisher_status_file" flag:"publisher-status-file" usage:"File rewritten with this master's publisher-lease role on every transition (empty disables)"`
 }
 
 // MasterCA configures the embedded certificate authority. Mode selects how
@@ -110,8 +136,13 @@ func MasterDaemonDefaults() MasterDaemonConfig {
 		StatesDir:   "/var/lib/zester/states",
 		SettingsDir: "/var/lib/zester/settings",
 		HealthAddr:  "127.0.0.1:9091",
-		LogLevel:    "info",
-		LogFormat:   "json",
+
+		FilesRepublishInterval: Duration(30 * time.Second),
+		FilesWatch:             true,
+		FilesMirror:            true,
+		PublisherStatusFile:    "/run/zester/publisher-status",
+		LogLevel:               "info",
+		LogFormat:              "json",
 		Enroll: MasterEnroll{
 			Addr:    ":8443",
 			TLSCert: "/var/lib/zester/auth/enroll.crt",

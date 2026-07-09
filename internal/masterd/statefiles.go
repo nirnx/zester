@@ -7,6 +7,7 @@ import (
 
 	"github.com/nirnx/zester/internal/health"
 	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/fileserver"
 	"github.com/nirnx/zester/pkg/statefiles"
 )
 
@@ -29,13 +30,38 @@ func (d *Daemon) startStatefilesPublisher(ctx context.Context) error {
 }
 
 // publishStateFiles publishes the on-disk state tree to the state-files KV
-// bucket. Called only by the publisher-lease holder (runLeaderPublish).
-func (d *Daemon) publishStateFiles(ctx context.Context) {
-	if count, err := d.statePublisher.Publish(ctx); err != nil {
-		d.logger.Warn("failed to publish state files", "error", err)
-	} else {
-		d.logger.Info("published state files", "count", count)
+// bucket. Called only by the publisher-lease holder (initial publish, the
+// republish ticker, the file watcher, and the fileserver-update service).
+// Hash-gated unless force: an unchanged tree writes nothing and no peel
+// resyncs.
+func (d *Daemon) publishStateFiles(ctx context.Context, force bool) fileserver.SetResult {
+	if d.statePublisher == nil {
+		return fileserver.SetResult{Name: "states"}
 	}
+	// GitFS OWNS state publishing: its sync loop refuses to publish while a
+	// remote lacks a valid last-known-good clone (a half-cloned dir must
+	// never propagate fleet-wide deletions). The watcher/ticker/update paths
+	// walking the dir directly would bypass that gate — e.g. publishing
+	// mid-RemoveAll during a self-healing re-clone — so under GitFS they
+	// skip states entirely and leave it to the sync loop.
+	if d.cfg != nil && len(d.cfg.GitFS.Remotes) > 0 {
+		return fileserver.SetResult{Name: "states", Skipped: "gitfs-managed"}
+	}
+	publish := d.statePublisher.Publish
+	if force {
+		publish = d.statePublisher.PublishForce
+	}
+	res, err := publish(ctx)
+	if err != nil {
+		d.logger.Warn("failed to publish state files", "error", err)
+		return fileserver.SetResult{Name: "states", Err: err.Error()}
+	}
+	if res.Changed {
+		d.logger.Info("published state files", "count", res.Files)
+	} else {
+		d.logger.Debug("state files unchanged, publish skipped", "count", res.Files)
+	}
+	return fileserver.SetResult{Name: "states", Files: res.Files, Changed: res.Changed}
 }
 
 // startGitFS constructs the GitFS syncer and registers the 'gitfs'

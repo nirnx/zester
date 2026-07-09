@@ -87,7 +87,7 @@ func TestPublishRawFiles_ManifestSortedWithHashes(t *testing.T) {
 		"common/mid.zy": []byte("m: 1\n"),
 		"top.zy":        []byte("base:\n  '*':\n    - alpha\n"),
 	}
-	if _, err := pub.PublishRawFiles(ctx, files); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, files); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -138,7 +138,7 @@ func TestPublishRawFiles_DeletesStaleKeys(t *testing.T) {
 		"keep.zy":    []byte("keep: 1\n"),
 		"removed.zy": []byte("removed: 1\n"),
 	}
-	if _, err := pub.PublishRawFiles(ctx, first); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, first); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 	revAfterFirst := bus.GetRevision(ctx, filesKV)
@@ -150,7 +150,7 @@ func TestPublishRawFiles_DeletesStaleKeys(t *testing.T) {
 	second := map[string][]byte{
 		"keep.zy": []byte("keep: 2\n"),
 	}
-	if _, err := pub.PublishRawFiles(ctx, second); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, second); err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestPublishRawFiles_PruneDeleteFailureDoesNotBlockRevisionBump(t *testing.T
 		"keep.zy":    []byte("keep: 1\n"),
 		"removed.zy": []byte("removed: 1\n"),
 	}
-	if _, err := pub.PublishRawFiles(ctx, first); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, first); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 	rev1 := bus.GetRevision(ctx, filesKV)
@@ -245,7 +245,7 @@ func TestPublishRawFiles_PruneDeleteFailureDoesNotBlockRevisionBump(t *testing.T
 	// Second publish drops removed.zy, but its Delete fails.
 	wrapped.failDelete["removed.zy"] = true
 	second := map[string][]byte{"keep.zy": []byte("keep: 2\n")}
-	if _, err := pub.PublishRawFiles(ctx, second); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, second); err != nil {
 		t.Fatalf("second publish must succeed despite prune failure, got: %v", err)
 	}
 	rev2 := bus.GetRevision(ctx, filesKV)
@@ -268,16 +268,33 @@ func TestPublishRawFiles_PruneDeleteFailureDoesNotBlockRevisionBump(t *testing.T
 		}
 	}
 
-	// Third publish with a healthy KV re-prunes the leftover.
+	// An IDENTICAL republish is hash-gated (nothing written, no bump, no
+	// re-prune — the leftover stays inert garbage).
 	wrapped.failDelete = map[string]bool{}
-	if _, err := pub.PublishRawFiles(ctx, second); err != nil {
-		t.Fatalf("third publish: %v", err)
+	if _, changed, err := pub.PublishRawFiles(ctx, second); err != nil {
+		t.Fatalf("gated republish: %v", err)
+	} else if changed {
+		t.Error("identical republish must be gated (changed=false)")
+	}
+	if _, err := filesKV.Get(ctx, "removed.zy"); err != nil {
+		t.Fatalf("gated republish must not touch KV: %v", err)
+	}
+	if rev := bus.GetRevision(ctx, filesKV); rev != rev2 {
+		t.Errorf("revision after gated republish = %d, want unchanged %d", rev, rev2)
+	}
+
+	// A FORCED publish with a healthy KV re-prunes the leftover (the
+	// operator's `fileserver update --force` heal path).
+	if _, changed, err := pub.PublishRawFilesForce(ctx, second); err != nil {
+		t.Fatalf("forced publish: %v", err)
+	} else if !changed {
+		t.Error("forced publish must report changed")
 	}
 	if _, err := filesKV.Get(ctx, "removed.zy"); !errors.Is(err, bus.ErrKeyNotFound) {
-		t.Errorf("removed.zy should be re-pruned by the next successful publish, got err=%v", err)
+		t.Errorf("removed.zy should be re-pruned by the forced publish, got err=%v", err)
 	}
 	if rev3 := bus.GetRevision(ctx, filesKV); rev3 <= rev2 {
-		t.Errorf("revision after third publish = %d, want > %d", rev3, rev2)
+		t.Errorf("revision after forced publish = %d, want > %d", rev3, rev2)
 	}
 }
 
@@ -288,13 +305,13 @@ func TestPublishRawFiles_PruneListFailureDoesNotBlockRevisionBump(t *testing.T) 
 	pub, wrapped, filesKV := newGCFailPublisher(t)
 	ctx := context.Background()
 
-	if _, err := pub.PublishRawFiles(ctx, map[string][]byte{"a.zy": []byte("a: 1\n")}); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, map[string][]byte{"a.zy": []byte("a: 1\n")}); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 	rev1 := bus.GetRevision(ctx, filesKV)
 
 	wrapped.failList = true
-	if _, err := pub.PublishRawFiles(ctx, map[string][]byte{"b.zy": []byte("b: 1\n")}); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, map[string][]byte{"b.zy": []byte("b: 1\n")}); err != nil {
 		t.Fatalf("publish must succeed despite listkeys failure, got: %v", err)
 	}
 	if rev2 := bus.GetRevision(ctx, filesKV); rev2 <= rev1 {

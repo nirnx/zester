@@ -1,6 +1,7 @@
 package statefiles
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,8 @@ type Publisher struct {
 	kv         bus.KV
 	logger     *slog.Logger
 	allowEmpty bool
+	encode     func(key string, plaintext []byte) ([]byte, error)
+	hashFn     func([]byte) string
 }
 
 // PublisherConfig configures the state file publisher.
@@ -38,6 +41,20 @@ type PublisherConfig struct {
 	// misconfigured or not-yet-cloned states dir rather than intent, so it
 	// is refused unless this is set.
 	AllowEmpty bool
+
+	// EncodeValue, when set, transforms each file's bytes at Put time (e.g.
+	// sealing them to the account curve key for the master-settings
+	// replica). The MANIFEST keeps hashing the PLAINTEXT as given, so the
+	// hash-gate stays deterministic even when the encoding is randomized
+	// (NaCl boxes differ on every seal). Consumers must apply the matching
+	// CacheConfig.DecodeValue.
+	EncodeValue func(key string, plaintext []byte) ([]byte, error)
+
+	// HashValue overrides the per-file manifest hash (default: unkeyed
+	// SHA-256). The sealed master-settings publisher passes a KEYED hash so
+	// the plaintext-derived manifest is not an offline oracle for a $KV.>
+	// reader. Consumers must set the matching CacheConfig.HashValue.
+	HashValue func([]byte) string
 }
 
 // NewPublisher creates a state file publisher for the master.
@@ -46,71 +63,174 @@ func NewPublisher(cfg PublisherConfig) *Publisher {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	hashFn := cfg.HashValue
+	if hashFn == nil {
+		hashFn = HashFile
+	}
 	return &Publisher{
 		statesDir:  cfg.StatesDir,
 		kv:         cfg.KV,
 		logger:     logger,
 		allowEmpty: cfg.AllowEmpty,
+		encode:     cfg.EncodeValue,
+		hashFn:     hashFn,
 	}
+}
+
+// Result describes one publish attempt.
+type Result struct {
+	// Files is the size of the (would-be) published file set.
+	Files int
+
+	// Changed reports whether anything was written: false means the computed
+	// manifest was byte-identical to the bucket's _manifest, so the whole
+	// publish — file puts, manifest, revision bump, stale-key prune — was
+	// skipped and no peel resyncs.
+	Changed bool
 }
 
 // Publish walks the states directory, reads all .zy files, and publishes
-// them to the state-files KV bucket. Returns the number of published files.
-func (p *Publisher) Publish(ctx context.Context) (int, error) {
+// them to the state-files KV bucket. The publish is hash-gated: when the
+// computed manifest matches the bucket's, nothing is written (Result.Changed
+// false) — which makes periodic and watcher-triggered republishes free.
+func (p *Publisher) Publish(ctx context.Context) (Result, error) {
 	files, err := loadStateFiles(p.statesDir)
 	if err != nil {
-		return 0, fmt.Errorf("statefiles: walk %s: %w", p.statesDir, err)
+		return Result{}, fmt.Errorf("statefiles: walk %s: %w", p.statesDir, err)
 	}
-	return p.PublishFiles(ctx, files)
+	return p.publishFiles(ctx, files, false)
 }
 
-// PublishFiles publishes the given files map to the state-files KV bucket.
-// Keys are forward-slash-separated relative paths; values are raw file bytes.
+// PublishForce is Publish without the hash-gate: it rewrites every file key,
+// the manifest, and the revision even when nothing changed. Used by the
+// operator's explicit `zester fileserver update --force` — an unconditional
+// re-put also self-heals a bucket whose file keys were tampered with or torn
+// while the manifest stayed intact (a state the gate would otherwise skip).
+func (p *Publisher) PublishForce(ctx context.Context) (Result, error) {
+	files, err := loadStateFiles(p.statesDir)
+	if err != nil {
+		return Result{}, fmt.Errorf("statefiles: walk %s: %w", p.statesDir, err)
+	}
+	return p.publishFiles(ctx, files, true)
+}
+
+// PublishFiles publishes the given files map to the state-files KV bucket
+// (hash-gated, like Publish). Keys are forward-slash-separated relative
+// paths; values are raw file bytes.
+func (p *Publisher) PublishFiles(ctx context.Context, files map[string][]byte) (Result, error) {
+	return p.publishFiles(ctx, files, false)
+}
+
+// PublishFilesForce is PublishFiles without the hash-gate (see PublishForce).
+func (p *Publisher) PublishFilesForce(ctx context.Context, files map[string][]byte) (Result, error) {
+	return p.publishFiles(ctx, files, true)
+}
+
+// publishFiles implements the batch protocol: write all file keys, write the
+// _manifest key describing the complete set, bump _revision (the signal peels
+// watch), then best-effort delete bucket keys absent from the manifest. The
+// manifest lands before the revision bump so a peel reacting to the bump
+// always sees a manifest covering the batch; stale-key deletion is garbage
+// collection only, because manifest-aware peels fetch exactly the manifest's
+// file set.
 //
-// The batch protocol is: write all file keys, write the _manifest key
-// describing the complete set, bump _revision (the signal peels watch), then
-// best-effort delete bucket keys absent from the manifest. The manifest lands
-// before the revision bump so a peel reacting to the bump always sees a
-// manifest covering the batch; stale-key deletion is garbage collection only,
-// because manifest-aware peels fetch exactly the manifest's file set.
-//
-// Returns the number of published files.
-func (p *Publisher) PublishFiles(ctx context.Context, files map[string][]byte) (int, error) {
+// Unless force is set, the publish is skipped entirely when the computed
+// manifest is byte-identical to the bucket's current _manifest.
+func (p *Publisher) publishFiles(ctx context.Context, files map[string][]byte, force bool) (Result, error) {
 	if len(files) == 0 && !p.allowEmpty {
 		existing, err := p.bucketFileKeys(ctx)
 		if err != nil {
-			return 0, err
+			return Result{}, err
 		}
 		if len(existing) > 0 {
-			return 0, fmt.Errorf("statefiles: refusing to publish empty file set over %d existing files (states dir empty or not yet cloned; set AllowEmpty to force)", len(existing))
+			return Result{}, fmt.Errorf("statefiles: refusing to publish empty file set over %d existing files (states dir empty or not yet cloned; set AllowEmpty to force)", len(existing))
+		}
+	}
+
+	manifest := BuildManifestWith(files, p.hashFn)
+	encoded, err := bus.Encode(manifest)
+	if err != nil {
+		return Result{}, fmt.Errorf("statefiles: encode manifest: %w", err)
+	}
+
+	// Hash-gate: BuildManifest sorts entries and msgpack encoding is
+	// deterministic, so byte equality with the stored _manifest means the
+	// exact same file set with the exact same content hashes. Equality alone
+	// is not enough — the gate also verifies the matched publish actually
+	// COMPLETED (see gateIntegrityOK); a torn or tampered bucket falls
+	// through to a full repairing publish instead of being pinned forever.
+	if !force {
+		if cur, err := p.kv.Get(ctx, KeyManifest); err == nil && bytes.Equal(cur.Value(), encoded) &&
+			p.gateIntegrityOK(ctx, cur, manifest) {
+			p.logger.Debug("statefiles: publish skipped, manifest unchanged", "files", len(files))
+			return Result{Files: len(files), Changed: false}, nil
 		}
 	}
 
 	count := 0
 	for key, data := range files {
-		if _, err := p.kv.Put(ctx, key, data); err != nil {
-			return count, fmt.Errorf("statefiles: publish %s: %w", key, err)
+		stored := data
+		if p.encode != nil {
+			var err error
+			if stored, err = p.encode(key, data); err != nil {
+				return Result{Files: count, Changed: true}, fmt.Errorf("statefiles: encode %s: %w", key, err)
+			}
 		}
-		p.logger.Debug("published state file", "key", key, "size", len(data))
+		if _, err := p.kv.Put(ctx, key, stored); err != nil {
+			return Result{Files: count, Changed: true}, fmt.Errorf("statefiles: publish %s: %w", key, err)
+		}
+		p.logger.Debug("published state file", "key", key, "size", len(stored))
 		count++
 	}
 
-	manifest := BuildManifest(files)
-	encoded, err := bus.Encode(manifest)
-	if err != nil {
-		return count, fmt.Errorf("statefiles: encode manifest: %w", err)
-	}
 	if _, err := p.kv.Put(ctx, KeyManifest, encoded); err != nil {
-		return count, fmt.Errorf("statefiles: publish manifest: %w", err)
+		return Result{Files: count, Changed: true}, fmt.Errorf("statefiles: publish manifest: %w", err)
 	}
 
 	if err := bus.BumpRevision(ctx, p.kv); err != nil {
-		return count, fmt.Errorf("statefiles: bump revision: %w", err)
+		return Result{Files: count, Changed: true}, fmt.Errorf("statefiles: bump revision: %w", err)
 	}
 
 	p.deleteStaleKeys(ctx, files)
 
-	return count, nil
+	return Result{Files: count, Changed: true}, nil
+}
+
+// gateIntegrityOK verifies that a byte-identical stored manifest reflects a
+// COMPLETED publish, so the hash-gate never pins a torn bucket:
+//
+//   - the _revision bump must have landed AFTER the manifest write (entry
+//     revisions are bucket-monotonic). A publish interrupted between the
+//     _manifest Put and BumpRevision would otherwise never notify peels —
+//     every later gated publish would skip the bump forever;
+//   - every manifest-listed file key must still exist: during the tolerated
+//     dual-leader window, a losing master's stale-key prune can delete a key
+//     the winning manifest lists, leaving peels unable to sync.
+//
+// Any verification failure (or inability to verify) falls through to a full
+// publish — the safe direction. Content tampering with intact keys still
+// needs an explicit --force (documented).
+func (p *Publisher) gateIntegrityOK(ctx context.Context, manifestEntry bus.KVEntry, m Manifest) bool {
+	revEntry, err := p.kv.Get(ctx, bus.KeyRevision)
+	if err != nil || revEntry.Revision() <= manifestEntry.Revision() {
+		p.logger.Info("statefiles: gate integrity check failed (revision bump missing or older than manifest); republishing")
+		return false
+	}
+	keys, err := p.kv.Keys(ctx)
+	if err != nil {
+		return false
+	}
+	present := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		present[k] = struct{}{}
+	}
+	for _, f := range m.Files {
+		if _, ok := present[f.Key]; !ok {
+			p.logger.Info("statefiles: gate integrity check failed (manifest-listed key missing); republishing", "key", f.Key)
+			return false
+		}
+	}
+	return true
 }
 
 // bucketFileKeys lists the bucket's state-file keys (excluding the _revision

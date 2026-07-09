@@ -110,15 +110,18 @@ func (g *GitFS) syncOnce(ctx context.Context, initial bool) bool {
 		return false
 	}
 
-	count, err := g.publisher.Publish(ctx)
+	res, err := g.publisher.Publish(ctx)
 	if err != nil {
 		g.cfg.Logger.Error("publish failed", "error", err, "initial", initial)
 		return false
 	}
-	if initial {
-		g.cfg.Logger.Info("initial state files published", "count", count)
-	} else {
-		g.cfg.Logger.Debug("state files republished", "count", count)
+	switch {
+	case initial:
+		g.cfg.Logger.Info("initial state files published", "count", res.Files, "changed", res.Changed)
+	case res.Changed:
+		g.cfg.Logger.Info("state files republished", "count", res.Files)
+	default:
+		g.cfg.Logger.Debug("state files unchanged, publish skipped", "count", res.Files)
 	}
 	return ok
 }

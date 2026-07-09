@@ -66,6 +66,18 @@ const (
 
 	// SubjectAdminEnrollRevoke is for CLI -> master enrollment revocation (request/reply).
 	SubjectAdminEnrollRevoke = SubjectPrefix + ".admin.enroll.revoke"
+
+	// SubjectAdminFileserverUpdate is for CLI -> master on-demand file
+	// republish (`zester fileserver update`, request/reply). Every master
+	// subscribes PLAIN (not queue-grouped), but only the publisher-lease
+	// holder replies — non-holders stay silent so the requester never races
+	// two replies; a no-responders timeout means no lease holder is up.
+	SubjectAdminFileserverUpdate = SubjectPrefix + ".admin.fileserver.update"
+
+	// SubjectAdminFileserverStatus identifies the publisher-lease holder
+	// (`zester fileserver status`, request/reply, same holder-only-reply
+	// contract as the update subject).
+	SubjectAdminFileserverStatus = SubjectPrefix + ".admin.fileserver.status"
 )
 
 // Job sub-subjects appended to SubjectJob.<jid>.

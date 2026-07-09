@@ -39,11 +39,24 @@ func (m Manifest) Keys() map[string]struct{} {
 }
 
 // BuildManifest constructs a Manifest from a published file map, sorted by
-// key.
+// key, with an unkeyed SHA-256 per file.
 func BuildManifest(files map[string][]byte) Manifest {
+	return BuildManifestWith(files, HashFile)
+}
+
+// BuildManifestWith builds a manifest hashing each file with hashFn. The
+// default (BuildManifest → HashFile) is an unkeyed SHA-256, fine for the
+// non-secret state/reactor trees. The sealed master-settings replica passes
+// a KEYED hash (HMAC under the account seed): the manifest then verifies
+// only for account-key holders (all masters), closing the offline
+// brute-force oracle an unkeyed plaintext hash would hand any $KV.> reader
+// over a secret-bearing settings file. A keyed hash is still deterministic
+// (same key + same plaintext → same digest), so the publishers' byte-equal
+// hash-gate is unaffected.
+func BuildManifestWith(files map[string][]byte, hashFn func([]byte) string) Manifest {
 	m := Manifest{Files: make([]ManifestFile, 0, len(files))}
 	for key, data := range files {
-		m.Files = append(m.Files, ManifestFile{Key: key, SHA256: HashFile(data)})
+		m.Files = append(m.Files, ManifestFile{Key: key, SHA256: hashFn(data)})
 	}
 	sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].Key < m.Files[j].Key })
 	return m

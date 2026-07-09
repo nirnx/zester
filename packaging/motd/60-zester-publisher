@@ -1,0 +1,20 @@
+#!/bin/sh
+# Zester: warn at login when this master is NOT the publisher-lease holder —
+# on-disk edits under the settings/states/reactor dirs would not be published
+# (and the standby mirror overwrites them with fleet truth). The status file
+# is maintained by zester-master on every lease transition.
+STATUS_FILE=/run/zester/publisher-status
+[ -r "$STATUS_FILE" ] || exit 0
+
+role=$(sed -n 's/^role=//p' "$STATUS_FILE")
+case "$role" in
+leader)
+    echo "zester-master: this host holds the PUBLISHER lease — file edits here publish to the fleet."
+    ;;
+standby)
+    echo "*** zester-master on this host is a STANDBY (not the publisher). ***"
+    echo "*** Edits under the zester settings/states/reactor dirs will NOT  ***"
+    echo "*** be published and are OVERWRITTEN by the mirror.               ***"
+    echo "*** Find the leader:  zester fileserver status                    ***"
+    ;;
+esac

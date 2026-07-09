@@ -48,10 +48,26 @@ func (d *Daemon) startPublisherLease(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create publisher lease: %w", err)
 	}
+	d.publisherLease = lease
+	d.setPublisherRole("standby") // initial surface state; OnAcquired flips it
 	d.logger.Info("publisher lease candidate started; standing by until acquired",
 		"key", publisherLeaseKey)
 	go d.runLease(ctx, lease, publisherLeaseKey)
+
+	// Standby detection: masters that do not win the lease within ~2 TTLs
+	// start mirroring KV→dir so their source dirs track published truth.
+	// Deliberately NOT started before the first lease resolution — a fresh
+	// single-master boot acquires within milliseconds and must publish its
+	// own (possibly offline-edited) tree, not have it overwritten from KV.
+	d.startMirrorsWhenStandby(ctx)
 	return nil
+}
+
+// publisherLeader reports whether this master currently holds the publisher
+// lease (advisory — may be stale up to one TTL, like all lease reads). Used
+// by the fileserver-update service to decide whether to answer.
+func (d *Daemon) publisherLeader() bool {
+	return d.publisherLease != nil && d.publisherLease.IsLeader()
 }
 
 // startSecretsLease starts the advisory "facts-secrets" leader lease.
@@ -106,12 +122,15 @@ func (d *Daemon) startLeaderPublish(ctx context.Context) {
 	}
 	d.pubCancel = cancel
 	d.pubMu.Unlock()
+	d.setPublisherRole("leader")
 	go d.runLeaderPublish(acqCtx)
 }
 
 // stopLeaderPublish is the publisher lease's OnLost callback: it cancels
-// the current acquisition sub-context, stopping the GitFS loop and any
-// in-flight publish.
+// the current acquisition sub-context — stopping the file watcher, the
+// republish ticker, the GitFS loop, and any in-flight publish — and flips
+// this master back into standby mirroring (another master will take the
+// lease; KV remains the truth this master just published).
 func (d *Daemon) stopLeaderPublish() {
 	d.pubMu.Lock()
 	if d.pubCancel != nil {
@@ -119,17 +138,45 @@ func (d *Daemon) stopLeaderPublish() {
 		d.pubCancel = nil
 	}
 	d.pubMu.Unlock()
+	d.setPublisherRole("standby")
+
+	// Re-arm the standby TIMER rather than mirroring immediately: a lease
+	// loss from a transient NATS blip (single-master installs!) re-acquires
+	// within ~one TTL, and an instant mirror could race the re-acquisition's
+	// catch-up and revert edits made during the outage. A genuine demotion
+	// (another master holds the lease) starts mirroring after ~2 TTLs, same
+	// as at boot. Shutdown cancels runCtx long before the timer fires.
+	if d.runCtx != nil { // nil in bare lease unit tests
+		d.startMirrorsWhenStandby(d.runCtx)
+	}
 }
 
 // runLeaderPublish performs the leader-only KV writes for one lease
-// acquisition: the initial settings-files publish, the initial state-files
-// publish, the reactor-files publish, and then the GitFS sync loop (which
-// republishes state files after every sync) until the acquisition context
-// is cancelled — lease lost or shutdown.
+// acquisition: the initial publish of all three file sets, then — for the
+// rest of the acquisition — the republish ticker (files_republish_interval)
+// and the file watcher (files_watch) keep on-disk edits flowing to KV
+// without a master restart, and the GitFS sync loop (when configured)
+// republishes state files after every sync. Everything stops when the
+// acquisition context is cancelled — lease lost or shutdown.
 func (d *Daemon) runLeaderPublish(ctx context.Context) {
-	d.publishSettingsFiles(ctx)
-	d.publishStateFiles(ctx)
-	d.publishReactorFiles(ctx)
+	// Takeover sequence: stop the standby mirrors (awaiting any in-flight
+	// swap), then catch up each previously-synced mirror from KV so the
+	// initial publish below hash-gates to a no-op when this master's dirs
+	// already match published truth — a failover must never revert the
+	// fleet to a stale tree.
+	d.stopFilesMirrors()
+	d.catchUpFilesMirrors(ctx)
+
+	d.publishAllFiles(ctx, false)
+
+	if d.cfg != nil { // nil in bare lease unit tests
+		if d.cfg.FilesWatch {
+			go d.runFilesWatcher(ctx)
+		}
+		if interval := time.Duration(d.cfg.FilesRepublishInterval); interval > 0 {
+			go d.runFilesRepublish(ctx, interval)
+		}
+	}
 
 	if d.gitfs == nil {
 		return

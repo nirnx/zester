@@ -14,6 +14,10 @@ ExecStart=/usr/local/bin/zester-watchdog --component master
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
+# /run/zester holds the publisher-status file (read by the login MOTD snippet
+# so operators see whether THIS master is the file-distribution leader).
+RuntimeDirectory=zester
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target

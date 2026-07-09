@@ -87,20 +87,36 @@ type Daemon struct {
 	// startEnrollment.
 	accountKP *auth.KeyBundle
 
-	// Settings-publishing state shared with the facts watcher callback
-	// (handleFactsUpdate): assigned once in startSettingsPublisher before
-	// the watcher starts, read-only afterwards from the watcher goroutine.
+	// Settings-publishing state shared between the facts watcher callback
+	// (handleFactsUpdate) and the lease holder's republish paths. Assigned
+	// in startSettingsPublisher before the watcher starts and REFRESHED by
+	// publishSettingsFiles (ticker / file watcher / fileserver update) when
+	// the on-disk tree changes — settingsMu guards allSecrets, topFile, and
+	// rawSettingsFiles; publisher itself is assigned once and never
+	// replaced.
 	publisher  *settings.Publisher
+	settingsMu sync.RWMutex
 	allSecrets settings.FileSecrets
 	topFile    *settings.TopFile
+
+	// masterEnc is the account-derived curve encryptor (identical on every
+	// master sharing account.seed). masterSettingsPublisher replicates the
+	// RAW settings tree, sealed to that key, into the masters-only
+	// master-settings bucket — how standby settings dirs converge.
+	masterEnc               *auth.Encryptor
+	masterSettingsPublisher *statefiles.Publisher
 
 	// rawSettingsFiles holds the loaded .zy settings files (relative path
 	// → content). Loading runs on EVERY master (handleFactsUpdate
 	// re-encrypts secrets from d.allSecrets/d.topFile), but the sanitized
 	// files are published to KV only by the publisher-lease holder
-	// (publishSettingsFiles). Assigned once in startSettingsPublisher,
-	// read-only afterwards.
+	// (publishSettingsFiles). Guarded by settingsMu.
 	rawSettingsFiles map[string][]byte
+
+	// pubAllMu serializes publishAllFiles: the initial lease publish, the
+	// republish ticker, the file watcher, and the fileserver-update admin
+	// service may all trigger it concurrently.
+	pubAllMu sync.Mutex
 
 	statePublisher *statefiles.Publisher
 
@@ -120,6 +136,21 @@ type Daemon struct {
 	// (roadmap B6): only the "facts-secrets" lease holder re-encrypts and
 	// publishes. nil (unit tests) means always publish.
 	secretsLease *bus.LeaderLease
+
+	// publisherLease is the "publisher" lease candidate; publisherLeader()
+	// queries it so the fileserver-update service answers only from the
+	// holder. nil until startPublisherLease runs.
+	publisherLease *bus.LeaderLease
+
+	// mirrorState holds the standby KV→dir file mirrors (multi-master
+	// convergence): running while this master does NOT hold the publisher
+	// lease, stopped + caught-up on acquisition. See mirror.go.
+	mirrorState
+
+	// leaderStatus fans publisher-lease transitions out to the operator
+	// surfaces (status file/MOTD, readyz, metrics, fileserver status). See
+	// leaderstatus.go.
+	leaderStatus
 
 	// leaseTTL / leaseRenewInterval override the LeaderLease timings for
 	// both daemon leases. Zero (production) means the LeaderLease defaults,
@@ -279,6 +310,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Down (503), which is accurate during startup.
 	d.checker.Register("nats", d.natsCheck)
 
+	// Informational only — standby is a healthy state; the message carries
+	// the publisher-lease role so operators and dashboards can see file
+	// distribution leadership placement on /readyz.
+	d.checker.Register("publisher-lease", d.publisherLeaseCheck)
+
 	stopHealth, err := startLocalHealthServer(d.logger, "master", d.cfg.HealthAddr, d.checker.Handler(), d.reg.Handler())
 	if err != nil {
 		return fmt.Errorf("start local health server: %w", err)
@@ -395,6 +431,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopAdmin()
+
+	fsrvSub, err := d.startFileserverService(bus.NewNATSPubSub(d.nc))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = fsrvSub.Unsubscribe() }()
+	d.logger.Info("fileserver update service started", "subject", bus.SubjectAdminFileserverUpdate)
 
 	unsubRollout, err := d.startRolloutController(runCtx)
 	if err != nil {

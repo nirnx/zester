@@ -17,6 +17,10 @@ contents:
   - src: packaging/config/master.yaml
     dst: /etc/zester/master.yaml
     type: config|noreplace
+  - src: packaging/motd/60-zester-publisher
+    dst: /etc/update-motd.d/60-zester-publisher
+    file_info:
+      mode: 0755
 scripts:
   postinstall: packaging/scripts/postinstall-master.sh
   preremove: packaging/scripts/preremove-master.sh

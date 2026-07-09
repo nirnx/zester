@@ -1101,177 +1101,116 @@ func patchSettingsManifest(ctx context.Context, kv bus.KV, key string, content [
 	return nil
 }
 
-// TestSettingsWatchReResolve verifies that peels pick up settings changes
-// via KV watch + debounced re-resolve. Writes a modified settings file
-// directly to the NATS KV bucket and checks that the peel sees the update.
-func TestSettingsWatchReResolve(t *testing.T) {
-	// 1. Verify initial state: timezone should be "UTC".
-	results := execCLI(t, "web-01", "settings.get", "timezone")
-	r := requireSuccess(t, results, "web-01")
-	if len(r.Results) == 0 {
-		t.Fatal("no results returned")
-	}
-	if got := r.Results[0].Details["result"]; got != "UTC" {
-		t.Fatalf("initial timezone = %q, want UTC", got)
-	}
-
-	// 2. Connect to NATS and update the settings-files KV bucket directly.
-	nc := connectNATS(t)
-	js, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatalf("create jetstream context: %v", err)
-	}
-
-	ctx := context.Background()
-	kv, err := bus.NewJS(js).KeyValue(ctx, "settings-files")
-	if err != nil {
-		t.Fatalf("get settings-files KV: %v", err)
-	}
-
-	// Read current value for restore.
-	entry, err := kv.Get(ctx, "common/base.zy")
-	if err != nil {
-		t.Fatalf("get common/base.zy: %v", err)
-	}
-	original := entry.Value()
-
-	// Write modified value with changed timezone.
-	modified := strings.ReplaceAll(string(original), "timezone: UTC", "timezone: America/New_York")
-	if modified == string(original) {
-		t.Fatal("replacement had no effect — timezone: UTC not found in common/base.zy")
-	}
-	if _, err := kv.Put(ctx, "common/base.zy", []byte(modified)); err != nil {
-		t.Fatalf("put modified common/base.zy: %v", err)
-	}
-	// Match the publisher's batch protocol: file keys, then manifest, then
-	// the _revision bump peels watch for.
-	if err := patchSettingsManifest(ctx, kv, "common/base.zy", []byte(modified)); err != nil {
-		t.Fatalf("patch settings manifest: %v", err)
-	}
-	if _, err := kv.Put(ctx, "_revision", []byte("999")); err != nil {
-		t.Fatalf("bump _revision: %v", err)
-	}
-
-	// Restore original on cleanup.
-	t.Cleanup(func() {
-		if _, err := kv.Put(ctx, "common/base.zy", original); err != nil {
-			t.Logf("cleanup: restore common/base.zy: %v", err)
+// waitForSetting polls settings.get on web-01 until the key reports the
+// expected value — covering the master publish, the peel's revision watch +
+// debounced re-resolve, and template rendering end to end.
+func waitForSetting(t *testing.T, key, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for time.Now().Before(deadline) {
+		results := execCLI(t, "web-01", "settings.get", key)
+		if len(results) == 1 && results[0].Success && len(results[0].Results) > 0 {
+			last = results[0].Results[0].Details["result"]
+			if last == want {
+				return
+			}
 		}
-		if err := patchSettingsManifest(ctx, kv, "common/base.zy", original); err != nil {
-			t.Logf("cleanup: restore settings manifest: %v", err)
-		}
-		// Bump _revision so peels re-resolve back to original.
-		if _, err := kv.Put(ctx, "_revision", []byte("1000")); err != nil {
-			t.Logf("cleanup: bump _revision: %v", err)
-		}
-		// Wait for peels to re-resolve back to UTC.
-		time.Sleep(10 * time.Second)
-	})
-
-	// 3. Wait for peel KV watch + debounce (2s) + jitter (up to 5s) + margin.
-	time.Sleep(15 * time.Second)
-
-	// 4. Verify peel picked up the change.
-	results2 := execCLI(t, "web-01", "settings.get", "timezone")
-	r2 := requireSuccess(t, results2, "web-01")
-	if len(r2.Results) == 0 {
-		t.Fatal("no results returned after change")
+		time.Sleep(3 * time.Second)
 	}
-	if got := r2.Results[0].Details["result"]; got != "America/New_York" {
-		t.Errorf("updated timezone = %q, want America/New_York", got)
-	}
+	t.Fatalf("setting %q = %q, want %q within %s", key, last, want, timeout)
 }
 
-// TestSettingsRevisionConsistency verifies that peels don't see partial updates.
-// File writes without a _revision bump should be invisible to peels; only after
-// bumping _revision should the peel re-resolve and see the new value.
-func TestSettingsRevisionConsistency(t *testing.T) {
+// TestSettingsWatchReResolve verifies the live settings-edit flow end to
+// end: an edit to the master's on-disk settings tree is published by the
+// lease holder's file watcher (interval as backstop), and peels pick it up
+// via the revision watch + debounced re-resolve. This is THE operator flow —
+// out-of-band KV writes are no longer meaningful input (the master actively
+// heals them back to disk truth; see TestSettingsOutOfBandKVTamperHealed).
+func TestSettingsWatchReResolve(t *testing.T) {
 	// 1. Verify initial state: timezone should be "UTC".
-	results := execCLI(t, "web-01", "settings.get", "timezone")
-	r := requireSuccess(t, results, "web-01")
-	if len(r.Results) == 0 {
-		t.Fatal("no results returned")
-	}
-	if got := r.Results[0].Details["result"]; got != "UTC" {
-		t.Fatalf("initial timezone = %q, want UTC", got)
-	}
+	waitForSetting(t, "timezone", "UTC", 30*time.Second)
 
-	// 2. Connect to NATS.
+	// 2. Edit the settings file on the master's disk — the shared
+	// settings-data volume is visible to whichever master holds the lease.
+	execInContainer(t, "master", []string{"sed", "-i",
+		"s|timezone: UTC|timezone: America/New_York|", "/data/settings/common/base.zy"})
+	t.Cleanup(func() {
+		execInContainer(t, "master", []string{"sed", "-i",
+			"s|timezone: America/New_York|timezone: UTC|", "/data/settings/common/base.zy"})
+		waitForSetting(t, "timezone", "UTC", 60*time.Second)
+	})
+
+	// 3. Watcher publish (~1s; 30s interval backstop) + peel re-resolve
+	// (debounce 2s + jitter up to 5s).
+	waitForSetting(t, "timezone", "America/New_York", 60*time.Second)
+}
+
+// TestSettingsOutOfBandKVTamperHealed replaces the old KV-direct revision
+// test, whose premise is obsolete: the master's disk tree is now the source
+// of truth, and the lease holder's republish interval actively HEALS
+// out-of-band writes to the settings-files bucket. A tampered file — even a
+// full fake publish with a patched manifest and a revision bump — must be
+// reverted to disk truth within a republish tick, and peels must converge
+// back. (The peel-side revision/manifest verification the old test covered
+// remains pinned by unit tests: resolve_manifest_test, cache_manifest_test.)
+func TestSettingsOutOfBandKVTamperHealed(t *testing.T) {
+	// 1. Verify initial state: timezone should be "UTC".
+	waitForSetting(t, "timezone", "UTC", 30*time.Second)
+
+	// 2. Tamper with the bucket directly, mimicking a complete publish:
+	// file key + patched manifest + revision bump.
 	nc := connectNATS(t)
 	js, err := jetstream.New(nc)
 	if err != nil {
 		t.Fatalf("create jetstream context: %v", err)
 	}
-
 	ctx := context.Background()
 	kv, err := bus.NewJS(js).KeyValue(ctx, "settings-files")
 	if err != nil {
 		t.Fatalf("get settings-files KV: %v", err)
 	}
-
-	// Read current value for restore.
 	entry, err := kv.Get(ctx, "common/base.zy")
 	if err != nil {
 		t.Fatalf("get common/base.zy: %v", err)
 	}
-	original := entry.Value()
-
-	// 3. Write modified value WITHOUT bumping _revision.
-	modified := strings.ReplaceAll(string(original), "timezone: UTC", "timezone: America/Chicago")
-	if modified == string(original) {
+	original := string(entry.Value())
+	modified := strings.ReplaceAll(original, "timezone: UTC", "timezone: America/Chicago")
+	if modified == original {
 		t.Fatal("replacement had no effect — timezone: UTC not found in common/base.zy")
 	}
 	if _, err := kv.Put(ctx, "common/base.zy", []byte(modified)); err != nil {
-		t.Fatalf("put modified common/base.zy: %v", err)
+		t.Fatalf("put tampered common/base.zy: %v", err)
 	}
-	// Patch the manifest like a real publisher would — still without the
-	// _revision bump, so the peel must not react yet.
 	if err := patchSettingsManifest(ctx, kv, "common/base.zy", []byte(modified)); err != nil {
 		t.Fatalf("patch settings manifest: %v", err)
 	}
-
-	// Cleanup: restore original + manifest + bump revision.
-	t.Cleanup(func() {
-		if _, err := kv.Put(ctx, "common/base.zy", original); err != nil {
-			t.Logf("cleanup: restore common/base.zy: %v", err)
-		}
-		if err := patchSettingsManifest(ctx, kv, "common/base.zy", original); err != nil {
-			t.Logf("cleanup: restore settings manifest: %v", err)
-		}
-		if _, err := kv.Put(ctx, "_revision", []byte("2000")); err != nil {
-			t.Logf("cleanup: bump _revision: %v", err)
-		}
-		time.Sleep(10 * time.Second)
-	})
-
-	// 4. Wait for debounce + jitter window — peel should NOT see the change.
-	time.Sleep(15 * time.Second)
-
-	results2 := execCLI(t, "web-01", "settings.get", "timezone")
-	r2 := requireSuccess(t, results2, "web-01")
-	if len(r2.Results) == 0 {
-		t.Fatal("no results returned after file write (no revision bump)")
-	}
-	if got := r2.Results[0].Details["result"]; got != "UTC" {
-		t.Errorf("timezone should still be UTC without revision bump, got %q", got)
-	}
-
-	// 5. Now bump _revision — peel should detect and re-resolve.
-	if _, err := kv.Put(ctx, "_revision", []byte("1999")); err != nil {
+	if _, err := kv.Put(ctx, "_revision", []byte("31337")); err != nil {
 		t.Fatalf("bump _revision: %v", err)
 	}
 
-	time.Sleep(15 * time.Second)
+	// 3. The lease holder's hash-gated republish detects the manifest drift
+	// from its on-disk tree within one interval (30s) and republishes disk
+	// truth. Poll the BUCKET content for the heal — the peel-visible value
+	// is UTC almost the whole time (the tamper is only transiently visible),
+	// so it cannot signal when the heal landed.
+	deadline := time.Now().Add(120 * time.Second)
+	healed := false
+	for time.Now().Before(deadline) {
+		entry, err := kv.Get(ctx, "common/base.zy")
+		if err == nil && string(entry.Value()) == original {
+			healed = true
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if !healed {
+		t.Fatal("tampered settings file key was not healed back to the on-disk content within 120s")
+	}
 
-	// 6. Verify peel now sees the updated timezone.
-	results3 := execCLI(t, "web-01", "settings.get", "timezone")
-	r3 := requireSuccess(t, results3, "web-01")
-	if len(r3.Results) == 0 {
-		t.Fatal("no results returned after revision bump")
-	}
-	if got := r3.Results[0].Details["result"]; got != "America/Chicago" {
-		t.Errorf("updated timezone = %q, want America/Chicago", got)
-	}
+	// 4. And the fleet-visible value has converged back (covers the case
+	// where the peel transiently resolved the tampered content).
+	waitForSetting(t, "timezone", "UTC", 60*time.Second)
 }
 
 // TestEncryptedSettingsCrossReference verifies that encrypted values can be

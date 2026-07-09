@@ -221,6 +221,11 @@ enroll:
 # embedded.
 ca:
   mode: external
+# The compose masters SHARE the states/settings/reactor volumes, so the
+# standby mirror is pointless (the holder's publishes already ARE the
+# standby's dirs) and its atomic tree swaps would race the holder's own
+# directory walks. Per-host dirs (the normal deployment) leave this on.
+files_mirror: false
 reactor:
   dir: "/data/reactor"
 api:

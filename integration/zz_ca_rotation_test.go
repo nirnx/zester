@@ -5,7 +5,9 @@ package integration
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,10 +132,28 @@ func TestCARotation_FileDropWithoutProcessRestart(t *testing.T) {
 	}
 
 	// Job mode exercises the master path (dispatch, KV, watcher): the
-	// masters also reconnected under the new CA without a restart.
-	jobResults := execCLIJob(t, "web-01", "test.ping")
-	r := requireSuccess(t, jobResults, "web-01")
-	if !r.Success {
-		t.Fatalf("master-dispatched job failed after CA rotation: %s", r.Error)
+	// masters also reconnected under the new CA without a restart. Right
+	// after rolling every NATS node the JetStream META LEADER may still be
+	// re-electing — core-NATS pings answer while KV bucket lookups
+	// transiently time out — so retry the dispatch through that window
+	// instead of parsing a "context deadline exceeded" error as JSON.
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		out := execInContainer(t, "admin",
+			[]string{"zester", "--format", "json", "--no-color", "web-01", "test.ping"})
+		if strings.Contains(out, "context deadline exceeded") && time.Now().Before(deadline) {
+			t.Logf("JetStream not ready after NATS roll, retrying job dispatch: %s", strings.TrimSpace(out))
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		var jobResults []cliResult
+		if err := json.Unmarshal(extractJSON([]byte(out)), &jobResults); err != nil {
+			t.Fatalf("parse job-mode CLI JSON: %v\nraw output: %s", err, out)
+		}
+		r := requireSuccess(t, jobResults, "web-01")
+		if !r.Success {
+			t.Fatalf("master-dispatched job failed after CA rotation: %s", r.Error)
+		}
+		return
 	}
 }

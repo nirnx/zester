@@ -18,12 +18,22 @@ import (
 	"github.com/nirnx/zester/pkg/settings"
 )
 
-// Cache syncs state files from the KV bucket to a local disk directory.
-// Used on the peel side to maintain a local cache of state files.
+// Cache syncs published files from a KV bucket to a local disk directory.
+// Used on the peel side to maintain the local state-file cache, and on
+// master standbys to mirror all three file buckets into their source dirs
+// (multi-master convergence).
 type Cache struct {
-	cacheDir string
-	js       bus.JetStreamAPI
-	logger   *slog.Logger
+	cacheDir    string
+	js          bus.JetStreamAPI
+	logger      *slog.Logger
+	bucket      string
+	keyPrefix   string
+	ignoreKeys  map[string]struct{}
+	decode      func([]byte) ([]ManifestFile, error)
+	decodeValue func(key string, stored []byte) ([]byte, error)
+	hashFn      func([]byte) string
+	onSynced    func()
+	warnEdits   bool
 
 	debounce time.Duration
 	jitter   time.Duration
@@ -33,17 +43,19 @@ type Cache struct {
 	// syncMu serializes full syncs (download + directory swap).
 	syncMu sync.Mutex
 
-	// mu guards lastSyncedRev.
+	// mu guards lastSyncedRev, hasSynced, and lastSyncedSet.
 	mu            sync.Mutex
 	lastSyncedRev uint64
+	hasSynced     bool
+	lastSyncedSet map[string]string // disk-relative path -> sha256
 
 	// syncRunning/syncRerun implement a lost-trigger-free singleflight for
-	// watch-triggered sync loops (see triggerSync).
+	// watch-triggered sync loops (see TriggerSync).
 	syncRunning atomic.Bool
 	syncRerun   atomic.Bool
 }
 
-// CacheConfig configures the peel-side state file cache.
+// CacheConfig configures a file cache/mirror.
 type CacheConfig struct {
 	// CacheDir is the local directory for cached state files.
 	CacheDir string
@@ -53,6 +65,50 @@ type CacheConfig struct {
 
 	// Logger is the structured logger. Defaults to slog.Default().
 	Logger *slog.Logger
+
+	// Bucket is the KV bucket to sync from. Default: bus.BucketStateFiles.
+	Bucket string
+
+	// KeyPrefix, when set, restricts the sync to bucket keys carrying this
+	// prefix and strips it to form the on-disk relative path (the
+	// reactor-files layout: key "reactor/top.zy" -> "<dir>/top.zy"). Keys
+	// outside the prefix are ignored entirely.
+	KeyPrefix string
+
+	// IgnoreKeys are additional well-known bucket keys that are neither
+	// synced nor counted as file keys for torn-publish detection (e.g. the
+	// settings bucket's _master_curve_pub).
+	IgnoreKeys []string
+
+	// DecodeManifest decodes the bucket's _manifest value into the file
+	// list. Default: the statefiles Manifest encoding. The settings bucket
+	// encodes a bare entry slice instead; its mirror injects a decoder.
+	DecodeManifest func([]byte) ([]ManifestFile, error)
+
+	// WarnLocalEdits makes Sync warn (by name) about local files that were
+	// modified or added since the previous sync before overwriting/pruning
+	// them — the master-standby mirror's "you edited on the wrong box"
+	// breadcrumb. Detection needs a previous sync, so the first sync never
+	// warns.
+	WarnLocalEdits bool
+
+	// DecodeValue, when set, transforms each fetched value BEFORE hash
+	// verification and staging (the inverse of the publisher's EncodeValue —
+	// e.g. opening account-key-sealed master-settings files). Manifest
+	// hashes cover the DECODED plaintext. A decode failure fails the sync
+	// attempt: undecodable content must never land on disk.
+	DecodeValue func(key string, stored []byte) ([]byte, error)
+
+	// HashValue must match the publisher's PublisherConfig.HashValue
+	// (default: unkeyed SHA-256) — the sealed master-settings mirror passes
+	// the same keyed hash so decoded plaintext verifies against the keyed
+	// manifest.
+	HashValue func([]byte) string
+
+	// OnSynced fires after every successful Sync that staged files (not the
+	// empty-bucket no-op) — the masterd settings mirror refreshes its
+	// in-memory secret-extraction state from the freshly synced tree.
+	OnSynced func()
 
 	// SyncDebounce is the coalescing window for revision-triggered
 	// re-syncs: rapid revision bumps within the window collapse into a
@@ -72,7 +128,7 @@ type CacheConfig struct {
 	RetryBackoffMax time.Duration
 }
 
-// NewCache creates a peel-side state file cache.
+// NewCache creates a file cache/mirror.
 func NewCache(cfg CacheConfig) *Cache {
 	logger := cfg.Logger
 	if logger == nil {
@@ -94,15 +150,78 @@ func NewCache(cfg CacheConfig) *Cache {
 	if retryMax <= 0 {
 		retryMax = 30 * time.Second
 	}
-	return &Cache{
-		cacheDir: cfg.CacheDir,
-		js:       cfg.JS,
-		logger:   logger,
-		debounce: debounce,
-		jitter:   jitter,
-		retryMin: retryMin,
-		retryMax: retryMax,
+	bucket := cfg.Bucket
+	if bucket == "" {
+		bucket = bus.BucketStateFiles
 	}
+	decode := cfg.DecodeManifest
+	if decode == nil {
+		decode = func(data []byte) ([]ManifestFile, error) {
+			var m Manifest
+			if err := bus.Decode(data, &m); err != nil {
+				return nil, err
+			}
+			return m.Files, nil
+		}
+	}
+	ignore := make(map[string]struct{}, len(cfg.IgnoreKeys))
+	for _, k := range cfg.IgnoreKeys {
+		ignore[k] = struct{}{}
+	}
+	hashFn := cfg.HashValue
+	if hashFn == nil {
+		hashFn = HashFile
+	}
+	return &Cache{
+		cacheDir:    cfg.CacheDir,
+		js:          cfg.JS,
+		logger:      logger,
+		bucket:      bucket,
+		keyPrefix:   cfg.KeyPrefix,
+		ignoreKeys:  ignore,
+		decode:      decode,
+		decodeValue: cfg.DecodeValue,
+		hashFn:      hashFn,
+		onSynced:    cfg.OnSynced,
+		warnEdits:   cfg.WarnLocalEdits,
+		debounce:    debounce,
+		jitter:      jitter,
+		retryMin:    retryMin,
+		retryMax:    retryMax,
+	}
+}
+
+// HasSynced reports whether at least one Sync completed successfully in this
+// process lifetime — the gate for the master-failover catch-up sync (a
+// never-synced dir must not be overwritten from KV; see the masterd mirror).
+func (c *Cache) HasSynced() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hasSynced
+}
+
+// Quiesce waits for any in-flight Sync to finish (by taking the sync lock).
+// The masterd mirror calls it after cancelling the watch so a leadership
+// takeover never races a half-finished directory swap.
+func (c *Cache) Quiesce() {
+	c.syncMu.Lock()
+	defer c.syncMu.Unlock() // acquiring the lock IS the wait
+}
+
+// diskPathForKey maps a bucket key to its cache-relative path, applying the
+// key prefix. ok=false means the key is outside this cache's scope.
+func (c *Cache) diskPathForKey(key string) (string, bool) {
+	if _, ignored := c.ignoreKeys[key]; ignored {
+		return "", false
+	}
+	if c.keyPrefix == "" {
+		return key, true
+	}
+	rel, found := strings.CutPrefix(key, c.keyPrefix)
+	if !found || rel == "" {
+		return "", false
+	}
+	return rel, true
 }
 
 // LastSyncedRevision returns the state-files bucket _revision value of the
@@ -111,12 +230,6 @@ func (c *Cache) LastSyncedRevision() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastSyncedRev
-}
-
-func (c *Cache) setLastSyncedRevision(rev uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lastSyncedRev = rev
 }
 
 // Sync performs a full download of all state files from the KV bucket to
@@ -139,7 +252,7 @@ func (c *Cache) Sync(ctx context.Context) (int, error) {
 	c.syncMu.Lock()
 	defer c.syncMu.Unlock()
 
-	kv, err := bus.GetBucket(ctx, c.js, bus.BucketStateFiles)
+	kv, err := bus.GetBucket(ctx, c.js, c.bucket)
 	if err != nil {
 		return 0, fmt.Errorf("statefiles: get bucket: %w", err)
 	}
@@ -167,7 +280,7 @@ func (c *Cache) Sync(ctx context.Context) (int, error) {
 		if len(fileKeys) > 0 {
 			return 0, fmt.Errorf("statefiles: bucket holds %d file keys but no %s key (torn or tampered publish)", len(fileKeys), KeyManifest)
 		}
-		c.setLastSyncedRevision(targetRev)
+		c.markSynced(targetRev, nil)
 		return 0, nil
 	}
 
@@ -184,23 +297,82 @@ func (c *Cache) Sync(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("statefiles: chmod staging dir: %w", err)
 	}
 
-	count, err := c.stageManifest(ctx, kv, manifest, stage)
+	count, synced, err := c.stageManifest(ctx, kv, manifest, stage)
 	if err != nil {
 		return 0, err
+	}
+
+	if c.warnEdits {
+		c.warnLocalEdits()
 	}
 
 	if err := c.swapIn(stage); err != nil {
 		return 0, err
 	}
-	c.setLastSyncedRevision(targetRev)
-	c.logger.Info("state files synced", "count", count, "revision", targetRev)
+	c.markSynced(targetRev, synced)
+	c.logger.Info("state files synced", "count", count, "revision", targetRev, "bucket", c.bucket)
+	if c.onSynced != nil {
+		c.onSynced()
+	}
 	return count, nil
+}
+
+// markSynced records a completed successful sync: the revision, the synced
+// disk set (for local-edit warnings), and the has-synced flag.
+func (c *Cache) markSynced(rev uint64, syncedSet map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastSyncedRev = rev
+	c.hasSynced = true
+	if syncedSet != nil || c.lastSyncedSet == nil {
+		c.lastSyncedSet = syncedSet
+	}
+}
+
+// warnLocalEdits compares the live tree against the previous sync's file set
+// and warns (by name) about files that were locally modified or added since —
+// they are about to be overwritten or pruned. Needs a previous sync to
+// compare against; the first sync stays silent.
+func (c *Cache) warnLocalEdits() {
+	c.mu.Lock()
+	prev := c.lastSyncedSet
+	c.mu.Unlock()
+	if prev == nil {
+		return
+	}
+	var edited []string
+	_ = filepath.WalkDir(c.cacheDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil //nolint:nilerr // best-effort warning walk
+		}
+		if strings.HasPrefix(d.Name(), ".") {
+			return nil
+		}
+		rel, rerr := filepath.Rel(c.cacheDir, path)
+		if rerr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		if want, ok := prev[rel]; !ok || c.hashFn(data) != want {
+			edited = append(edited, rel)
+		}
+		return nil
+	})
+	if len(edited) > 0 {
+		sort.Strings(edited)
+		c.logger.Warn("LOCAL EDITS OVERWRITTEN by mirror sync — this master is not the publisher; edit on the lease holder (see 'zester fileserver status')",
+			"dir", c.cacheDir, "files", strings.Join(edited, ", "))
+	}
 }
 
 // loadManifest fetches and decodes the _manifest key. A missing key returns
 // (nil, nil) — legitimate only for a bucket with no file keys, before the
 // master's first publish; Sync enforces that.
-func (c *Cache) loadManifest(ctx context.Context, kv bus.KV) (*Manifest, error) {
+func (c *Cache) loadManifest(ctx context.Context, kv bus.KV) ([]ManifestFile, error) {
 	entry, err := kv.Get(ctx, KeyManifest)
 	if err != nil {
 		if errors.Is(err, bus.ErrKeyNotFound) {
@@ -208,45 +380,63 @@ func (c *Cache) loadManifest(ctx context.Context, kv bus.KV) (*Manifest, error) 
 		}
 		return nil, fmt.Errorf("statefiles: get manifest: %w", err)
 	}
-	var m Manifest
-	if err := bus.Decode(entry.Value(), &m); err != nil {
+	files, err := c.decode(entry.Value())
+	if err != nil {
 		return nil, fmt.Errorf("statefiles: decode manifest: %w", err)
 	}
-	return &m, nil
+	if files == nil {
+		files = []ManifestFile{}
+	}
+	return files, nil
 }
 
 // stageManifest downloads exactly the manifest's file set into the staging
 // dir, verifying each file's SHA-256 digest. Any missing file or digest
 // mismatch fails the whole sync attempt (the retry loop picks it up), so a
 // torn or partially-deleted bucket is never swapped into the live cache.
-func (c *Cache) stageManifest(ctx context.Context, kv bus.KV, m *Manifest, stage string) (int, error) {
+// Returns the staged count and the disk-relative path -> sha256 set.
+func (c *Cache) stageManifest(ctx context.Context, kv bus.KV, files []ManifestFile, stage string) (int, map[string]string, error) {
 	count := 0
-	for _, f := range m.Files {
+	synced := make(map[string]string, len(files))
+	for _, f := range files {
 		if f.Key == bus.KeyRevision || f.Key == KeyManifest {
 			continue
 		}
-		if !safeKey(f.Key) {
-			return count, fmt.Errorf("statefiles: unsafe manifest key %q", f.Key)
+		rel, ok := c.diskPathForKey(f.Key)
+		if !ok {
+			continue
+		}
+		if !safeKey(rel) {
+			return count, nil, fmt.Errorf("statefiles: unsafe manifest key %q", f.Key)
 		}
 		entry, err := kv.Get(ctx, f.Key)
 		if err != nil {
-			return count, fmt.Errorf("statefiles: get %s: %w", f.Key, err)
+			return count, nil, fmt.Errorf("statefiles: get %s: %w", f.Key, err)
 		}
-		if sum := HashFile(entry.Value()); sum != f.SHA256 {
+		data := entry.Value()
+		if c.decodeValue != nil {
+			// The stored bytes are an encoding (e.g. an account-key seal);
+			// the manifest hash covers the DECODED plaintext.
+			if data, err = c.decodeValue(f.Key, data); err != nil {
+				return count, nil, fmt.Errorf("statefiles: decode %s: %w", f.Key, err)
+			}
+		}
+		if sum := c.hashFn(data); sum != f.SHA256 {
 			c.logger.Warn("state file hash mismatch, failing sync attempt",
 				"key", f.Key, "want", f.SHA256, "got", sum)
-			return count, fmt.Errorf("statefiles: hash mismatch for %s", f.Key)
+			return count, nil, fmt.Errorf("statefiles: hash mismatch for %s", f.Key)
 		}
-		if err := writeFile(stage, f.Key, entry.Value()); err != nil {
-			return count, fmt.Errorf("statefiles: stage %s: %w", f.Key, err)
+		if err := writeFile(stage, rel, data); err != nil {
+			return count, nil, fmt.Errorf("statefiles: stage %s: %w", f.Key, err)
 		}
+		synced[rel] = f.SHA256
 		count++
 	}
-	return count, nil
+	return count, synced, nil
 }
 
-// bucketFileKeys lists the bucket's state-file keys, excluding the _revision
-// and _manifest meta keys.
+// bucketFileKeys lists the bucket's file keys within this cache's scope,
+// excluding the _revision/_manifest meta keys and configured ignore keys.
 func (c *Cache) bucketFileKeys(ctx context.Context, kv bus.KV) ([]string, error) {
 	keys, err := kv.Keys(ctx)
 	if err != nil {
@@ -258,6 +448,9 @@ func (c *Cache) bucketFileKeys(ctx context.Context, kv bus.KV) ([]string, error)
 	var fileKeys []string
 	for _, key := range keys {
 		if key == bus.KeyRevision || key == KeyManifest {
+			continue
+		}
+		if _, ok := c.diskPathForKey(key); !ok {
 			continue
 		}
 		fileKeys = append(fileKeys, key)
@@ -425,7 +618,7 @@ func safeKey(key string) bool {
 // currentRevision reads the bucket's current _revision value (0 when the
 // key is missing or unreadable).
 func (c *Cache) currentRevision(ctx context.Context) uint64 {
-	kv, err := bus.GetBucket(ctx, c.js, bus.BucketStateFiles)
+	kv, err := bus.GetBucket(ctx, c.js, c.bucket)
 	if err != nil {
 		return 0
 	}
@@ -473,13 +666,13 @@ func (c *Cache) syncUntilCurrent(ctx context.Context) {
 	}
 }
 
-// triggerSync runs syncUntilCurrent as a singleflight: concurrent triggers
+// TriggerSync runs syncUntilCurrent as a singleflight: concurrent triggers
 // (e.g. a debounced invocation firing while a retry loop is still running)
 // collapse into a rerun request instead of stacking loops. The rerun flag is
 // set before the running CAS, so with Go's sequentially consistent atomics a
 // trigger that loses the CAS is always observed by the active runner's
 // post-run rerun check — no trigger is ever lost.
-func (c *Cache) triggerSync(ctx context.Context) {
+func (c *Cache) TriggerSync(ctx context.Context) {
 	c.syncRerun.Store(true)
 	for c.syncRerun.Load() {
 		if !c.syncRunning.CompareAndSwap(false, true) {
@@ -500,21 +693,21 @@ func (c *Cache) triggerSync(ctx context.Context) {
 // Returns a cancel function to stop watching. The watcher automatically
 // reconnects with exponential backoff if the JetStream consumer is lost.
 func (c *Cache) Watch(ctx context.Context) (context.CancelFunc, error) {
-	kv, err := bus.GetBucket(ctx, c.js, bus.BucketStateFiles)
+	kv, err := bus.GetBucket(ctx, c.js, c.bucket)
 	if err != nil {
 		return nil, fmt.Errorf("statefiles: get bucket for watch: %w", err)
 	}
 
 	watcher, err := kv.Watch(ctx, bus.KeyRevision)
 	if err != nil {
-		c.logger.Warn("revision watch failed, falling back to WatchAll", "bucket", bus.BucketStateFiles, "error", err)
+		c.logger.Warn("revision watch failed, falling back to WatchAll", "bucket", c.bucket, "error", err)
 		return c.watchAll(ctx, kv)
 	}
 
 	watchCtx, cancel := context.WithCancel(ctx)
 
 	debounced := settings.NewDebouncedFunc(settings.DebouncedFuncConfig{
-		Fn:       func() { c.triggerSync(watchCtx) },
+		Fn:       func() { c.TriggerSync(watchCtx) },
 		Debounce: c.debounce,
 		Jitter:   c.jitter,
 	})
@@ -531,7 +724,7 @@ func (c *Cache) Watch(ctx context.Context) (context.CancelFunc, error) {
 					watcher.Stop()
 					backoff := time.Second
 					for {
-						c.logger.Warn("watcher lost, reconnecting", "bucket", bus.BucketStateFiles, "key", bus.KeyRevision, "backoff", backoff)
+						c.logger.Warn("watcher lost, reconnecting", "bucket", c.bucket, "key", bus.KeyRevision, "backoff", backoff)
 						select {
 						case <-watchCtx.Done():
 							return
@@ -539,19 +732,19 @@ func (c *Cache) Watch(ctx context.Context) (context.CancelFunc, error) {
 						}
 						backoff = min(backoff*2, 30*time.Second)
 
-						newKV, err := bus.GetBucket(watchCtx, c.js, bus.BucketStateFiles)
+						newKV, err := bus.GetBucket(watchCtx, c.js, c.bucket)
 						if err != nil {
-							c.logger.Warn("watcher reconnect failed", "bucket", bus.BucketStateFiles, "error", err)
+							c.logger.Warn("watcher reconnect failed", "bucket", c.bucket, "error", err)
 							continue
 						}
 						newWatcher, err := newKV.Watch(watchCtx, bus.KeyRevision)
 						if err != nil {
-							c.logger.Warn("watcher reconnect failed", "bucket", bus.BucketStateFiles, "error", err)
+							c.logger.Warn("watcher reconnect failed", "bucket", c.bucket, "error", err)
 							continue
 						}
 						watcher = newWatcher
 						backoff = time.Second
-						c.logger.Info("watcher reconnected", "bucket", bus.BucketStateFiles, "key", bus.KeyRevision)
+						c.logger.Info("watcher reconnected", "bucket", c.bucket, "key", bus.KeyRevision)
 						break
 					}
 					continue
@@ -587,7 +780,7 @@ func (c *Cache) watchAll(ctx context.Context, kv bus.KV) (context.CancelFunc, er
 					watcher.Stop()
 					backoff := time.Second
 					for {
-						c.logger.Warn("watcher lost, reconnecting (fallback)", "bucket", bus.BucketStateFiles, "backoff", backoff)
+						c.logger.Warn("watcher lost, reconnecting (fallback)", "bucket", c.bucket, "backoff", backoff)
 						select {
 						case <-watchCtx.Done():
 							return
@@ -595,24 +788,33 @@ func (c *Cache) watchAll(ctx context.Context, kv bus.KV) (context.CancelFunc, er
 						}
 						backoff = min(backoff*2, 30*time.Second)
 
-						newKV, err := bus.GetBucket(watchCtx, c.js, bus.BucketStateFiles)
+						newKV, err := bus.GetBucket(watchCtx, c.js, c.bucket)
 						if err != nil {
-							c.logger.Warn("watcher reconnect failed", "bucket", bus.BucketStateFiles, "error", err)
+							c.logger.Warn("watcher reconnect failed", "bucket", c.bucket, "error", err)
 							continue
 						}
 						newWatcher, err := newKV.WatchAll(watchCtx)
 						if err != nil {
-							c.logger.Warn("watcher reconnect failed", "bucket", bus.BucketStateFiles, "error", err)
+							c.logger.Warn("watcher reconnect failed", "bucket", c.bucket, "error", err)
 							continue
 						}
 						watcher = newWatcher
 						backoff = time.Second
-						c.logger.Info("watcher reconnected (fallback)", "bucket", bus.BucketStateFiles)
+						c.logger.Info("watcher reconnected (fallback)", "bucket", c.bucket)
 						break
 					}
 					continue
 				}
 				if entry == nil {
+					continue
+				}
+				// A decode/onSynced cache (the sealed settings mirror) cannot
+				// use the per-key incremental path: it needs manifest hash
+				// verification, the atomic tree swap, and the OnSynced refresh
+				// — all of which live in Sync. So on any event, run a full
+				// sync instead of a per-key write.
+				if c.decodeValue != nil || c.onSynced != nil {
+					c.triggerSyncCtx(watchCtx)
 					continue
 				}
 				c.handleUpdate(entry)
@@ -623,15 +825,28 @@ func (c *Cache) watchAll(ctx context.Context, kv bus.KV) (context.CancelFunc, er
 	return cancel, nil
 }
 
-// handleUpdate processes a single KV update: writes or removes the file on disk.
+// triggerSyncCtx runs a full syncUntilCurrent (used by the WatchAll fallback
+// for decode/onSynced caches that must not take the incremental per-key
+// path).
+func (c *Cache) triggerSyncCtx(ctx context.Context) {
+	go c.TriggerSync(ctx)
+}
+
+// handleUpdate processes a single KV update: writes or removes the file on
+// disk (the WatchAll fallback path; the primary path is full revision-driven
+// syncs). Values pass through decodeValue like staged syncs do.
 func (c *Cache) handleUpdate(entry bus.KVEntry) {
 	key := entry.Key()
 	if key == bus.KeyRevision || key == KeyManifest {
 		return
 	}
+	rel, ok := c.diskPathForKey(key)
+	if !ok {
+		return
+	}
 	op := entry.Operation()
 	if op == bus.KVOpDelete || op == bus.KVOpPurge {
-		diskPath := filepath.Join(c.cacheDir, filepath.FromSlash(key))
+		diskPath := filepath.Join(c.cacheDir, filepath.FromSlash(rel))
 		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
 			c.logger.Warn("failed to remove cached state file", "key", key, "error", err)
 		} else {
@@ -640,14 +855,22 @@ func (c *Cache) handleUpdate(entry bus.KVEntry) {
 		return
 	}
 
-	if !safeKey(key) {
+	if !safeKey(rel) {
 		c.logger.Warn("skipping unsafe state file key", "key", key)
 		return
 	}
-	if err := writeFile(c.cacheDir, key, entry.Value()); err != nil {
+	data := entry.Value()
+	if c.decodeValue != nil {
+		var err error
+		if data, err = c.decodeValue(key, data); err != nil {
+			c.logger.Warn("failed to decode cached state file, skipping", "key", key, "error", err)
+			return
+		}
+	}
+	if err := writeFile(c.cacheDir, rel, data); err != nil {
 		c.logger.Warn("failed to write cached state file", "key", key, "error", err)
 	} else {
-		c.logger.Debug("updated cached state file", "key", key, "size", len(entry.Value()))
+		c.logger.Debug("updated cached state file", "key", key, "size", len(data))
 	}
 }
 

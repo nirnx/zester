@@ -16,11 +16,12 @@ type Registry struct {
 
 	// -- Master metrics --
 
-	ConnectedPeels prometheus.Gauge
-	JobsTotal      *prometheus.CounterVec
-	JobDuration    *prometheus.HistogramVec
-	JobActive      prometheus.Gauge
-	JobReclaims    prometheus.Counter
+	ConnectedPeels  prometheus.Gauge
+	PublisherLeader prometheus.Gauge
+	JobsTotal       *prometheus.CounterVec
+	JobDuration     *prometheus.HistogramVec
+	JobActive       prometheus.Gauge
+	JobReclaims     prometheus.Counter
 
 	FactsSyncTotal  prometheus.Counter
 	FactsSyncErrors prometheus.Counter
@@ -77,6 +78,12 @@ func NewMasterRegistry() *Registry {
 		Namespace: namespace,
 		Name:      "connected_peels",
 		Help:      "Number of currently connected peels.",
+	})
+
+	m.PublisherLeader = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "master_publisher_leader",
+		Help:      "1 while this master holds the publisher lease (file distribution leader), else 0.",
 	})
 
 	m.JobsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -242,6 +249,7 @@ func NewMasterRegistry() *Registry {
 
 	reg.MustRegister(
 		m.ConnectedPeels,
+		m.PublisherLeader,
 		m.JobsTotal,
 		m.JobDuration,
 		m.JobActive,

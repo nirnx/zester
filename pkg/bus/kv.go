@@ -51,6 +51,14 @@ const (
 	BucketPeelHeartbeat    = "peel-heartbeat"
 	BucketLeases           = "leases"
 	BucketReactorFiles     = "reactor-files"
+
+	// BucketMasterSettings replicates the RAW settings tree between masters,
+	// with every file value SEALED to the shared account curve key (NaCl
+	// box) — any master can open it (they all hold account.seed), no peel
+	// can, and JetStream storage/backups see only ciphertext. Peel JWTs get
+	// NO grant for this bucket. Manifest hashes cover the PLAINTEXT so the
+	// publishers' hash-gate stays deterministic despite randomized seals.
+	BucketMasterSettings = "master-settings"
 )
 
 // Object Store bucket names used by Zester.
@@ -416,6 +424,16 @@ func DefaultBuckets() []BucketConfig {
 			History:     3,
 			Replicas:    1,
 			Tier:        TierCritical,
+		},
+		{
+			Bucket:      BucketMasterSettings,
+			Description: "Raw settings tree sealed to the account key (masters-only; no peel JWT grants)",
+			// History 1: old sealed ciphertext (and its keyed manifest hash)
+			// must not linger after a secret rotation — the mirror only ever
+			// reads the current revision.
+			History:  1,
+			Replicas: 1,
+			Tier:     TierCritical,
 		},
 	}
 }

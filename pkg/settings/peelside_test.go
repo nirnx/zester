@@ -116,7 +116,7 @@ region: us-east-1
 `),
 	}
 
-	secrets, err := pub.PublishRawFiles(ctx, files)
+	secrets, _, err := pub.PublishRawFiles(ctx, files)
 	if err != nil {
 		t.Fatalf("publish raw files: %v", err)
 	}
@@ -214,7 +214,7 @@ db_password: !encrypted "prod-db-pass"
 `),
 	}
 
-	secrets, err := pub.PublishRawFiles(ctx, rawFiles)
+	secrets, _, err := pub.PublishRawFiles(ctx, rawFiles)
 	if err != nil {
 		t.Fatalf("publish raw files: %v", err)
 	}
@@ -313,7 +313,7 @@ connection_string: "postgres://user:{{ settings.db_password }}@host/db"
 `),
 	}
 
-	secrets, err := pub.PublishRawFiles(ctx, rawFiles)
+	secrets, _, err := pub.PublishRawFiles(ctx, rawFiles)
 	if err != nil {
 		t.Fatalf("publish raw files: %v", err)
 	}
@@ -408,7 +408,7 @@ workers: 16
 `),
 	}
 
-	if _, err := pub.PublishRawFiles(ctx, rawFiles); err != nil {
+	if _, _, err := pub.PublishRawFiles(ctx, rawFiles); err != nil {
 		t.Fatalf("publish raw files: %v", err)
 	}
 

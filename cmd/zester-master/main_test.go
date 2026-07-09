@@ -57,6 +57,13 @@ func TestMasterFlagParity(t *testing.T) {
 		"ca-enroll-cert-validity": (90 * 24 * time.Hour).String(),
 		"ca-enroll-sans":          "",
 		"nats-advertise-urls":     "",
+
+		// Live file publishing (hash-gated republish ticker + fsnotify watcher)
+		// and the multi-master standby mirror.
+		"files-republish-interval": (30 * time.Second).String(),
+		"files-watch":              "true",
+		"files-mirror":             "true",
+		"publisher-status-file":    "/run/zester/publisher-status",
 	}
 
 	got := map[string]*flag.Flag{}

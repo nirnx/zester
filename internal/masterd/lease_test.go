@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nirnx/zester/internal/config"
 	"github.com/nirnx/zester/internal/metrics"
 	"github.com/nirnx/zester/pkg/auth"
 	"github.com/nirnx/zester/pkg/bus"
@@ -23,11 +25,29 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// sharedTestEncryptor mimics production account.seed sharing: multi-daemon
+// tests pass ONE encryptor to every daemon so the sealed master-settings
+// replica is openable across them.
+func sharedTestEncryptor(t *testing.T) *auth.Encryptor {
+	t.Helper()
+	kb, err := auth.GenerateKeyBundle(auth.RoleAccount)
+	if err != nil {
+		t.Fatalf("generate key bundle: %v", err)
+	}
+	enc, err := auth.NewEncryptor(kb)
+	if err != nil {
+		t.Fatalf("new encryptor: %v", err)
+	}
+	return enc
+}
+
 // newLeaseTestDaemon builds a Daemon with just enough wiring for the
-// publisher-lease seams: a settings publisher and a statefiles publisher
-// over the shared fake JS, plus per-daemon raw settings files so the tests
-// can tell which daemon published.
-func newLeaseTestDaemon(t *testing.T, js bus.JetStreamAPI, id, statesDir, settingsFile string) *Daemon {
+// publisher-lease seams: a settings publisher, a statefiles publisher, and
+// the sealed master-settings publisher over the shared fake JS, plus
+// per-daemon raw settings files so the tests can tell which daemon
+// published. enc nil generates a fresh (per-daemon) encryptor; multi-daemon
+// tests must pass sharedTestEncryptor's result to every daemon.
+func newLeaseTestDaemon(t *testing.T, js bus.JetStreamAPI, id, statesDir, settingsFile string, enc *auth.Encryptor) *Daemon {
 	t.Helper()
 	ctx := context.Background()
 
@@ -43,14 +63,13 @@ func newLeaseTestDaemon(t *testing.T, js bus.JetStreamAPI, id, statesDir, settin
 	if err != nil {
 		t.Fatalf("get state-files bucket: %v", err)
 	}
-
-	kb, err := auth.GenerateKeyBundle(auth.RoleAccount)
+	masterSettingsKV, err := bus.GetBucket(ctx, js, bus.BucketMasterSettings)
 	if err != nil {
-		t.Fatalf("generate key bundle: %v", err)
+		t.Fatalf("get master-settings bucket: %v", err)
 	}
-	enc, err := auth.NewEncryptor(kb)
-	if err != nil {
-		t.Fatalf("new encryptor: %v", err)
+
+	if enc == nil {
+		enc = sharedTestEncryptor(t)
 	}
 
 	pub, err := settings.NewPublisher(settings.PublisherConfig{
@@ -64,7 +83,27 @@ func newLeaseTestDaemon(t *testing.T, js bus.JetStreamAPI, id, statesDir, settin
 		t.Fatalf("new settings publisher: %v", err)
 	}
 
+	// publishSettingsFiles re-reads the on-disk tree (that is what makes
+	// edits publishable without a restart), so the test's settings file
+	// lives in a real dir wired through cfg. The fsnotify watcher is off
+	// (determinism); a fast republish ticker stands in for it. Reactor is
+	// dirless — the reactor mirror stays unconfigured.
+	settingsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(settingsDir, settingsFile), []byte("greeting: hello\n"), 0o644); err != nil {
+		t.Fatalf("write settings file: %v", err)
+	}
+	cfg := config.MasterDaemonDefaults()
+	cfg.SettingsDir = settingsDir
+	cfg.StatesDir = statesDir
+	cfg.Reactor.Dir = ""
+	cfg.FilesWatch = false
+	cfg.FilesRepublishInterval = config.Duration(50 * time.Millisecond)
+	// Never write the real /run/zester/publisher-status from a unit test;
+	// each daemon gets its own tempdir path.
+	cfg.PublisherStatusFile = filepath.Join(t.TempDir(), "publisher-status")
+
 	d := &Daemon{
+		cfg:      &cfg,
 		logger:   discardLogger(),
 		masterID: id,
 		js:       js,
@@ -79,6 +118,15 @@ func newLeaseTestDaemon(t *testing.T, js bus.JetStreamAPI, id, statesDir, settin
 		StatesDir: statesDir,
 		KV:        stateKV,
 		Logger:    discardLogger(),
+	})
+	d.masterEnc = enc
+	d.masterSettingsPublisher = statefiles.NewPublisher(statefiles.PublisherConfig{
+		StatesDir: settingsDir,
+		KV:        masterSettingsKV,
+		Logger:    discardLogger(),
+		EncodeValue: func(_ string, plaintext []byte) ([]byte, error) {
+			return enc.Seal(plaintext, enc.PublicKey())
+		},
 	})
 	return d
 }
@@ -106,9 +154,12 @@ func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool)
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// TestPublisherLeaseGatesPublishes verifies the single-publisher invariant:
-// the lease holder publishes settings and state files, the standby does
-// not, and losing the lease hands publishing over to the standby.
+// TestPublisherLeaseGatesPublishes verifies the single-publisher invariant
+// AND the mirror-backed takeover: the lease holder publishes settings and
+// state files, the standby does not (its dirs instead converge to published
+// truth via the KV mirror), and a failover publishes NOTHING — the fleet
+// keeps the previous holder's tree, never reverting to the standby's stale
+// files. New edits on the new holder then publish normally.
 func TestPublisherLeaseGatesPublishes(t *testing.T) {
 	ctx := context.Background()
 	js := bustest.NewFakeJS()
@@ -125,8 +176,20 @@ func TestPublisherLeaseGatesPublishes(t *testing.T) {
 		t.Fatalf("write state file: %v", err)
 	}
 
-	d1 := newLeaseTestDaemon(t, js, "master-1", statesDir1, "m1.zy")
-	d2 := newLeaseTestDaemon(t, js, "master-2", statesDir2, "m2.zy")
+	// One shared encryptor = production account.seed sharing; the sealed
+	// settings replica must be openable by both masters.
+	enc := sharedTestEncryptor(t)
+	d1 := newLeaseTestDaemon(t, js, "master-1", statesDir1, "m1.zy", enc)
+	d2 := newLeaseTestDaemon(t, js, "master-2", statesDir2, "m2.zy", enc)
+
+	// d1 also carries an !encrypted secret — the sealed master-settings
+	// replica must round-trip its PLAINTEXT to the standby's dir while the
+	// buckets never store it in the clear.
+	const secretPlain = "hunter2-lease-test"
+	if err := os.WriteFile(filepath.Join(d1.cfg.SettingsDir, "sec.zy"),
+		[]byte("db_password: !encrypted \""+secretPlain+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
@@ -143,23 +206,104 @@ func TestPublisherLeaseGatesPublishes(t *testing.T) {
 	})
 
 	// d2 starts as standby: it must NOT publish while d1 holds the lease.
+	// Its standby mirror (armed after ~2 lease TTLs) instead pulls the
+	// PUBLISHED tree into its own dirs.
 	if err := d2.startPublisherLease(ctx2); err != nil {
 		t.Fatalf("start publisher lease d2: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond) // several renew intervals
+	waitFor(t, 5*time.Second, "standby mirror convergence on master-2", func() bool {
+		if _, err := os.Stat(filepath.Join(statesDir2, "web1.zy")); err != nil {
+			return false
+		}
+		_, err := os.Stat(filepath.Join(d2.cfg.SettingsDir, "sec.zy"))
+		return err == nil
+	})
 	if kvHasKey(t, js, bus.BucketSettingsFiles, "m2.zy") {
 		t.Fatal("standby master published settings files while not holding the lease")
 	}
 	if kvHasKey(t, js, bus.BucketStateFiles, "web2.zy") {
 		t.Fatal("standby master published state files while not holding the lease")
 	}
+	// The mirror pruned the standby's stale local file (it is not part of
+	// published truth).
+	if _, err := os.Stat(filepath.Join(statesDir2, "web2.zy")); !os.IsNotExist(err) {
+		t.Error("standby's stale local state file survived the mirror sync")
+	}
 
-	// Stopping the leader releases the lease; the standby acquires it and
-	// starts publishing.
+	// SEALED SETTINGS: the standby's dir now holds d1's raw tree — secret
+	// plaintext included — while neither bucket ever stored it in the clear.
+	secOnStandby, err := os.ReadFile(filepath.Join(d2.cfg.SettingsDir, "sec.zy"))
+	if err != nil {
+		t.Fatalf("standby settings mirror missing sec.zy: %v", err)
+	}
+	if !strings.Contains(string(secOnStandby), secretPlain) {
+		t.Error("standby's mirrored settings lost the !encrypted plaintext")
+	}
+	sanKV, err := bus.GetBucket(ctx, js, bus.BucketSettingsFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, err := sanKV.Get(ctx, "sec.zy"); err != nil {
+		t.Fatalf("sanitized sec.zy missing: %v", err)
+	} else if strings.Contains(string(e.Value()), secretPlain) {
+		t.Fatal("plaintext secret leaked into the sanitized settings-files bucket")
+	}
+	sealedKV, err := bus.GetBucket(ctx, js, bus.BucketMasterSettings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, err := sealedKV.Get(ctx, "sec.zy"); err != nil {
+		t.Fatalf("sealed sec.zy missing: %v", err)
+	} else if strings.Contains(string(e.Value()), secretPlain) {
+		t.Fatal("plaintext secret leaked into the sealed master-settings bucket")
+	}
+	// The OnSynced refresh re-extracted secrets on the standby: a
+	// facts-secrets-lease-holding standby must encrypt CURRENT values. It
+	// fires just after the file swap, so poll rather than assert once.
+	waitFor(t, 3*time.Second, "standby in-memory secrets refresh", func() bool {
+		d2.settingsMu.RLock()
+		defer d2.settingsMu.RUnlock()
+		return d2.allSecrets["sec.zy"]["db_password"] == secretPlain
+	})
+
+	stateKV, err := bus.GetBucket(ctx, js, bus.BucketStateFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revBefore := bus.GetRevision(ctx, stateKV)
+	settingsRevBefore := bus.GetRevision(ctx, sanKV)
+
+	// FAILOVER: stopping the leader hands the lease to master-2. The
+	// takeover publish is hash-gated against the mirrored (identical) tree —
+	// the fleet keeps master-1's files and the revision does not bump.
 	cancel1()
-	waitFor(t, 5*time.Second, "standby takeover publish from master-2", func() bool {
-		return kvHasKey(t, js, bus.BucketSettingsFiles, "m2.zy") &&
-			kvHasKey(t, js, bus.BucketStateFiles, "web2.zy")
+	waitFor(t, 5*time.Second, "master-2 takeover", d2.publisherLeader)
+	time.Sleep(300 * time.Millisecond) // let the takeover publish (a no-op) run
+	if kvHasKey(t, js, bus.BucketStateFiles, "web2.zy") {
+		t.Fatal("takeover reverted the fleet to the standby's stale state file")
+	}
+	if !kvHasKey(t, js, bus.BucketStateFiles, "web1.zy") {
+		t.Fatal("published truth lost across the takeover")
+	}
+	if rev := bus.GetRevision(ctx, stateKV); rev != revBefore {
+		t.Errorf("takeover bumped the state-files revision %d -> %d; a converged takeover must be a no-op", revBefore, rev)
+	}
+	// Settings converge through the sealed replica, so the takeover is a
+	// no-op for the sanitized settings bucket too.
+	if rev := bus.GetRevision(ctx, sanKV); rev != settingsRevBefore {
+		t.Errorf("takeover bumped the settings-files revision %d -> %d; converged settings must be a no-op", settingsRevBefore, rev)
+	}
+	if kvHasKey(t, js, bus.BucketSettingsFiles, "m2.zy") {
+		t.Fatal("takeover reverted the fleet to the standby's stale settings file")
+	}
+
+	// A NEW edit on the new holder publishes normally (via its ticker or
+	// watcher — the lease-test daemon config keeps both defaults).
+	if err := os.WriteFile(filepath.Join(statesDir2, "post-takeover.zy"), []byte("x:\n  test.ping: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, "post-takeover edit publish", func() bool {
+		return kvHasKey(t, js, bus.BucketStateFiles, "post-takeover.zy")
 	})
 }
 
@@ -178,7 +322,7 @@ func TestHandleFactsUpdateSecretsGate(t *testing.T) {
 		t.Fatalf("new enroll store: %v", err)
 	}
 
-	d := newLeaseTestDaemon(t, js, "master-1", t.TempDir(), "app.zy")
+	d := newLeaseTestDaemon(t, js, "master-1", t.TempDir(), "app.zy", nil)
 	d.runCtx = ctx
 	d.reg = metrics.NewMasterRegistry()
 	d.enrollStore = store

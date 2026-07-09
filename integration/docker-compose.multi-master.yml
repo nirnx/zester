@@ -8,6 +8,6 @@ services:
     volumes:
       - auth-data:/data/auth:ro
       - state-data:/data/states
-      - settings-data:/data/settings:ro
+      - settings-data:/data/settings
       - reactor-data:/data/reactor:ro
       - nats-config:/data/nats:ro

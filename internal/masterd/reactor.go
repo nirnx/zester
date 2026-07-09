@@ -15,6 +15,7 @@ import (
 	"github.com/nirnx/zester/pkg/bus"
 	"github.com/nirnx/zester/pkg/enroll"
 	"github.com/nirnx/zester/pkg/event"
+	"github.com/nirnx/zester/pkg/fileserver"
 	"github.com/nirnx/zester/pkg/job"
 	"github.com/nirnx/zester/pkg/reactor"
 	"github.com/nirnx/zester/pkg/statefiles"
@@ -67,20 +68,30 @@ func (d *Daemon) startReactorPublisher(ctx context.Context) error {
 // publishes an empty set ONLY when the bucket is already empty — the
 // publisher refuses to wipe a populated bucket from a missing local dir
 // (statefiles AllowEmpty semantics).
-func (d *Daemon) publishReactorFiles(ctx context.Context) {
+func (d *Daemon) publishReactorFiles(ctx context.Context, force bool) fileserver.SetResult {
 	if d.reactorPublisher == nil {
-		return
+		return fileserver.SetResult{Name: "reactor"}
 	}
 	files, err := loadReactorFiles(d.cfg.Reactor.Dir)
 	if err != nil {
 		d.logger.Warn("failed to load reactor files", "dir", d.cfg.Reactor.Dir, "error", err)
-		return
+		return fileserver.SetResult{Name: "reactor", Err: err.Error()}
 	}
-	if count, err := d.reactorPublisher.PublishFiles(ctx, files); err != nil {
+	publish := d.reactorPublisher.PublishFiles
+	if force {
+		publish = d.reactorPublisher.PublishFilesForce
+	}
+	res, err := publish(ctx, files)
+	if err != nil {
 		d.logger.Warn("failed to publish reactor files", "error", err)
-	} else {
-		d.logger.Info("published reactor files", "count", count)
+		return fileserver.SetResult{Name: "reactor", Err: err.Error()}
 	}
+	if res.Changed {
+		d.logger.Info("published reactor files", "count", res.Files)
+	} else {
+		d.logger.Debug("reactor files unchanged, publish skipped", "count", res.Files)
+	}
+	return fileserver.SetResult{Name: "reactor", Files: res.Files, Changed: res.Changed}
 }
 
 // loadReactorFiles walks the local reactor dir and maps every .zy file to
