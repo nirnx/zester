@@ -27,6 +27,6 @@ func runEnrollRevoke(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("Enrollment %s revoked (peel: %s)\n", rec.ID, rec.PeelID)
+	fmt.Printf("Enrollment %s revoked (peel: %s)\n", rec.ID, displayPeel(rec.PeelID))
 	return nil
 }

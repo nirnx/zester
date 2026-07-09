@@ -45,6 +45,7 @@ Related non-event subjects:
 
 - **Slash form** in payloads, rule files, and CLI output: `myco/deploy/finished`. **Dotted form** on subjects: `myco.deploy.finished`. The mapping is 1:1 because tag segments may only contain `[a-zA-Z0-9_-]` (`event.ValidateTag`; dots, `*`, `>`, whitespace rejected). Tags may lead with `_`; origins may not.
 - **Match key** = `<origin>/<slash-tag>` — what reactor rules and `zester event watch` filters match against. Examples: `web-01/myco/deploy/finished`, `web-01/beacon/web-01/service`, `_master/enroll/pending/enr-123`, `_admin/maintenance/start`, `_master/reaction/<tag>` (chained events).
+- **Dotted-hostname origins**: a peel whose id derives from an FQDN has the dots encoded as `_` in its origin token (`devops-hetzner.oxm` → `devops-hetzner_oxm`). Rule globs, `event watch` filters, and `reactor test` keys may be written with the original dots — the ORIGIN segment (before the first `/`) is normalized automatically. Tag segments are never rewritten: tags may legitimately contain `_`, and a dotted tag is usually a mistyped `/`.
 - **Master-emitted events** shipped in v1: `enroll/pending/<enrollment-id>` with data `{id, peel_id, ip}` (`ip` omitted when unknown), published when a new enrollment request is created. Job lifecycle events (`job/<jid>/finalized` etc.) are Phase 2 — not emitted yet.
 
 ## NATS Resources

@@ -87,7 +87,7 @@ func runPeelList(cmd *cobra.Command, args []string) error {
 			err := bus.KVGet(ctx, hbKV, key, &hb)
 			online, lastSeen = heartbeatStatus(&hb, err == nil, time.Now())
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", key, osName, arch, online, lastSeen)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", displayPeel(key), osName, arch, online, lastSeen)
 	}
 	w.Flush()
 	return nil

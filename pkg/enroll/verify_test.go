@@ -350,6 +350,46 @@ func TestSanitizePeelID(t *testing.T) {
 	}
 }
 
+func TestDisplayPeelID(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"devops-hetzner_oxm", "devops-hetzner.oxm"}, // the wire token decodes to the hostname
+		{"web01_example_com", "web01.example.com"},
+		{"web-01", "web-01"},     // no underscores: unchanged
+		{"web01-pl", "web01-pl"}, // hyphens never decode
+		{"", ""},                 // empty unchanged
+		{"_master", "_master"},   // reserved origins never decode
+		{"_admin", "_admin"},     // reserved origins never decode
+		{"web..01", "web..01"},   // not a valid peel id: returned unchanged
+		{"we b_01", "we b_01"},   // not a valid peel id: returned unchanged
+		{"web01_", "web01."},     // trailing encoded dot round-trips
+	}
+	for _, c := range cases {
+		if got := enroll.DisplayPeelID(c.in); got != c.want {
+			t.Errorf("DisplayPeelID(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+
+	// Round-trip property: for any valid hostname (which can never contain
+	// '_'), Display(Sanitize(h)) == h — the wire form is a lossless encoding.
+	hostnames := []string{
+		"devops-hetzner.oxm", "web01.example.com", "web01-pl", "a.b.c.d",
+		"node-1.sub-domain.tld", "single",
+	}
+	for _, h := range hostnames {
+		if got := enroll.DisplayPeelID(enroll.SanitizePeelID(h)); got != h {
+			t.Errorf("Display(Sanitize(%q)) = %q, want round-trip", h, got)
+		}
+	}
+
+	// And the inverse: Sanitize(Display(t)) == t for valid wire tokens.
+	tokens := []string{"devops-hetzner_oxm", "web01_pl", "web-01", "a_b_c"}
+	for _, tok := range tokens {
+		if got := enroll.SanitizePeelID(enroll.DisplayPeelID(tok)); got != tok {
+			t.Errorf("Sanitize(Display(%q)) = %q, want round-trip", tok, got)
+		}
+	}
+}
+
 func TestSanitizeGlobDots(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"web01.pl", "web01_pl"},                   // literal dots -> underscore
@@ -362,6 +402,9 @@ func TestSanitizeGlobDots(t *testing.T) {
 		{`web\.01`, `web\.01`},                     // escaped dot stays escaped
 		{"[unterminated.", "[unterminated."},       // unterminated class: conservatively treated as in-class
 		{"a.b[c.d]e.f", "a_b[c.d]e_f"},             // mixed: outside substituted, inside preserved
+		{"web[].]01", "web[].]01"},                 // POSIX leading ']' is a literal member — the '.' is still in-class
+		{"web[!].]01", "web[!].]01"},               // same with negation
+		{"[]a].b", "[]a]_b"},                       // class closes at the SECOND ']'; the outside dot substitutes
 	}
 	for _, c := range cases {
 		if got := enroll.SanitizeGlobDots(c.in); got != c.want {

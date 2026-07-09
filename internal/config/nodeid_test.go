@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/enroll"
@@ -25,6 +26,46 @@ func TestResolveNodeID_ExplicitSanitized(t *testing.T) {
 	// An already-valid id is unchanged.
 	if id, _ := ResolveNodeID("web-01", "", log); id != "web-01" {
 		t.Errorf("id = %q, want web-01", id)
+	}
+}
+
+func TestDerivedNodeID(t *testing.T) {
+	// Normal FQDN derives the encoded token.
+	id, err := derivedNodeID("web01.example.com")
+	if err != nil {
+		t.Fatalf("derivedNodeID: %v", err)
+	}
+	if id != "web01_example_com" {
+		t.Errorf("id = %q, want web01_example_com", id)
+	}
+
+	// The '_' reservation covers the DERIVED path too: a non-RFC underscore
+	// hostname is refused — sanitizing it would mint an id whose dotted
+	// display names a host that does not exist and that pre-collides with the
+	// genuine dotted host.
+	if _, err := derivedNodeID("db_primary.example.com"); err == nil {
+		t.Error("underscore hostname must be refused on the derived path")
+	}
+
+	// Localhost placeholders refused; empty refused.
+	if _, err := derivedNodeID("localhost.localdomain"); err == nil {
+		t.Error("localhost placeholder must be refused")
+	}
+	if _, err := derivedNodeID(""); err == nil {
+		t.Error("empty hostname must be refused")
+	}
+}
+
+func TestResolveNodeID_ExplicitUnderscoreReserved(t *testing.T) {
+	// '_' is the wire encoding of '.' (enroll.DisplayPeelID decodes it), so a
+	// configured id must spell the dot — a raw '_' would make the display
+	// decode ambiguous and is refused with guidance.
+	_, err := ResolveNodeID("web_01", "", slog.New(slog.DiscardHandler))
+	if err == nil {
+		t.Fatal("explicit id with '_' must be refused (reserved as the '.' encoding)")
+	}
+	if !strings.Contains(err.Error(), "web.01") {
+		t.Errorf("error should suggest the dotted form, got: %v", err)
 	}
 }
 

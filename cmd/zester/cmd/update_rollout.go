@@ -78,7 +78,7 @@ func runUpdateRollout(cmd *cobra.Command, args []string) error {
 			component, version, resp.Nodes, resp.Batches)
 		if resp.State != nil {
 			for i, batch := range resp.State.Batches {
-				fmt.Printf("  Batch %d: %v\n", i+1, batch)
+				fmt.Printf("  Batch %d: %v\n", i+1, displayPeels(batch))
 			}
 		}
 		return nil

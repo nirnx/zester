@@ -380,10 +380,16 @@ var (
 )
 
 // lintRules emits amendment-10 warnings after a successful load: an
-// enroll-referencing rule whose match glob is a bare star, and reaction
-// files whose require_peel is a bare star. Lints never fail the load.
+// enroll-referencing rule whose match glob is a bare star, reaction files
+// whose require_peel is a bare star, and match globs with a '.' in tag
+// territory (dead patterns — live tags never contain dots). Lints never fail
+// the load.
 func (l *Loader) lintRules(rs *RuleSet) {
 	for _, r := range rs.Rules {
+		if PatternTagHasDot(r.Pattern) {
+			l.logger.Warn("reactor: rule glob has a '.' after the first '/' — live tags never contain dots, so this rule can NEVER fire; a dotted peel id inside a tag (e.g. a beacon key) uses its '_' wire form",
+				"rule", r.Ref, "pattern", r.Pattern)
+		}
 		src, ok := rs.File(r.Ref)
 		if !ok || !enrollActionRe.Match(src) {
 			continue

@@ -74,7 +74,7 @@ func runUpdateStatus(cmd *cobra.Command, args []string) error {
 				if errMsg == "" {
 					errMsg = "-"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", id, nr.Status, errMsg, nr.Updated.Local().Format("15:04:05"))
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", displayPeel(id), nr.Status, errMsg, nr.Updated.Local().Format("15:04:05"))
 			}
 			w.Flush()
 		}
@@ -101,7 +101,7 @@ func runUpdateStatus(cmd *cobra.Command, args []string) error {
 	for _, s := range statuses {
 		updated := s.UpdatedAt.Local().Format("15:04:05")
 		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
-			s.ID, s.Version, s.State, s.ChildPID, s.ChildUptime, updated,
+			displayPeel(s.ID), s.Version, s.State, s.ChildPID, s.ChildUptime, updated,
 			yesNo(s.Degraded), protocolCol(s.Protocol))
 	}
 	w.Flush()

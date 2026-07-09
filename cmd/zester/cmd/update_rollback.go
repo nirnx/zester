@@ -72,14 +72,15 @@ func runUpdateRollback(cmd *cobra.Command, args []string) error {
 	for _, id := range nodeIDs {
 		var resp update.UpdateResponse
 		subject := bus.UpdateCmdSubject(id)
+		disp := displayPeel(id)
 		if err := client.Request(ctx, subject, rollbackCmd, &resp); err != nil {
-			fmt.Printf("  %s: ERROR: %v\n", id, err)
+			fmt.Printf("  %s: ERROR: %v\n", disp, err)
 			continue
 		}
 		if resp.Error != "" {
-			fmt.Printf("  %s: FAILED: %s\n", id, resp.Error)
+			fmt.Printf("  %s: FAILED: %s\n", disp, resp.Error)
 		} else {
-			fmt.Printf("  %s: %s\n", id, resp.Status)
+			fmt.Printf("  %s: %s\n", disp, resp.Status)
 		}
 	}
 

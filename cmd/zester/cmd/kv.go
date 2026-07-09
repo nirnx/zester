@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 var kvCmd = &cobra.Command{
@@ -41,7 +42,9 @@ func init() {
 }
 
 func runKVFactGet(cmd *cobra.Command, args []string) error {
-	peelID := args[0]
+	// Accept the dotted human form: facts keys use the wire token
+	// ('.' encoded as '_'), and a dotted id can never be a KV key.
+	peelID := enroll.SanitizeGlobDots(args[0])
 
 	client, err := connectClient()
 	if err != nil {

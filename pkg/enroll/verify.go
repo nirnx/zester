@@ -99,6 +99,13 @@ func ValidatePublicKey(pub string) error {
 //
 // A peel ID must be non-empty, at most 128 characters, and match
 // ^[a-zA-Z0-9][a-zA-Z0-9_-]*$.
+//
+// WIRE CONTRACT: an interior '_' in a peel ID always MEANS an encoded '.'
+// (see SanitizePeelID/DisplayPeelID). Both id-minting paths enforce it
+// (config.ResolveNodeID refuses raw underscores in configured ids AND in
+// derived hostnames), so every legitimately enrolled '_' is an encoded dot;
+// a hand-rolled enrollment client submitting a raw-underscore id with a
+// different meaning violates the contract and simply displays dotted.
 func ValidatePeelID(peelID string) error {
 	if peelID == "" {
 		return fmt.Errorf("enroll: peel ID is required")
@@ -170,20 +177,33 @@ func SanitizePeelID(raw string) string {
 // alone: rewriting a '.' used as a range endpoint would silently widen the
 // class (e.g. [!-.] -> [!-_] pulls in digits and uppercase), matching peels
 // the operator never targeted. An untouched '.' class member is inert — it
-// can never match a real peel ID.
+// can never match a real peel ID. Class scanning follows fnmatch/POSIX rules:
+// a ']' immediately after '[' (or after the '!'/'^' negation) is a literal
+// class member, not the close; an unterminated '[' keeps the rest in-class
+// (conservative — nothing after it is substituted).
 func SanitizeGlobDots(pattern string) string {
 	var b []byte // allocated lazily on the first substitution
-	inClass := false
 	for i := 0; i < len(pattern); i++ {
 		switch c := pattern[i]; {
 		case c == '\\' && i+1 < len(pattern):
 			i++ // escaped char, never substituted
-		case inClass:
-			if c == ']' {
-				inClass = false
-			}
 		case c == '[':
-			inClass = true
+			// Skip the whole class: optional negation, then a leading ']'
+			// counts as a literal member, then scan to the closing ']'.
+			j := i + 1
+			if j < len(pattern) && (pattern[j] == '!' || pattern[j] == '^') {
+				j++
+			}
+			if j < len(pattern) && pattern[j] == ']' {
+				j++
+			}
+			for j < len(pattern) && pattern[j] != ']' {
+				if pattern[j] == '\\' && j+1 < len(pattern) {
+					j++
+				}
+				j++
+			}
+			i = j // at the closing ']' (or end of an unterminated class)
 		case c == '.':
 			if b == nil {
 				b = []byte(pattern)
@@ -200,6 +220,28 @@ func SanitizeGlobDots(pattern string) string {
 func isPeelIDByte(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
 		(c >= '0' && c <= '9') || c == '_' || c == '-'
+}
+
+// DisplayPeelID maps a wire-form peel ID back to its human form: every '_'
+// becomes '.' — the exact inverse of SanitizePeelID's dot encoding, so the
+// hostname "devops-hetzner.oxm" whose ID is the subject token
+// "devops-hetzner_oxm" DISPLAYS as the hostname again. The token form is a
+// NATS wire encoding; humans should never have to read or type it.
+//
+// The inverse is total because '_' in an ID is RESERVED as the encoded form
+// of '.': hostnames can never contain '_' (RFC 1123), and explicitly
+// configured IDs refuse raw underscores (config.ResolveNodeID) — the operator
+// writes the dot and it round-trips. Reserved '_'-prefixed origins (_master,
+// _admin) and anything else that is not a valid peel ID are returned
+// unchanged — this decodes peel IDs, never arbitrary strings.
+func DisplayPeelID(id string) string {
+	if id == "" || id[0] == '_' || !strings.Contains(id, "_") {
+		return id
+	}
+	if err := ValidatePeelID(id); err != nil {
+		return id
+	}
+	return strings.ReplaceAll(id, "_", ".")
 }
 
 // ValidateCurvePublicKey checks that a curve public key has the X prefix

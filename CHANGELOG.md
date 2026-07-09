@@ -4,6 +4,47 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [0.3.8] - 2026-07-09
+
+Human identity everywhere: the CLI displays and accepts dotted hostnames
+(`devops-hetzner.oxm`); the underscore form is now purely a NATS wire
+encoding, formally reserved and enforced on every id-minting path.
+
+### Changed
+- **The CLI speaks hostnames; only the wire speaks tokens.** Every place the
+  CLI shows a peel id — job returns and targeting echo, `peel list`,
+  `enroll list/show/approve/reject/revoke`, `job show`, `update status`,
+  `update rollback`, `event watch` origins, JSON/YAML output included — now
+  displays the human form: interior `_` decodes back to `.`
+  (`enroll.DisplayPeelID`), so `zester 'devops-hetzner.oxm' test.ping` answers
+  as `devops-hetzner.oxm`, not the NATS subject token `devops-hetzner_oxm`.
+  The decode is lossless because `_` in a peel id is now RESERVED as the wire
+  encoding of `.`: a configured `id` may not contain a raw underscore (write
+  the dot — it round-trips), and hostnames can never contain one. The token
+  form remains valid input everywhere.
+- **Reactor rules accept dotted-hostname origins.** The ORIGIN segment of a
+  match-key glob (before the first `/`) is dot-normalized at compile time, so
+  `'web01.pl/service/*'` matches the wire key `web01_pl/service/nginx`;
+  `zester reactor test` accepts the dotted form too. Tag segments are
+  deliberately never rewritten — tags may legitimately contain `_`, and a
+  dotted tag is probably a mistyped `/`. Two guards keep that boundary
+  honest: `zester reactor test` REFUSES a key whose tag cannot exist on the
+  wire (dots in tag territory — previously it would green-light a rule no
+  live event could ever reach), and the rule loader warns on any match glob
+  with a `.` after the first `/` (dead pattern; a peel id inside a beacon
+  tag uses its `_` wire form).
+- **The `_` reservation covers hostname-derived ids too.** A non-RFC
+  underscore hostname (`db_primary.example.com` — Linux permits it) is now
+  refused at id derivation with guidance to set an explicit `id`: sanitizing
+  it would mint an id whose dotted display names a host that does not exist
+  and which pre-collides with the genuine `db.primary.example.com`.
+- **Dotted-form input works in every command, not just targeting**: `zester
+  kv fact get`, `zester basket list`, and `--direct` exact/glob targets now
+  normalize dots like job-mode targeting (direct mode shares
+  `target.GlobMatcher` outright); `job list`/`job active` TARGET columns,
+  `update rollout` dry-run batches, and the `basket get` PEEL column joined
+  the display decode.
+
 ## [0.3.7] - 2026-07-09
 
 Zero-config node identity: `zester-watchdog --component peel` is a complete

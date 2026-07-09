@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/nirnx/zester/pkg/target"
 )
 
 // ---------- parseModuleArgs ----------
@@ -414,73 +416,47 @@ func TestIsGlob(t *testing.T) {
 	}
 }
 
-// ---------- matchGlob ----------
+// ---------- direct-mode glob matching (target.GlobMatcher) ----------
 
-func TestMatchGlob(t *testing.T) {
-	candidates := []string{"web-01", "web-02", "db-01", "web-staging", "cache-01"}
+// Direct mode routes glob resolution through target.NewGlobMatcher, sharing
+// job mode's semantics — including the dotted-hostname normalization, so a
+// target written as 'web01.pl' matches the wire id 'web01_pl'.
+func TestDirectGlobMatching(t *testing.T) {
+	candidates := []string{"web-01", "web-02", "db-01", "web-staging", "web01_pl"}
 
-	matched, err := matchGlob("web-*", candidates)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := []string{"web-01", "web-02", "web-staging"}
-	if len(matched) != len(want) {
-		t.Fatalf("matched %v, want %v", matched, want)
-	}
-	for i, m := range matched {
-		if m != want[i] {
-			t.Errorf("matched[%d] = %q, want %q", i, m, want[i])
+	match := func(pattern string) []string {
+		t.Helper()
+		m, err := target.NewGlobMatcher(pattern)
+		if err != nil {
+			t.Fatalf("NewGlobMatcher(%q): %v", pattern, err)
 		}
+		var out []string
+		for _, c := range candidates {
+			if m.Match(c, nil) {
+				out = append(out, c)
+			}
+		}
+		return out
 	}
-}
 
-func TestMatchGlob_Star(t *testing.T) {
-	candidates := []string{"web-01", "db-01"}
-	matched, err := matchGlob("*", candidates)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if got := match("web-*"); len(got) != 3 {
+		t.Errorf("web-*: got %v, want 3 matches", got)
 	}
-	if len(matched) != 2 {
-		t.Errorf("expected 2 matches, got %d", len(matched))
+	if got := match("*"); len(got) != len(candidates) {
+		t.Errorf("*: got %v, want all", got)
 	}
-}
+	if got := match("web-0?"); len(got) != 2 {
+		t.Errorf("web-0?: got %v, want 2 matches", got)
+	}
+	if got := match("cache-*"); len(got) != 0 {
+		t.Errorf("cache-*: got %v, want none", got)
+	}
+	// The dotted human form matches the sanitized wire id.
+	if got := match("web01.pl"); len(got) != 1 || got[0] != "web01_pl" {
+		t.Errorf("web01.pl: got %v, want [web01_pl]", got)
+	}
 
-func TestMatchGlob_NoMatch(t *testing.T) {
-	candidates := []string{"web-01", "db-01"}
-	matched, err := matchGlob("cache-*", candidates)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(matched) != 0 {
-		t.Errorf("expected 0 matches, got %v", matched)
-	}
-}
-
-func TestMatchGlob_QuestionMark(t *testing.T) {
-	candidates := []string{"web-01", "web-02", "web-10"}
-	matched, err := matchGlob("web-0?", candidates)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := []string{"web-01", "web-02"}
-	if len(matched) != len(want) {
-		t.Fatalf("matched %v, want %v", matched, want)
-	}
-}
-
-func TestMatchGlob_InvalidPattern(t *testing.T) {
-	_, err := matchGlob("[invalid", []string{"a"})
-	if err == nil {
+	if _, err := target.NewGlobMatcher("[invalid"); err == nil {
 		t.Fatal("expected error for invalid glob pattern")
-	}
-}
-
-func TestMatchGlob_EmptyCandidates(t *testing.T) {
-	matched, err := matchGlob("*", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(matched) != 0 {
-		t.Errorf("expected 0 matches, got %v", matched)
 	}
 }

@@ -85,6 +85,45 @@ func TestTestServiceRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTestServiceDottedOriginAndImpossibleTag(t *testing.T) {
+	top := `
+reactor:
+  - 'web01.pl/deploy/*':
+      - reactor.notify
+`
+	rs := mustRuleSet(t, top, map[string]string{
+		"reactor.notify": "say:\n  log:\n    message: hi\n",
+	})
+	e := testEngine(t, rs, &seamRecorder{}, nil, nil)
+	ps := bustest.NewFakePubSub()
+	stop, err := e.StartTestService(ps)
+	if err != nil {
+		t.Fatalf("StartTestService: %v", err)
+	}
+	defer stop()
+
+	// A dotted-hostname ORIGIN in the test key is encoded to its wire form
+	// and matches the (equally dotted) rule.
+	resp := requestTest(t, ps, TestRequest{Key: "web01.pl/deploy/finished"})
+	if resp.Err != "" {
+		t.Fatalf("dotted origin: Err %q", resp.Err)
+	}
+	if len(resp.Matched) != 1 {
+		t.Fatalf("dotted origin: matched %+v", resp.Matched)
+	}
+
+	// A key whose TAG cannot exist on the wire (dots in tag territory) is an
+	// ERROR, never a match — a dry run must not green-light a rule no live
+	// event can reach.
+	resp = requestTest(t, ps, TestRequest{Key: "web01.pl/beacon/db01.example.com/service"})
+	if resp.Err == "" {
+		t.Fatal("impossible dotted tag: want an error, got a dry-run result")
+	}
+	if !strings.Contains(resp.Err, "cannot occur on the wire") {
+		t.Errorf("impossible-tag error should explain the wire form, got: %s", resp.Err)
+	}
+}
+
 func TestTestServiceReportsRuleErrorsWithoutExecuting(t *testing.T) {
 	e := testServiceEngine(t)
 	ps := bustest.NewFakePubSub()

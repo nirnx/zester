@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/enroll"
 	"github.com/nirnx/zester/pkg/job"
 	"github.com/nirnx/zester/pkg/proto"
 	"github.com/nirnx/zester/pkg/target"
@@ -159,7 +159,7 @@ func runJobMode(ctx context.Context, client *bus.Client, tgtExpr, module, id str
 	}
 
 	if format == "text" {
-		fmt.Fprintf(os.Stderr, "Targeting %d peel(s): %v\n", len(peels), peels)
+		fmt.Fprintf(os.Stderr, "Targeting %d peel(s): %v\n", len(peels), displayPeels(peels))
 	}
 
 	// Create job. The args map includes the parsed module-specific args.
@@ -247,7 +247,9 @@ type directResult struct {
 // on the facts KV bucket.
 func resolveTargetsDirect(ctx context.Context, nc *nats.Conn, tgtExpr string) ([]string, error) {
 	if !isGlob(tgtExpr) {
-		return []string{tgtExpr}, nil
+		// An exact target may be written in the dotted human form; the wire
+		// id encodes '.' as '_' (and a dotted id can never exist).
+		return []string{enroll.SanitizeGlobDots(tgtExpr)}, nil
 	}
 
 	js, err := jetstream.New(nc)
@@ -265,27 +267,24 @@ func resolveTargetsDirect(ctx context.Context, nc *nats.Conn, tgtExpr string) ([
 		return nil, fmt.Errorf("list fact keys: %w", err)
 	}
 
-	return matchGlob(tgtExpr, keys)
+	// target.GlobMatcher carries the same dotted-hostname normalization as
+	// job-mode targeting, so --direct accepts the identical target forms.
+	m, err := target.NewGlobMatcher(tgtExpr)
+	if err != nil {
+		return nil, err
+	}
+	var matched []string
+	for _, k := range keys {
+		if m.Match(k, nil) {
+			matched = append(matched, k)
+		}
+	}
+	return matched, nil
 }
 
 // isGlob returns true if the pattern contains glob metacharacters.
 func isGlob(pattern string) bool {
 	return strings.ContainsAny(pattern, "*?[")
-}
-
-// matchGlob filters a list of strings against a glob pattern.
-func matchGlob(pattern string, candidates []string) ([]string, error) {
-	var matched []string
-	for _, c := range candidates {
-		ok, err := filepath.Match(pattern, c)
-		if err != nil {
-			return nil, fmt.Errorf("invalid glob pattern %q: %w", pattern, err)
-		}
-		if ok {
-			matched = append(matched, c)
-		}
-	}
-	return matched, nil
 }
 
 // moduleTimeout returns the effective timeout for a command.

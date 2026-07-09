@@ -51,7 +51,7 @@ func runEnrollApprove(cmd *cobra.Command, args []string) error {
 			}
 			continue
 		}
-		fmt.Printf("Enrollment %s approved (peel: %s)\n", rec.ID, rec.PeelID)
+		fmt.Printf("Enrollment %s approved (peel: %s)\n", rec.ID, displayPeel(rec.PeelID))
 	}
 	return firstErr
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/enroll"
 	"github.com/nirnx/zester/pkg/target"
 )
 
@@ -75,17 +76,19 @@ func runBasketGet(cmd *cobra.Command, args []string) error {
 		key := peelID + "." + function
 		var val any
 		if err := bus.KVGet(ctx, kv, key, &val); err != nil {
-			fmt.Fprintf(w, "%s\t(no data)\n", peelID)
+			fmt.Fprintf(w, "%s\t(no data)\n", displayPeel(peelID))
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%v\n", peelID, val)
+		fmt.Fprintf(w, "%s\t%v\n", displayPeel(peelID), val)
 	}
 	w.Flush()
 	return nil
 }
 
 func runBasketList(cmd *cobra.Command, args []string) error {
-	peelID := args[0]
+	// Accept the dotted human form: basket keys use the wire token
+	// ('.' encoded as '_'), and a dotted id can never be a key prefix.
+	peelID := enroll.SanitizeGlobDots(args[0])
 
 	client, err := connectClient()
 	if err != nil {

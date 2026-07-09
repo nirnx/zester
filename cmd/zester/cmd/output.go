@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nirnx/zester/pkg/enroll"
 	"github.com/nirnx/zester/pkg/job"
 	"github.com/nirnx/zester/pkg/proto"
 	"gopkg.in/yaml.v3"
@@ -18,6 +19,22 @@ const (
 	colorRed   = "\033[91m"
 	colorReset = "\033[0m"
 )
+
+// displayPeel maps a wire-form peel ID to its human form for CLI output:
+// interior '_' decodes back to '.' (enroll.DisplayPeelID), so the operator
+// sees "devops-hetzner.oxm", not the NATS subject token "devops-hetzner_oxm".
+// The token form is accepted everywhere as INPUT (targets, --peel) but is
+// never what the CLI shows.
+func displayPeel(id string) string { return enroll.DisplayPeelID(id) }
+
+// displayPeels maps a peel ID list for display.
+func displayPeels(ids []string) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = enroll.DisplayPeelID(id)
+	}
+	return out
+}
 
 // outputRecord is the structured representation of a single peel's result.
 type outputRecord struct {
@@ -89,7 +106,7 @@ func printDirectText(peelID, module string, resp *proto.ExecResponse, err error,
 		color = colorGreen
 	}
 
-	fmt.Printf("%s:\n", colorize(peelID, color, useColor))
+	fmt.Printf("%s:\n", colorize(displayPeel(peelID), color, useColor))
 
 	if err != nil {
 		fmt.Printf("    ERROR: %v\n", err)
@@ -152,7 +169,7 @@ func printDirectText(peelID, module string, resp *proto.ExecResponse, err error,
 func directToOutputRecords(results []directResult) []outputRecord {
 	records := make([]outputRecord, 0, len(results))
 	for _, r := range results {
-		rec := outputRecord{PeelID: r.peelID}
+		rec := outputRecord{PeelID: displayPeel(r.peelID)}
 		if r.err != nil {
 			rec.Error = r.err.Error()
 		} else if r.resp != nil {
@@ -211,7 +228,7 @@ func printJobReturnText(ret job.Return, module string, useColor bool) {
 		color = colorGreen
 	}
 
-	fmt.Printf("%s:\n", colorize(ret.PeelID, color, useColor))
+	fmt.Printf("%s:\n", colorize(displayPeel(ret.PeelID), color, useColor))
 
 	if ret.Error != "" {
 		fmt.Printf("    ERROR: %s\n", ret.Error)
@@ -322,7 +339,7 @@ func jobReturnsToOutputRecords(returns []job.Return) []outputRecord {
 	records := make([]outputRecord, 0, len(returns))
 	for _, ret := range returns {
 		rec := outputRecord{
-			PeelID:  ret.PeelID,
+			PeelID:  displayPeel(ret.PeelID),
 			Success: ret.Success,
 			Error:   ret.Error,
 		}

@@ -33,7 +33,7 @@ func runEnrollShow(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Enrollment ID:  %s\n", rec.ID)
-	fmt.Printf("Peel ID:        %s\n", rec.PeelID)
+	fmt.Printf("Peel ID:        %s\n", displayPeel(rec.PeelID))
 	fmt.Printf("State:          %s\n", rec.State)
 	fmt.Printf("Public Key:     %s\n", rec.PublicKey)
 	fmt.Printf("Hostname:       %s\n", rec.Hostname)

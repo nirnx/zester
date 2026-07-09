@@ -89,7 +89,7 @@ func runJobList(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		fun := mapStr(job, "function")
-		tgt := mapStr(job, "targets")
+		tgt := mapTargets(job, "targets")
 		state := mapStr(job, "status")
 		usr := mapStr(job, "user")
 		owner := mapStr(job, "owner")
@@ -145,7 +145,7 @@ func runJobShow(cmd *cobra.Command, args []string) error {
 		peelID := mapStr(ret, "peel_id")
 		success := mapStr(ret, "success")
 		dur := mapStr(ret, "duration")
-		fmt.Fprintf(w, "%s\t%s\t%s\n", peelID, success, dur)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", displayPeel(peelID), success, dur)
 	}
 	w.Flush()
 	return nil
@@ -189,7 +189,7 @@ func runJobActive(cmd *cobra.Command, args []string) error {
 		}
 		found = true
 		fun := mapStr(rec, "function")
-		tgt := mapStr(rec, "targets")
+		tgt := mapTargets(rec, "targets")
 		usr := mapStr(rec, "user")
 		owner := mapStr(rec, "owner")
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", jid, fun, tgt, status, usr, owner)
@@ -267,4 +267,25 @@ func mapStr(m map[string]any, key string) string {
 		return fmt.Sprintf("%v", v)
 	}
 	return "-"
+}
+
+// mapTargets renders a decoded job record's target list with peel ids in
+// display form (interior '_' -> '.'), keeping the same "[a b]" shape %v would
+// print. Falls back to mapStr for missing or unexpected shapes.
+func mapTargets(m map[string]any, key string) string {
+	switch list := m[key].(type) {
+	case []any:
+		parts := make([]string, len(list))
+		for i, e := range list {
+			if s, ok := e.(string); ok {
+				parts[i] = displayPeel(s)
+			} else {
+				parts[i] = fmt.Sprintf("%v", e)
+			}
+		}
+		return "[" + strings.Join(parts, " ") + "]"
+	case []string:
+		return "[" + strings.Join(displayPeels(list), " ") + "]"
+	}
+	return mapStr(m, key)
 }

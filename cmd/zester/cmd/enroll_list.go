@@ -70,7 +70,7 @@ func runEnrollList(cmd *cobra.Command, args []string) error {
 		} else if rec.TrustedCASPKI != "" {
 			trust = "unverified"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", rec.ID, rec.PeelID, hostname, rec.State, trust, created)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", rec.ID, displayPeel(rec.PeelID), hostname, rec.State, trust, created)
 	}
 	w.Flush()
 

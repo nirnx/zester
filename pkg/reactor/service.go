@@ -87,9 +87,23 @@ func (e *Engine) StartTestService(ps bus.PubSub) (func(), error) {
 // testMatch performs the dry run: match the key, then render + normalize +
 // validate each matched rule with a synthetic event. Nothing executes.
 func (e *Engine) testMatch(req TestRequest) TestResponse {
+	// Accept the human dotted-hostname origin form: a LIVE event's origin is
+	// always the wire token (dots encoded as '_'), so encode the test key's
+	// origin segment the same way — "web01.pl/service/nginx" dry-runs as the
+	// real key "web01_pl/service/nginx" would.
+	req.Key = NormalizeMatchKeyOrigin(req.Key)
+
 	origin, tag, err := splitMatchKey(req.Key)
 	if err != nil {
 		return TestResponse{Err: err.Error()}
+	}
+	// A key whose TAG cannot exist on the wire (tags never contain '.', '*',
+	// '>', ...) must be an error, not a dry-run result: matching it against
+	// literal rule text would green-light rules no live event can ever reach
+	// (e.g. a dotted peel id inside a beacon tag — the live key uses the '_'
+	// wire form: "web01_pl/beacon/web01_pl/service").
+	if tagErr := event.ValidateTag(tag); tagErr != nil {
+		return TestResponse{Err: fmt.Sprintf("match key %q cannot occur on the wire: %v (a dotted peel id inside a tag uses its '_' wire form)", req.Key, tagErr)}
 	}
 
 	rs := e.ruleSet()

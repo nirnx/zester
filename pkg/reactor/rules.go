@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 const (
@@ -127,8 +129,43 @@ func ValidateRef(ref string) error {
 // and bounded by the rule set, so an unbounded cache is safe.
 var globCache sync.Map // pattern string -> *regexp.Regexp
 
+// NormalizeMatchKeyOrigin applies the peel-ID dot encoding ('.' -> '_',
+// enroll.SanitizeGlobDots) to the ORIGIN segment of a match key or match-key
+// glob — the text before the first '/'. The first segment of a match key is
+// always an origin (a peel ID, _master, or _admin), never a tag, and origin
+// tokens can never contain '.', so a dotted origin pattern is dead as written
+// — normalizing it only adds the matches the author meant
+// ("web01.pl/service/*" matches the real key "web01_pl/service/nginx").
+//
+// Everything after the first '/' is tag territory and is deliberately left
+// alone: tag segments MAY legitimately contain '_', so rewriting a dotted tag
+// (probably a mistyped "deploy.done" for "deploy/done") could silently match
+// an unrelated literal "deploy_done" tag. Patterns with no '/' are returned
+// unchanged for the same reason.
+func NormalizeMatchKeyOrigin(pattern string) string {
+	idx := strings.IndexByte(pattern, '/')
+	if idx < 0 {
+		return pattern
+	}
+	return enroll.SanitizeGlobDots(pattern[:idx]) + pattern[idx:]
+}
+
+// PatternTagHasDot reports whether a match-key glob contains a '.' in TAG
+// territory (after the first '/'). Such a pattern can never match a live key
+// — tags cannot contain dots (event.ValidateTag) — so it is almost certainly
+// a dotted peel id written where its '_' wire form is needed (beacon tags
+// embed peel ids: "<origin>/beacon/<peelID>/<name>") or a mistyped '/'.
+// Surfaced as a loader lint; never a load failure.
+func PatternTagHasDot(pattern string) bool {
+	idx := strings.IndexByte(pattern, '/')
+	return idx >= 0 && strings.Contains(pattern[idx+1:], ".")
+}
+
 // CompileMatchGlob compiles an fnmatch pattern (Salt semantics: '*' crosses
-// '/') into an anchored regexp, cached per pattern.
+// '/') into an anchored regexp, cached per pattern. The pattern's origin
+// segment is dot-normalized first (NormalizeMatchKeyOrigin), so rules and
+// watch filters written with the human dotted-hostname form match the wire
+// origin tokens.
 func CompileMatchGlob(pattern string) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, fmt.Errorf("reactor: empty match glob")
@@ -136,7 +173,7 @@ func CompileMatchGlob(pattern string) (*regexp.Regexp, error) {
 	if cached, ok := globCache.Load(pattern); ok {
 		return cached.(*regexp.Regexp), nil
 	}
-	re, err := regexp.Compile(translateFnmatch(pattern))
+	re, err := regexp.Compile(translateFnmatch(NormalizeMatchKeyOrigin(pattern)))
 	if err != nil {
 		return nil, fmt.Errorf("reactor: compile match glob %q: %w", pattern, err)
 	}

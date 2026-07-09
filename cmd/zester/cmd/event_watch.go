@@ -111,9 +111,11 @@ func renderEventLine(subject string, data []byte, re *regexp.Regexp, format stri
 	}
 
 	rec := eventWatchRecord{
-		TS:         ev.TS,
-		Key:        key,
-		Origin:     origin,
+		TS:  ev.TS,
+		Key: key,
+		// Origin displays in human form (interior '_' decodes to '.'); Key
+		// stays the raw wire-level match key rules are compiled against.
+		Origin:     displayPeel(origin),
 		Tag:        slashTag,
 		ID:         ev.ID,
 		Depth:      ev.Depth,

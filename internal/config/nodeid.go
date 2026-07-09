@@ -49,6 +49,13 @@ func ResolveNodeID(explicit, cacheDir string, logger *slog.Logger) (string, erro
 		logger = slog.Default()
 	}
 	if raw := strings.TrimSpace(explicit); raw != "" {
+		// '_' is reserved as the wire encoding of '.' (enroll.DisplayPeelID
+		// decodes it back for display), so a configured id must spell the dot:
+		// id "web01.pl" becomes subject token "web01_pl" and displays as
+		// typed. Allowing a raw '_' here would make the decode ambiguous.
+		if strings.Contains(raw, "_") {
+			return "", fmt.Errorf("configured node id %q contains '_', which is reserved as the wire encoding of '.': write the dotted form (e.g. %q)", raw, strings.ReplaceAll(raw, "_", "."))
+		}
 		id := enroll.SanitizePeelID(raw)
 		if id == "" {
 			return "", fmt.Errorf("configured node id %q sanitizes to nothing: set a valid 'id'", raw)
@@ -75,6 +82,31 @@ func ResolveNodeID(explicit, cacheDir string, logger *slog.Logger) (string, erro
 	}
 
 	raw := hostnameFQDN()
+	id, err := derivedNodeID(raw)
+	if err != nil {
+		return "", err
+	}
+	logger.Info("node id derived from hostname", "id", id, "hostname", raw)
+	if pinPath != "" {
+		if err := writePinnedNodeID(pinPath, id); err != nil {
+			logger.Warn("could not pin node id (identity may change if the hostname/DNS changes)", "path", pinPath, "error", err)
+		} else {
+			logger.Info("node id pinned (delete this file to re-derive from the hostname)", "path", pinPath)
+		}
+	}
+	return id, nil
+}
+
+// derivedNodeID maps a raw hostname into a node id, enforcing the same rules
+// on the derived path that the explicit path enforces: the '_' reservation
+// (a non-RFC hostname like "db_primary.example.com" is REFUSED — sanitizing
+// it would mint an id whose dotted display names a host that does not exist,
+// and which pre-collides with the genuine "db.primary.example.com"), the
+// localhost-placeholder guard, and peel-ID validity.
+func derivedNodeID(raw string) (string, error) {
+	if strings.Contains(raw, "_") {
+		return "", fmt.Errorf("hostname %q contains '_', which is reserved as the wire encoding of '.' in node ids: set an explicit 'id' in the config (or rename the host — RFC 1123 hostnames never contain '_')", raw)
+	}
 	id := enroll.SanitizePeelID(raw)
 	if id == "" {
 		return "", fmt.Errorf("cannot resolve a node id from hostname %q: set a valid 'id' in the config, or ensure the host has a usable hostname", raw)
@@ -84,14 +116,6 @@ func ResolveNodeID(explicit, cacheDir string, logger *slog.Logger) (string, erro
 	}
 	if isLocalhostID(id) {
 		return "", fmt.Errorf("hostname resolves to %q, a localhost placeholder that would collide across the fleet: set an explicit 'id' in the config or fix the hostname", id)
-	}
-	logger.Info("node id derived from hostname", "id", id, "hostname", raw)
-	if pinPath != "" {
-		if err := writePinnedNodeID(pinPath, id); err != nil {
-			logger.Warn("could not pin node id (identity may change if the hostname/DNS changes)", "path", pinPath, "error", err)
-		} else {
-			logger.Info("node id pinned (delete this file to re-derive from the hostname)", "path", pinPath)
-		}
 	}
 	return id, nil
 }
