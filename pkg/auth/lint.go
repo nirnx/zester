@@ -37,7 +37,7 @@ type LintFinding struct {
 
 // LintPermissions applies the JetStream access-pattern rules to a user's
 // allow-publish and allow-subscribe subject lists and returns the findings
-// (deterministically ordered). It is the testable core of `zester auth lint`.
+// (deterministically ordered). It is the testable core of `zester nats-auth lint`.
 func LintPermissions(allowPub, allowSub []string) []LintFinding {
 	var findings []LintFinding
 
@@ -87,13 +87,44 @@ func LintPermissions(allowPub, allowSub []string) []LintFinding {
 	return findings
 }
 
-// LintUserClaims lints a decoded user JWT's permissions.
+// DefaultMaxControlLine is NATS's default max_control_line: the maximum size of
+// a protocol control line, including the CONNECT message that carries the user
+// JWT. A JWT-authenticated identity whose CONNECT line exceeds this is rejected
+// BEFORE authentication with "maximum control line exceeded".
+const DefaultMaxControlLine = 4096
+
+// connectOverhead approximates the CONNECT control line's bytes beyond the JWT
+// itself (protocol framing, the signature, client name, lang/version). It is a
+// conservative estimate so the size lint errs toward warning early.
+const connectOverhead = 512
+
+// LintJWTSize flags a user JWT whose CONNECT control line would exceed NATS's
+// default max_control_line — the "grant weight" drift a purely pattern-based
+// lint misses. Rich least-privilege grants legitimately push the JWT past the
+// 4096 default; the fix is raising max_control_line on the server (which
+// `zester nats-auth init` now generates), not stripping grants.
+func LintJWTSize(userJWT string) []LintFinding {
+	line := len(userJWT) + connectOverhead
+	if line <= DefaultMaxControlLine {
+		return nil
+	}
+	return []LintFinding{{
+		Severity: LintWarn,
+		Rule:     "control-line-size",
+		Message: fmt.Sprintf(
+			"user JWT is %d bytes (~%d-byte CONNECT line), past NATS's default max_control_line (%d) — the NATS server MUST set `max_control_line: 16384` (as `zester nats-auth init` now generates) or this identity is rejected before auth with \"maximum control line exceeded\"",
+			len(userJWT), line, DefaultMaxControlLine),
+	}}
+}
+
+// LintUserClaims lints a decoded user JWT: its permissions grants and its size.
 func LintUserClaims(userJWT string) ([]LintFinding, error) {
 	uc, err := DecodeUserJWT(userJWT)
 	if err != nil {
 		return nil, err
 	}
-	return LintPermissions(uc.Permissions.Pub.Allow, uc.Permissions.Sub.Allow), nil
+	findings := LintPermissions(uc.Permissions.Pub.Allow, uc.Permissions.Sub.Allow)
+	return append(findings, LintJWTSize(userJWT)...), nil
 }
 
 // LintCredsFile decodes the user JWT embedded in a NATS .creds file and lints

@@ -106,6 +106,19 @@ func TestLint_MasterAndAdminGrantsAreClean(t *testing.T) {
 	}
 }
 
+func TestLintJWTSize(t *testing.T) {
+	// A small JWT is fine.
+	if fs := LintJWTSize("x"); len(fs) != 0 {
+		t.Errorf("small JWT flagged: %+v", fs)
+	}
+	// A JWT that (with overhead) crosses the default max_control_line warns.
+	big := make([]byte, DefaultMaxControlLine) // len alone already ~= limit
+	fs := LintJWTSize(string(big))
+	if !hasRule(fs, "control-line-size", LintWarn) {
+		t.Fatalf("oversized JWT not flagged: %+v", fs)
+	}
+}
+
 func TestSubjectAllows(t *testing.T) {
 	cases := []struct {
 		pattern, subject string

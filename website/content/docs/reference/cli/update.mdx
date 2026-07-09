@@ -14,6 +14,7 @@ zester update <subcommand> [flags]
 | Subcommand | Description |
 |---|---|
 | `publish <binary-path>` | Upload a binary artifact and publish its manifest |
+| `fetch` | Download a published binary from the object store (verify / pre-stage) |
 | `rollout` | Start a rollout to target nodes |
 | `status` | Show rollout progress or node update status |
 | `abort <rollout-id>` | Abort an in-progress rollout |
@@ -32,6 +33,31 @@ zester update publish <binary-path> --component <peel|master> --version <version
 | `--version` | `""` | yes | Version string (for example `v0.5.0`) |
 | `--goos` | runtime GOOS | no | Target OS |
 | `--goarch` | runtime GOARCH | no | Target architecture |
+
+## update fetch
+
+Downloads a published binary from the object store and verifies its SHA-256 — the non-mutating counterpart to a rollout's internal download. Resolve it via the manifest (`--component` + `--version`, needs manifest-bucket access), or download an object key directly (`--object-key` + `--sha256`), which is exactly the watchdog's own path — it gets the key and hash from the master's update command and never reads the manifest bucket, so the direct form works under least-privilege **peel** credentials.
+
+```bash
+# via the manifest (operator creds)
+zester update fetch --component <peel|master> --version <version> [--goos <os>] [--goarch <arch>] [--out <path>]
+
+# direct object key (works under peel creds; the watchdog's path)
+zester update fetch --object-key <key> --sha256 <hash> [--out <path>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--component` | `""` | Component type (`peel` or `master`), with `--version` — resolves the key via the manifest |
+| `--version` | `""` | Version string, with `--component` |
+| `--goos` / `--goarch` | runtime | Target platform for the manifest lookup |
+| `--object-key` | `""` | Download this object key directly, skipping the manifest (needs `--sha256`) |
+| `--sha256` | `""` | Expected SHA-256 (required with `--object-key`) |
+| `--out` | `""` | Write the binary here (default: verify only, discard) |
+
+<Callout type="info" title="Verify peel-cred downloads">
+Run it with `--creds <peel.creds>` (and `--nats-ca` / `NATS_CA_FILE` on a peel-only box) to confirm a peel's credentials can complete the flow-controlled object-store download that self-update depends on — the check for the grant class that broke self-update in 0.3.4.
+</Callout>
 
 ## update rollout
 

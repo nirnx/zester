@@ -9,7 +9,7 @@ import (
 	"github.com/nirnx/zester/pkg/auth"
 )
 
-// TestAuthInit exercises 'zester auth init': it generates the full hierarchy,
+// TestAuthInit exercises 'zester nats-auth init': it generates the full hierarchy,
 // writes a loadable nats-server.conf, produces usable creds, and refuses to
 // clobber without --force.
 func TestAuthInit(t *testing.T) {
@@ -23,7 +23,7 @@ func TestAuthInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := authInitCmd.RunE(authInitCmd, nil); err != nil {
-		t.Fatalf("auth init: %v", err)
+		t.Fatalf("nats-auth init: %v", err)
 	}
 
 	for _, f := range []string{"operator.jwt", "account.jwt", "account.seed", "master.creds", "admin.creds"} {
@@ -54,14 +54,14 @@ func TestAuthInit(t *testing.T) {
 
 	// Refuse to overwrite without --force.
 	if err := authInitCmd.RunE(authInitCmd, nil); err == nil {
-		t.Error("second auth init without --force succeeded, want refusal")
+		t.Error("second nats-auth init without --force succeeded, want refusal")
 	}
 	// --force overwrites.
 	if err := authInitCmd.Flags().Set("force", "true"); err != nil {
 		t.Fatal(err)
 	}
 	if err := authInitCmd.RunE(authInitCmd, nil); err != nil {
-		t.Errorf("auth init --force: %v", err)
+		t.Errorf("nats-auth init --force: %v", err)
 	}
 	_ = authInitCmd.Flags().Set("force", "false")
 }

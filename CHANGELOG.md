@@ -6,6 +6,49 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-07-09
+
+Fix the 0.3.4 release-blocker (peel creds too large for NATS default
+max_control_line), grant-weight linting, CLI trust-without-config, and the
+`auth` -> `nats-auth` command rename.
+
+### Fixed
+- **Peels with 0.3.4-issued creds could not connect at all (release-blocker for
+  0.3.4).** The fattened peel JWT (the new flow-control grants) serializes past
+  NATS's default `max_control_line` of 4096 bytes, so the server rejects the
+  connection **before authentication** with `maximum control line exceeded` —
+  near-silent on the client (readyz just flips to down). `zester nats-auth init`
+  now emits `max_control_line: 16384` in the generated `nats-server.conf`.
+  **If you run your own `nats-server` you MUST set `max_control_line: 16384`
+  yourself** — this is required on every NATS server the fleet connects to, or
+  re-enrolled peels brick. (The grants are correct least-privilege; the fix is a
+  bigger control line, not stripping grants.)
+- **`zester update fetch` no longer hangs for minutes under peel creds.** The
+  `--component/--version` manifest lookup opens the manifest bucket, which peel
+  creds cannot read, so it blocked until timeout; it now has a short deadline
+  and points you at the direct `--object-key <k> --sha256 <h>` path (which is
+  what the watchdog uses and works under peel creds).
+
+### Added
+- **`zester nats-auth lint` now flags oversized JWTs**, not just grant gaps: it
+  warns when a creds' CONNECT line would exceed NATS's default `max_control_line`
+  (4096) — the "grant weight" drift that bricked 0.3.4 peels — and tells you to
+  raise `max_control_line`.
+- **The operator CLI resolves NATS trust without a config file.** New global
+  `--nats-ca` flag, and `NATS_CA_FILE` is now honored; combined with `--creds`
+  and `--master`/`NATS_URL`, the CLI runs on a peel-only box with no
+  `~/.zester/config.yaml`.
+- **`zester update fetch --object-key <key> --sha256 <hash>`** downloads a
+  binary directly (skipping the manifest), mirroring the watchdog's own path so
+  it works under least-privilege peel creds.
+
+### Changed
+- **Renamed `zester auth init` → `zester nats-auth init` and `zester auth lint`
+  → `zester nats-auth lint`.** The group name now says what it manages (the
+  external NATS server's JWT auth), distinct from peel enrollment and API-token
+  auth. It stays a flat top-level group (not nested under `nats`), alongside
+  `zester ca`. Update any provisioning scripts.
+
 ## [0.3.4] - 2026-07-09
 
 Self-update permission fixes and tooling to catch the whole grant-drift class.
@@ -376,7 +419,8 @@ Initial release.
   Docker-based integration suite (82 tests).
 - Apache-2.0 license.
 
-[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/nirnx/zester/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/nirnx/zester/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/nirnx/zester/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/nirnx/zester/compare/v0.3.1...v0.3.2

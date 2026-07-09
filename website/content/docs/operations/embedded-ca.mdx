@@ -57,15 +57,28 @@ Record the printed SPKI pin — you will put it in every `peel.yaml`. The defaul
 
 ### 1b. Initialize the NATS auth hierarchy (on the master host)
 
-`zester ca` handles the TLS plane; `zester auth init` handles the NATS **auth** plane — the operator/account/user JWTs your daemons authenticate with. It is also offline (no NATS needed):
+`zester ca` handles the TLS plane; `zester nats-auth init` handles the NATS **auth** plane — the operator/account/user JWTs your daemons authenticate with. It is also offline (no NATS needed):
 
 ```bash
-zester auth init \
+zester nats-auth init \
   --dir /var/lib/zester/auth \
   --nats-conf /etc/nats/nats-server.conf
 ```
 
 This generates the operator/account/system JWTs, `account.seed` (the fleet trust root — replicate it to every master), `master.creds`, `admin.creds`, and a `nats-server.conf` (operator mode, MEMORY resolver, JetStream) whose `tls{}` block references the NATS server cert you issue next. Zester does **not** ship or run `nats-server` — install NATS yourself and start it with `-c /etc/nats/nats-server.conf`.
+
+<Callout type="error" title="Required: max_control_line ≥ 16384 on your NATS server">
+A peel's least-privilege JWT (job / facts / settings / secrets / state-files / update grants, including JetStream flow control) serializes **past NATS's 4096-byte `max_control_line` default**. A peel presenting such creds is rejected **before authentication** with `maximum control line exceeded` — the client side is nearly silent (readyz just flips to down), so it looks like a mysterious connectivity failure.
+
+The generated `nats-server.conf` above sets `max_control_line: 16384` for you. **If you write your own NATS config instead of using the generated one, you MUST add it yourself:**
+
+```
+# nats-server.conf
+max_control_line: 16384
+```
+
+This applies to every `nats-server` your fleet connects to. Verify any node's creds fit with `zester nats-auth lint <creds-file>` (it warns when a JWT exceeds the 4096 default), and confirm the running server with `nats-server --signal reload` after editing.
+</Callout>
 
 ### 2. Issue the NATS server certificate
 

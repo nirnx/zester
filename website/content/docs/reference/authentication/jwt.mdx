@@ -204,12 +204,12 @@ So the peel grants pair each consumer-create with its flow-control subject:
 | `$JS.FC.KV_basket.>` | Flow control for basket reads |
 | `$JS.FC.KV_facts.>` | Flow control for facts reads |
 
-### `zester auth lint`
+### `zester nats-auth lint`
 
-Because these grants are hand-enumerated and easy to miss, `zester auth lint` decodes a `.creds` file and flags the gaps offline:
+Because these grants are hand-enumerated and easy to miss, `zester nats-auth lint` decodes a `.creds` file and flags the gaps offline:
 
 ```bash
-$ zester auth lint /var/lib/zester/auth/web-01.creds
+$ zester nats-auth lint /var/lib/zester/auth/web-01.creds
 /var/lib/zester/auth/web-01.creds:
   OK — no JetStream grant gaps found
 ```

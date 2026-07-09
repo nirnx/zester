@@ -8,7 +8,7 @@ import (
 	"github.com/nirnx/zester/pkg/auth"
 )
 
-// `zester auth lint` decodes one or more NATS .creds files and checks their
+// `zester nats-auth lint` decodes one or more NATS .creds files and checks their
 // JetStream grants for the access-pattern gaps that cause silent runtime
 // permission denials — the class that shipped twice (the update-status key and
 // the object-store flow-control subject). Offline: pure local file I/O.
@@ -47,7 +47,7 @@ func runAuthLint(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if hadError {
-		return fmt.Errorf("auth lint: one or more creds have error-level grant gaps")
+		return fmt.Errorf("nats-auth lint: one or more creds have error-level grant gaps")
 	}
 	return nil
 }

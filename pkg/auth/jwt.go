@@ -491,7 +491,7 @@ func PeelUserJWTOptions(peelID string, accountPub string) UserJWTOptions {
 			// consumers too; the small payloads rarely trigger flow control,
 			// but without these grants a watch stalls under backpressure — the
 			// same class of latent gap as the object-store download above
-			// (flagged by `zester auth lint`).
+			// (flagged by `zester nats-auth lint`).
 			"$JS.FC.KV_settings-files.>",
 			"$JS.FC.KV_state-files.>",
 			"$JS.FC.KV_secrets.>",

@@ -230,6 +230,7 @@ subcommand.
 | `--master` | `string[]` | `$NATS_URL` or config file or `nats://localhost:4222` | NATS server URL(s) (priority: flag > `NATS_URL` env > config > default) |
 | `--timeout` | `duration` | `60s` (state.apply: `5m`, state.highstate: `10m`) | Request timeout |
 | `--creds` | `string` | `""` (from config file if set) | NATS credentials file for authentication |
+| `--nats-ca` | `string` | `""` (config, else `$NATS_CA_FILE`) | CA certificate for NATS TLS verification |
 | `--format` | `string` | `text` | Output format: `text`, `json`, or `yaml` |
 | `--no-color` | `bool` | `false` | Disable colored output (auto-disabled when piped) |
 | `--direct` | `bool` | `false` | Bypass master job system; send directly to peels via NATS request/reply |
@@ -253,8 +254,13 @@ The most commonly used are:
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--config` | `string` | *(see below)* | Path to config file |
-| `--master` | `string[]` | `nats://localhost:4222` | Master NATS URL(s), overrides config |
+| `--master` | `string[]` | `nats://localhost:4222` | Master NATS URL(s), overrides config (also `$NATS_URL`) |
 | `--creds` | `string` | *(from config)* | Path to NATS credentials file, overrides config |
+| `--nats-ca` | `string` | *(from config)* | CA certificate for NATS TLS, overrides config (also `$NATS_CA_FILE`) |
+
+<Callout type="info" title="Running without a config file">
+The CLI needs no `~/.zester/config.yaml` when the connection is supplied inline: a URL from `--master` or `$NATS_URL`, credentials from `--creds`, and trust from `--nats-ca` or `$NATS_CA_FILE`. This is handy on a peel-only box, e.g. `zester --master tls://nats:4222 --creds /var/lib/zester/auth/web-01.creds --nats-ca /var/lib/zester/auth/nats-ca.crt update fetch …`.
+</Callout>
 
 ### Config File Locations
 

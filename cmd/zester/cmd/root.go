@@ -49,6 +49,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: /etc/zester/master.yaml or ~/.zester/config.yaml)")
 	rootCmd.PersistentFlags().StringSlice("master", nil, "master NATS URL(s) (overrides config)")
 	rootCmd.PersistentFlags().String("creds", "", "path to NATS credentials file (overrides config)")
+	rootCmd.PersistentFlags().String("nats-ca", "", "CA certificate for NATS TLS verification (overrides config; also honors NATS_CA_FILE)")
 	rootCmd.PersistentFlags().Duration("timeout", 60*time.Second, "execution timeout")
 	rootCmd.PersistentFlags().String("format", "text", "output format: text, json, yaml")
 	rootCmd.PersistentFlags().Bool("no-color", false, "disable colored output")
@@ -84,9 +85,26 @@ func persistentPreRun(cmd *cobra.Command, args []string) error {
 	var err error
 	cfg, err = config.Load(cfgFile)
 	if err != nil {
+		// Config is optional when the connection can be sourced inline — a
+		// URL from --master or NATS_URL, creds from --creds, trust from
+		// --nats-ca / NATS_CA_FILE. This lets the CLI run on a peel-only box
+		// with no /etc/zester or ~/.zester config file.
+		if hasInlineConnection() {
+			cfg = nil
+			return nil
+		}
 		return fmt.Errorf("load config: %w", err)
 	}
 	return nil
+}
+
+// hasInlineConnection reports whether a NATS URL is available without a config
+// file (via --master or NATS_URL); creds and CA can then come from flags/env.
+func hasInlineConnection() bool {
+	if urls, _ := rootCmd.PersistentFlags().GetStringSlice("master"); len(urls) > 0 {
+		return true
+	}
+	return os.Getenv("NATS_URL") != ""
 }
 
 // masterURLs returns the NATS URLs to connect to.

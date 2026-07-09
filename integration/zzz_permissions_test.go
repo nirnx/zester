@@ -64,7 +64,7 @@ func TestNoPermissionsViolations(t *testing.T) {
 
 	if len(offenders) > 0 {
 		t.Fatalf("NATS permissions violations in component logs — a JWT grant gap "+
-			"(decode the affected creds with `zester auth lint <creds-file>`):\n\n%s",
+			"(decode the affected creds with `zester nats-auth lint <creds-file>`):\n\n%s",
 			strings.Join(offenders, "\n\n"))
 	}
 }

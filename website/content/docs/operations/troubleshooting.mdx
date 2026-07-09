@@ -91,6 +91,38 @@ systemctl status zester-peel
 journalctl -u zester-peel --since '5 minutes ago' --no-pager | tail -20
 ```
 
+## Peel Cannot Connect: `maximum control line exceeded`
+
+### Symptoms
+
+- A freshly-enrolled peel never connects; `readyz` flips to `down` with **no clear error** in the peel log.
+- The NATS server log shows `maximum control line exceeded` (or the connection is dropped during CONNECT).
+- Older peels keep working; only newly-issued creds fail.
+
+### Cause
+
+A peel's least-privilege JWT (job / facts / settings / secrets / state-files / update grants, including JetStream flow control) serializes past NATS's **default `max_control_line` of 4096 bytes**. The user JWT rides in the CONNECT control line, so the server rejects the connection **before authentication** — which is why the client side is nearly silent.
+
+### Fix
+
+Raise `max_control_line` on **every** `nats-server` your fleet connects to:
+
+```
+# nats-server.conf
+max_control_line: 16384
+```
+
+Then reload: `nats-server --signal reload`. `zester nats-auth init` generates this for you; if you wrote your own NATS config you must add it yourself. Check any node's creds against the default with:
+
+```bash
+zester nats-auth lint /var/lib/zester/auth/<id>.creds
+# warns: "user JWT is N bytes ... past NATS's default max_control_line (4096)"
+```
+
+<Callout type="warn" title="Do not try to shrink the JWT">
+The grants are correct least-privilege; JWT auth with a real permission set legitimately needs a larger control line. Raise `max_control_line` — don't strip grants.
+</Callout>
+
 ## Permissions Violations (a JWT grant gap)
 
 ### Symptoms
@@ -107,10 +139,10 @@ Unlike an *authorization* failure (bad/expired creds — the connection itself i
 
 ```bash
 # Decode the affected creds and check for JetStream grant gaps (offline).
-zester auth lint /var/lib/zester/auth/<id>.creds
+zester nats-auth lint /var/lib/zester/auth/<id>.creds
 ```
 
-`auth lint` reports the companion subjects a granted access pattern requires — an object-store download gap is an error, a KV-watch gap a warning. If it flags a gap, the creds were issued by a version missing that grant: **re-issue them** (revoke + re-enroll the peel, or regenerate master/admin creds) from a build that includes the fix. See [JWT flow control](/docs/reference/authentication/jwt) for the grant set.
+`nats-auth lint` reports the companion subjects a granted access pattern requires — an object-store download gap is an error, a KV-watch gap a warning. If it flags a gap, the creds were issued by a version missing that grant: **re-issue them** (revoke + re-enroll the peel, or regenerate master/admin creds) from a build that includes the fix. See [JWT flow control](/docs/reference/authentication/jwt) for the grant set.
 
 ## Authentication Failures
 

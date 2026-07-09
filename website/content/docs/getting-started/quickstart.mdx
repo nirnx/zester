@@ -208,6 +208,10 @@ nats-server -c /etc/zester/nats-server.conf
 
 The `nats-server.conf` configures the operator JWT, resolver, and JetStream storage. See [Authentication](/docs/reference/authentication) for details on generating this configuration.
 
+<Callout type="error" title="Required: max_control_line ≥ 16384">
+Peel JWTs are large enough to exceed NATS's 4096-byte `max_control_line` default, which rejects them **before authentication** (`maximum control line exceeded`). `zester nats-auth init` writes `max_control_line: 16384` into the config it generates — **if you hand-write your NATS config you must add it yourself, on every NATS server.** See [Troubleshooting](/docs/operations/troubleshooting#peel-cannot-connect-maximum-control-line-exceeded).
+</Callout>
+
 Create the master configuration:
 
 ```yaml title="/etc/zester/master.yaml"

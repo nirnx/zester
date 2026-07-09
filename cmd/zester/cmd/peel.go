@@ -158,26 +158,47 @@ func connectClient() (*bus.Client, error) {
 		Logger:        slog.New(slog.DiscardHandler),
 	}
 
-	if cfg != nil {
-		// --creds flag overrides config file.
-		if creds, _ := rootCmd.Flags().GetString("creds"); creds != "" {
-			cc.CredsFile = creds
-		} else if cfg.Master.CredsFile != "" {
-			cc.CredsFile = cfg.Master.CredsFile
-		}
+	// Credentials: --creds flag > config. Resolved even without a config file
+	// so a peel-only box needs no ~/.zester/config.yaml.
+	if creds, _ := rootCmd.Flags().GetString("creds"); creds != "" {
+		cc.CredsFile = creds
+	} else if cfg != nil && cfg.Master.CredsFile != "" {
+		cc.CredsFile = cfg.Master.CredsFile
+	}
 
+	var certFile, keyFile string
+	if cfg != nil {
 		if cfg.Master.NKeySeedFile != "" {
 			cc.NKeySeedFile = cfg.Master.NKeySeedFile
 		}
-
-		tlsCfg, err := buildTLSConfig(cfg.Master.TLSCert, cfg.Master.TLSKey, cfg.Master.TLSCA)
-		if err != nil {
-			return nil, fmt.Errorf("build TLS config: %w", err)
-		}
-		cc.TLS = tlsCfg
+		certFile, keyFile = cfg.Master.TLSCert, cfg.Master.TLSKey
 	}
 
+	tlsCfg, err := buildTLSConfig(certFile, keyFile, resolveCLICAFile())
+	if err != nil {
+		return nil, fmt.Errorf("build TLS config: %w", err)
+	}
+	cc.TLS = tlsCfg
+
 	return bus.NewClient(cc)
+}
+
+// resolveCLICAFile resolves the NATS CA certificate for the operator CLI:
+// the --nats-ca flag, then the NATS_CA_FILE environment variable, then the
+// config file's tls_ca. Flag/env work with no config file at all, so on a
+// peel-only box `zester --nats-ca <root> --creds <peel.creds> ...` connects
+// without a hand-written ~/.zester/config.yaml.
+func resolveCLICAFile() string {
+	if ca, _ := rootCmd.Flags().GetString("nats-ca"); ca != "" {
+		return ca
+	}
+	if ca := os.Getenv("NATS_CA_FILE"); ca != "" {
+		return ca
+	}
+	if cfg != nil {
+		return cfg.Master.TLSCA
+	}
+	return ""
 }
 
 func buildTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {

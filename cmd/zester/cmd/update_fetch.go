@@ -72,11 +72,18 @@ func runUpdateFetch(cmd *cobra.Command, args []string) error {
 	js := client.JetStream()
 
 	if objectKey == "" {
-		manifestKV, err := bus.GetBucket(ctx, js, bus.BucketUpdateManifests)
+		// The manifest bucket is admin/master-scoped; peel creds cannot open
+		// it and the request just hangs (no responder) until the deadline.
+		// Bound it tightly and point the operator at the direct path — which
+		// is exactly what the watchdog uses (it gets the key + SHA from the
+		// master's command and never touches the manifest bucket).
+		mctx, mcancel := context.WithTimeout(ctx, 10*time.Second)
+		defer mcancel()
+		manifestKV, err := bus.GetBucket(mctx, js, bus.BucketUpdateManifests)
 		if err != nil {
-			return fmt.Errorf("open manifest bucket: %w", err)
+			return fmt.Errorf("open manifest bucket (credentials may lack manifest access — use --object-key <key> --sha256 <hash> to download directly, as the watchdog does): %w", err)
 		}
-		manifest, err := update.NewManifestStore(manifestKV).Get(ctx, component, goos, goarch, version)
+		manifest, err := update.NewManifestStore(manifestKV).Get(mctx, component, goos, goarch, version)
 		if err != nil {
 			return fmt.Errorf("no published %s %s for %s/%s: %w", component, version, goos, goarch, err)
 		}
