@@ -132,24 +132,9 @@ func Generate(cfg Config) (*Authority, error) {
 		return nil, fmt.Errorf("ca: parse root certificate: %w", err)
 	}
 
-	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("ca: generate intermediate key: %w", err)
-	}
-	intTmpl, err := newCATemplate(pkix.Name{
-		Organization: []string{cfg.Organization},
-		CommonName:   cfg.Organization + " Signing CA",
-	}, cfg.IntermediateValidity, 0)
+	intermediate, intKey, err := newIntermediate(root, rootKey, cfg)
 	if err != nil {
 		return nil, err
-	}
-	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, root, &intKey.PublicKey, rootKey)
-	if err != nil {
-		return nil, fmt.Errorf("ca: create intermediate certificate: %w", err)
-	}
-	intermediate, err := x509.ParseCertificate(intDER)
-	if err != nil {
-		return nil, fmt.Errorf("ca: parse intermediate certificate: %w", err)
 	}
 
 	return &Authority{
@@ -158,6 +143,77 @@ func Generate(cfg Config) (*Authority, error) {
 		Intermediate:    intermediate,
 		IntermediateKey: intKey,
 	}, nil
+}
+
+// newIntermediate mints a fresh signing intermediate under the given root.
+// Shared by Generate and RotateIntermediate so the two can never drift.
+func newIntermediate(root *x509.Certificate, rootKey crypto.Signer, cfg Config) (*x509.Certificate, crypto.Signer, error) {
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ca: generate intermediate key: %w", err)
+	}
+	intTmpl, err := newCATemplate(pkix.Name{
+		Organization: []string{cfg.Organization},
+		CommonName:   cfg.Organization + " Signing CA",
+	}, cfg.IntermediateValidity, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, root, &intKey.PublicKey, rootKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ca: create intermediate certificate: %w", err)
+	}
+	intermediate, err := x509.ParseCertificate(intDER)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ca: parse intermediate certificate: %w", err)
+	}
+	return intermediate, intKey, nil
+}
+
+// RotateIntermediate returns a new Authority sharing this Authority's root
+// with a freshly minted signing intermediate — the programmatic core of the
+// "intermediate rotation (routine)" runbook step. It requires the root KEY:
+// an Authority loaded in root-offline mode cannot rotate. The rotation is
+// invisible to the fleet by construction — peels anchor the ROOT (whose SPKI
+// pin is unchanged), and leaves issued by BOTH intermediates keep verifying
+// against it. Persist the result with SaveIntermediate (Save refuses to
+// touch a dir that already holds a root key).
+func (a *Authority) RotateIntermediate(cfg Config) (*Authority, error) {
+	if a.RootKey == nil {
+		return nil, fmt.Errorf("ca: rotate intermediate: root key unavailable (root-offline mode)")
+	}
+	cfg.defaults()
+	intermediate, intKey, err := newIntermediate(a.Root, a.RootKey, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Authority{
+		Root:            a.Root,
+		RootKey:         a.RootKey,
+		Intermediate:    intermediate,
+		IntermediateKey: intKey,
+	}, nil
+}
+
+// SaveIntermediate persists ONLY the intermediate certificate and key into
+// dir, leaving the root material untouched — the on-disk half of an
+// intermediate rotation ("replace intermediate.crt/intermediate.key in
+// ca.dir"). The dir must already exist (it holds the root being kept).
+func (a *Authority) SaveIntermediate(dir string) error {
+	if err := os.WriteFile(filepath.Join(dir, IntermediateCertFile), encodePEM("CERTIFICATE", a.Intermediate.Raw), 0644); err != nil {
+		return fmt.Errorf("ca: write %s: %w", IntermediateCertFile, err)
+	}
+	if a.IntermediateKey == nil {
+		return fmt.Errorf("ca: save intermediate: key unavailable")
+	}
+	keyPEM, err := marshalKeyPEM(a.IntermediateKey)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, IntermediateKeyFile), keyPEM, 0600); err != nil {
+		return fmt.Errorf("ca: write %s: %w", IntermediateKeyFile, err)
+	}
+	return nil
 }
 
 // newCATemplate builds a CA certificate template. maxPathLen 0 sets

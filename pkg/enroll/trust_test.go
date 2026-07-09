@@ -217,3 +217,131 @@ func configTrusts(t *testing.T, cfg *tls.Config, srv *httptest.Server) bool {
 	resp.Body.Close()
 	return true
 }
+
+// TestResolveTrust_RootRolloverTwoPhaseOverlap walks the enrollment-plane
+// half of the root-rollover runbook against real TLS handshakes: an
+// already-enrolled peel (persisted anchor, never re-TOFU) crosses a root
+// rollover purely through anchor-file drops.
+//
+//	Phase 0  anchor = old root            -> old master OK, new master REFUSED
+//	Phase 1  anchor = old+new overlap     -> BOTH verify (either root's chain)
+//	Phase 2  anchor = new root only       -> new OK, old REFUSED (retired)
+//
+// It also pins the pin-ordering constraint: MatchPin checks the FIRST root
+// of the anchor bundle, so during overlap the pin set must still cover the
+// bundle's first root — retiring the old pin before the old root leaves the
+// bundle is a (loud) misconfiguration, never a silent downgrade.
+func TestResolveTrust_RootRolloverTwoPhaseOverlap(t *testing.T) {
+	oldCA, _ := ca.Generate(ca.Config{Organization: "OldRoot"})
+	newCA, _ := ca.Generate(ca.Config{Organization: "NewRoot"})
+	srvOld := caServer(t, oldCA, nil)
+	srvNew := caServer(t, newCA, nil)
+	anchor := filepath.Join(t.TempDir(), "enroll-ca.crt")
+
+	resolve := func(pins []string) (*ResolvedTrust, error) {
+		return ResolveTrust(TrustConfig{
+			AnchorFile:   anchor,
+			Pins:         pins,
+			MasterURLs:   []string{srvOld.URL},
+			FirstContact: false, // already enrolled: the anchor governs
+		})
+	}
+
+	// Phase 0 — pre-rollover baseline: the persisted anchor is the old root.
+	if err := os.WriteFile(anchor, oldCA.Bundle(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := resolve(nil)
+	if err != nil {
+		t.Fatalf("phase 0 resolve: %v", err)
+	}
+	if !configTrusts(t, rt.TLSConfig, srvOld) {
+		t.Fatal("phase 0: old-root chain must verify")
+	}
+	if configTrusts(t, rt.TLSConfig, srvNew) {
+		t.Fatal("phase 0: unknown new root must be REFUSED (never re-TOFU)")
+	}
+
+	// Phase 1 — overlap: the anchor becomes the old+new root bundle (a file
+	// drop). Chains from EITHER root verify, so masters can be moved to the
+	// new hierarchy one at a time with the fleet fully functional.
+	overlap := append(append([]byte{}, oldCA.Bundle()...), newCA.Bundle()...)
+	if err := os.WriteFile(anchor, overlap, 0600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err = resolve(nil)
+	if err != nil {
+		t.Fatalf("phase 1 resolve: %v", err)
+	}
+	if !configTrusts(t, rt.TLSConfig, srvOld) {
+		t.Error("phase 1: old-root chain must still verify during overlap")
+	}
+	if !configTrusts(t, rt.TLSConfig, srvNew) {
+		t.Error("phase 1: new-root chain must verify during overlap")
+	}
+
+	// Phase 1 with pins: the overlap pin set covers the bundle's first root.
+	if _, err := resolve([]string{oldCA.RootSPKIPin(), newCA.RootSPKIPin()}); err != nil {
+		t.Errorf("phase 1 with overlap pin set: %v", err)
+	}
+	// Pin-ordering constraint: dropping the old pin while the old root still
+	// leads the bundle is FATAL (pin-upgrade guard) — the operator must
+	// retire the old root from the bundle first (or reorder it).
+	if _, err := resolve([]string{newCA.RootSPKIPin()}); !errors.Is(err, ErrTrustPinMismatch) {
+		t.Errorf("phase 1 with premature pin retirement = %v, want ErrTrustPinMismatch", err)
+	}
+
+	// Phase 2 — retire the old root: anchor becomes the new root only.
+	if err := os.WriteFile(anchor, newCA.Bundle(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err = resolve([]string{newCA.RootSPKIPin()})
+	if err != nil {
+		t.Fatalf("phase 2 resolve: %v", err)
+	}
+	if !configTrusts(t, rt.TLSConfig, srvNew) {
+		t.Error("phase 2: new-root chain must verify")
+	}
+	if configTrusts(t, rt.TLSConfig, srvOld) {
+		t.Error("phase 2: retired old root must be refused")
+	}
+}
+
+// TestResolveTrust_IntermediateRotationNoPeelAction: the enrollment plane's
+// view of the ROUTINE rotation — the peel's persisted anchor (root only)
+// verifies the master's chain both before and after the signing intermediate
+// is rotated, with zero peel-side changes.
+func TestResolveTrust_IntermediateRotationNoPeelAction(t *testing.T) {
+	authority, _ := ca.Generate(ca.Config{})
+	anchor := filepath.Join(t.TempDir(), "enroll-ca.crt")
+	if err := os.WriteFile(anchor, authority.Bundle(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := ResolveTrust(TrustConfig{
+		AnchorFile:   anchor,
+		Pins:         []string{authority.RootSPKIPin()},
+		MasterURLs:   []string{"https://unused.example"},
+		FirstContact: false,
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	// Pre-rotation master.
+	srvBefore := caServer(t, authority, nil)
+	if !configTrusts(t, rt.TLSConfig, srvBefore) {
+		t.Fatal("pre-rotation chain must verify")
+	}
+
+	// Rotate the signing intermediate; the master now presents a chain
+	// through the NEW intermediate. Same anchor file, same pin, no re-resolve
+	// needed — the trust material is untouched.
+	rotated, err := authority.RotateIntermediate(ca.Config{})
+	if err != nil {
+		t.Fatalf("RotateIntermediate: %v", err)
+	}
+	srvAfter := caServer(t, rotated, nil)
+	if !configTrusts(t, rt.TLSConfig, srvAfter) {
+		t.Error("post-rotation chain must verify against the unchanged peel anchor")
+	}
+}

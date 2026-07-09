@@ -139,3 +139,115 @@ func TestStartCA_EmbeddedMissingMaterialIsFatal(t *testing.T) {
 func verifyLeafDNS(leaf *x509.Certificate, name string) error {
 	return leaf.VerifyHostname(name)
 }
+
+// TestStartCA_IntermediateRotationInvisibleToPeelAnchors simulates the
+// runbook's routine intermediate rotation end-to-end at the master: rotate
+// the signing intermediate on disk (SaveIntermediate file drop), restart the
+// CA manager, and require that the freshly self-issued enrollment leaf (a)
+// chains through the NEW intermediate and (b) still verifies against the
+// ORIGINAL root — the anchor every already-enrolled peel persisted and the
+// SPKI pin operators distributed. No peel-side action, no pin change.
+func TestStartCA_IntermediateRotationInvisibleToPeelAnchors(t *testing.T) {
+	dir := t.TempDir()
+	caDir := filepath.Join(dir, "ca")
+	authority, err := ca.Generate(ca.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.Save(caDir); err != nil {
+		t.Fatal(err)
+	}
+	originalRoot := authority.Root
+	originalPin := authority.RootSPKIPin()
+
+	newDaemon := func() *Daemon {
+		d := newCATestDaemon(t, config.MasterCA{
+			Mode:               "embedded",
+			Dir:                caDir,
+			EnrollCertValidity: config.Duration(90 * 24 * time.Hour),
+			EnrollSANs:         []string{"master.example"},
+		}, dir)
+		d.checker = health.New("test", time.Second)
+		return d
+	}
+	servedChain := func(d *Daemon, ctx context.Context) (leaf, intermediate *x509.Certificate) {
+		t.Helper()
+		getCert, err := d.startCA(ctx)
+		if err != nil {
+			t.Fatalf("startCA: %v", err)
+		}
+		cert, err := getCert(nil)
+		if err != nil {
+			t.Fatalf("getCertificate: %v", err)
+		}
+		if len(cert.Certificate) < 2 {
+			t.Fatalf("served chain has %d certs, want leaf + intermediate", len(cert.Certificate))
+		}
+		leaf, err = x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		intermediate, err = x509.ParseCertificate(cert.Certificate[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return leaf, intermediate
+	}
+	verifyAgainstOriginalRoot := func(leaf, intermediate *x509.Certificate) error {
+		roots := x509.NewCertPool()
+		roots.AddCert(originalRoot)
+		inters := x509.NewCertPool()
+		inters.AddCert(intermediate)
+		_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inters, DNSName: "master.example"})
+		return err
+	}
+
+	// Master #1: baseline chain through the original intermediate.
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	_, int1 := servedChain(newDaemon(), ctx1)
+	if int1.SerialNumber.Cmp(authority.Intermediate.SerialNumber) != 0 {
+		t.Fatal("baseline chain does not use the on-disk intermediate")
+	}
+	cancel1() // stop the renew loop before "restarting"
+
+	// Rotate on disk: new intermediate under the same root, file drop only.
+	rotated, err := authority.RotateIntermediate(ca.Config{})
+	if err != nil {
+		t.Fatalf("RotateIntermediate: %v", err)
+	}
+	if err := rotated.SaveIntermediate(caDir); err != nil {
+		t.Fatalf("SaveIntermediate: %v", err)
+	}
+
+	// Master #2 ("restart or reload the master"): self-issues through the
+	// NEW intermediate; the chain verifies against the ORIGINAL root anchor.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	d2 := newDaemon()
+	leaf2, int2 := servedChain(d2, ctx2)
+	if int2.SerialNumber.Cmp(int1.SerialNumber) == 0 {
+		t.Fatal("restarted master still serves the OLD intermediate")
+	}
+	if int2.SerialNumber.Cmp(rotated.Intermediate.SerialNumber) != 0 {
+		t.Fatal("restarted master does not serve the rotated intermediate")
+	}
+	if err := verifyAgainstOriginalRoot(leaf2, int2); err != nil {
+		t.Errorf("post-rotation enroll chain does not verify against the pre-rotation peel anchor: %v", err)
+	}
+
+	// Pin stability: what `zester ca fingerprint` prints (and peels pin) is
+	// untouched by the rotation.
+	reloaded, err := ca.Load(caDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RootSPKIPin() != originalPin {
+		t.Errorf("root SPKI pin changed across intermediate rotation: %s -> %s", originalPin, reloaded.RootSPKIPin())
+	}
+
+	// The 'ca' readiness check is OK on the rotated hierarchy.
+	if got := d2.caCheck(context.Background()); got.Status != health.StatusOK {
+		t.Errorf("caCheck after rotation = %v, want OK", got.Status)
+	}
+}

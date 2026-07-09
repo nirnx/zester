@@ -4,6 +4,33 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Added
+- **Embedded-CA rotation is now implemented and tested, not just documented.**
+  New `pkg/ca` API: `Authority.RotateIntermediate` mints a fresh signing
+  intermediate under the same root (refused in root-offline mode), and
+  `Authority.SaveIntermediate` is its on-disk half — `Save` deliberately
+  refuses a dir that already holds a root key, so the runbook's "replace
+  intermediate.crt/key in ca.dir" step previously had no programmatic path.
+  Test coverage now pins the properties both runbook procedures rely on:
+  intermediate rotation is fleet-invisible (old and new chains verify against
+  the original root anchor; the SPKI pin is unchanged; a restarted master
+  self-issues through the new intermediate — `pkg/ca` + `internal/masterd`),
+  and root rollover works as a two-phase overlap-bundle file drop on the
+  enrollment plane (persisted-anchor peels verify either root during overlap,
+  refuse the retired root after, and never re-TOFU — `pkg/enroll` over real
+  TLS handshakes). The tests also pinned a runbook constraint: during
+  overlap, `enroll_ca_pin` must still cover the anchor bundle's FIRST root —
+  retiring the old pin before the old root leaves the bundle fails loudly.
+- **Docs: the embedded-CA operations guide gained a Multi-Master section**
+  (CA-dir file replication like `account.seed`, root key may stay offline,
+  per-master self-issued leaves, split-brain divergence warning and its
+  fail-closed peel behavior), and the rotation runbook now spells out the
+  multi-master steps (replicate the rotated intermediate to every master;
+  roll masters one at a time — the divergence warning during a root-rollover
+  overlap window is expected and clears when the last master switches).
+
 ## [0.3.8] - 2026-07-09
 
 Human identity everywhere: the CLI displays and accepts dotted hostnames

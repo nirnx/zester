@@ -3,6 +3,7 @@ package ca
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"net"
 	"os"
@@ -176,5 +177,149 @@ func TestLoadOrGenerate(t *testing.T) {
 	}
 	if a.RootSPKIPin() != b.RootSPKIPin() {
 		t.Error("second LoadOrGenerate returned a different CA")
+	}
+}
+
+// parseChainPEM splits a served CertPEM (leaf + intermediate) into the leaf
+// and an Intermediates pool, exactly as a TLS client sees the presented chain.
+func parseChainPEM(t *testing.T, chainPEM []byte) (*x509.Certificate, *x509.CertPool) {
+	t.Helper()
+	var certs []*x509.Certificate
+	rest := chainPEM
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse chain cert: %v", err)
+		}
+		certs = append(certs, c)
+	}
+	if len(certs) < 2 {
+		t.Fatalf("served chain has %d certs, want leaf + intermediate", len(certs))
+	}
+	inters := x509.NewCertPool()
+	for _, c := range certs[1:] {
+		inters.AddCert(c)
+	}
+	return certs[0], inters
+}
+
+// verifyAgainstRoot verifies a served chain against a pool holding ONLY the
+// given root — the peel's trust anchor.
+func verifyAgainstRoot(t *testing.T, root *x509.Certificate, chainPEM []byte, dnsName string) error {
+	t.Helper()
+	leaf, inters := parseChainPEM(t, chainPEM)
+	roots := x509.NewCertPool()
+	roots.AddCert(root)
+	_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inters, DNSName: dnsName})
+	return err
+}
+
+// TestRotateIntermediate_InvisibleToRootAnchors pins the two properties that
+// make the runbook's "intermediate rotation (routine)" fleet-invisible:
+// leaves issued by BOTH the old and the new intermediate verify against the
+// ORIGINAL root (the anchor every peel persisted / pinned), and the root
+// SPKI pin is unchanged.
+func TestRotateIntermediate_InvisibleToRootAnchors(t *testing.T) {
+	a1 := testAuthority(t)
+	oldLeaf, err := a1.IssueServer("srv", []string{"srv.example"}, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("issue pre-rotation leaf: %v", err)
+	}
+
+	a2, err := a1.RotateIntermediate(Config{Organization: "TestOrg"})
+	if err != nil {
+		t.Fatalf("RotateIntermediate: %v", err)
+	}
+	if a2.Intermediate.SerialNumber.Cmp(a1.Intermediate.SerialNumber) == 0 {
+		t.Fatal("rotation did not mint a new intermediate")
+	}
+	newLeaf, err := a2.IssueServer("srv", []string{"srv.example"}, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("issue post-rotation leaf: %v", err)
+	}
+
+	// Both chains verify against the ORIGINAL root anchor — no peel-side
+	// action, and in-flight old chains stay valid during the rollover.
+	if err := verifyAgainstRoot(t, a1.Root, oldLeaf.CertPEM, "srv.example"); err != nil {
+		t.Errorf("pre-rotation chain no longer verifies: %v", err)
+	}
+	if err := verifyAgainstRoot(t, a1.Root, newLeaf.CertPEM, "srv.example"); err != nil {
+		t.Errorf("post-rotation chain does not verify against the original root: %v", err)
+	}
+
+	// The pin (and therefore every enroll_ca_pin and persisted anchor in the
+	// fleet) is untouched.
+	if a1.RootSPKIPin() != a2.RootSPKIPin() {
+		t.Errorf("root pin changed across intermediate rotation: %s -> %s", a1.RootSPKIPin(), a2.RootSPKIPin())
+	}
+	if !a2.Root.Equal(a1.Root) {
+		t.Error("rotation replaced the root certificate")
+	}
+}
+
+// TestRotateIntermediate_FileDropRoundTrip simulates the runbook's on-disk
+// procedure: SaveIntermediate over an existing ca.dir (Save refuses dirs
+// holding a root key), then a fresh Load — the reloaded master issues leaves
+// through the NEW intermediate that still verify against the original root.
+func TestRotateIntermediate_FileDropRoundTrip(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	a1 := testAuthority(t)
+	if err := a1.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	a2, err := a1.RotateIntermediate(Config{})
+	if err != nil {
+		t.Fatalf("RotateIntermediate: %v", err)
+	}
+	// Save on a dir with a root key is refused — SaveIntermediate is the
+	// rotation write path.
+	if err := a2.Save(dir); !errors.Is(err, ErrExists) {
+		t.Errorf("Save over existing root key = %v, want ErrExists", err)
+	}
+	if err := a2.SaveIntermediate(dir); err != nil {
+		t.Fatalf("SaveIntermediate: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load after rotation: %v", err)
+	}
+	if loaded.Intermediate.SerialNumber.Cmp(a2.Intermediate.SerialNumber) != 0 {
+		t.Fatal("Load did not pick up the rotated intermediate")
+	}
+	leaf, err := loaded.IssueServer("srv", []string{"srv.example"}, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("issue after reload: %v", err)
+	}
+	if err := verifyAgainstRoot(t, a1.Root, leaf.CertPEM, "srv.example"); err != nil {
+		t.Errorf("reloaded-hierarchy chain does not verify against the original root: %v", err)
+	}
+	if loaded.RootSPKIPin() != a1.RootSPKIPin() {
+		t.Error("pin changed across the on-disk rotation")
+	}
+}
+
+// TestRotateIntermediate_RootOfflineRefused: rotation needs the root key.
+func TestRotateIntermediate_RootOfflineRefused(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	a := testAuthority(t)
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, RootKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loaded.RotateIntermediate(Config{}); err == nil {
+		t.Error("RotateIntermediate without the root key must be refused")
 	}
 }
