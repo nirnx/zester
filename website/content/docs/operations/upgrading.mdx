@@ -1,0 +1,41 @@
+---
+title: "Upgrading Zester"
+description: "Two upgrade channels — the self-update plane for running binaries, packages/config through apt or the pkg module — and the rule that a node must never restart its own service from a job."
+---
+
+Zester has **two independent upgrade channels**, and keeping them straight is what makes "zester manages zester" safe.
+
+| Channel | Upgrades | How | When |
+|---|---|---|---|
+| **Self-update plane** | The **running** peel/master binary | `zester update rollout` (soak + auto-rollback), coordinated by the watchdog | The normal way to move the fleet to a new version |
+| **Packages & config** | The dpkg-recorded version, config files, on-disk `/usr/local/bin` binary | `apt` / the `.deb`, or zester's own `pkg` module (`pkg.latest`, `pkg.installed`) | Aligning package metadata and config; provisioning |
+
+## The doctrine
+
+**1. Upgrade the running binary on the self-update plane — not with apt.** A [rollout](/docs/operations/update) stages the binary, soaks it against readiness, and auto-rolls-back on failure. The watchdog owns the running binary via its slot manager; that is the supported path to change what's actually executing.
+
+**2. Align packages and config through the pkg module (or apt) — a package upgrade must never restart the service.** The `.deb` `prerm` only stops/disables the unit on a **real removal** (`prerm remove`), never on an upgrade (`prerm upgrade`); `postinst` only ever *starts* (a no-op if already running), never *restarts*. So `apt upgrade zester-peel` — or `pkg.latest zester-peel` run through zester — updates the dpkg record and drops the new on-disk binary **without touching the running process**.
+
+**3. A node must never synchronously restart its own service from inside a job.** If a job stops or restarts the very service the node runs under, it kills its own cgroup mid-job: the watchdog, the agent, and the `apt`/`dpkg` it spawned all die together, the job return is lost, and dpkg is left half-configured. If you must restart a node's own service, do it **detached** (e.g. `systemd-run --on-active=2s systemctl restart zester-peel`) or let the **self-update plane** perform the swap-and-restart for you.
+
+<Callout type="warn" title="Learned the hard way">
+Running `pkg.latest zester-peel` through zester used to make the peel kill itself: the old package's `prerm` stopped the service unconditionally, and because `apt` was a child of the peel's own cgroup, stopping the unit took down watchdog + peel + apt + dpkg mid-unpack. Fixed by gating `prerm` on `remove` — but the rule stands: don't synchronously restart your own service from a job.
+</Callout>
+
+## Managing zester with the pkg module
+
+Once the `prerm` fix is in place, aligning packages fleet-wide is safe from the master:
+
+```bash
+# Refresh indexes, then bring packages to the latest published version.
+zester '*' cmd.run 'apt-get update'
+zester 'role:peel' pkg.latest zester-watchdog
+zester 'role:peel' pkg.latest zester-peel      # does NOT restart the running peel
+zester '*' cmd.run 'dpkg -l zester-peel zester-watchdog zester | grep ^ii'
+```
+
+The `apt` provider runs fully non-interactively — `DEBIAN_FRONTEND=noninteractive` plus `--force-confdef --force-confold` — so a modified conffile (an operator-edited `/etc/zester/peel.yaml`, say) resolves to your edited version without prompting. Without this, a conffile prompt would hang the peel's serialized exec worker and block every mutating job behind it.
+
+<Callout type="info" title="Channel mixing: keep versions aligned">
+The **running** binary (managed by the self-update slots) and the **dpkg-recorded** version are independent. After a rollout, the running binary can be newer than what dpkg records; a later `apt upgrade zester-peel` then overwrites the slot-managed on-disk binary with the package's. This is fine as long as you know it — prefer one channel per concern: rollouts to change what runs, packages to align metadata/config, and keep them at the same version so a package upgrade is a no-op for the running process.
+</Callout>

@@ -68,15 +68,34 @@ func TestAptProviderInstall(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(calls))
 	}
-	if calls[0].Command != "apt-get" {
-		t.Errorf("command: got %q, want %q", calls[0].Command, "apt-get")
+	c := calls[0]
+	if c.Command != "apt-get" {
+		t.Errorf("command: got %q, want %q", c.Command, "apt-get")
 	}
-	expected := []string{"install", "-y", "nginx"}
-	for i, a := range expected {
-		if calls[0].Args[i] != a {
-			t.Errorf("args[%d]: got %q, want %q", i, calls[0].Args[i], a)
+	if c.Args[0] != "install" || c.Args[1] != "-y" {
+		t.Errorf("args prefix: got %v, want [install -y ...]", c.Args)
+	}
+	if last := c.Args[len(c.Args)-1]; last != "nginx" {
+		t.Errorf("package arg: got %q, want %q", last, "nginx")
+	}
+	// Fully non-interactive: no debconf prompts (no TTY on the exec worker),
+	// and modified conffiles resolve without prompting.
+	if c.Env["DEBIAN_FRONTEND"] != "noninteractive" {
+		t.Errorf("DEBIAN_FRONTEND: got %q, want noninteractive", c.Env["DEBIAN_FRONTEND"])
+	}
+	if !argsContain(c.Args, "Dpkg::Options::=--force-confold") ||
+		!argsContain(c.Args, "Dpkg::Options::=--force-confdef") {
+		t.Errorf("missing dpkg conf-force options: %v", c.Args)
+	}
+}
+
+func argsContain(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
 		}
 	}
+	return false
 }
 
 func TestAptProviderInstallWithVersion(t *testing.T) {
@@ -108,6 +127,9 @@ func TestAptProviderRemove(t *testing.T) {
 	}
 	if calls[0].Args[0] != "remove" {
 		t.Errorf("args[0]: got %q, want %q", calls[0].Args[0], "remove")
+	}
+	if calls[0].Env["DEBIAN_FRONTEND"] != "noninteractive" {
+		t.Errorf("DEBIAN_FRONTEND: got %q, want noninteractive", calls[0].Env["DEBIAN_FRONTEND"])
 	}
 }
 

@@ -6,6 +6,33 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-07-09
+
+Make "zester manages zester" via the pkg module safe: package upgrades no
+longer stop the running service, and apt runs non-interactively.
+
+### Fixed
+- **A `zester-peel`/`zester-master` package upgrade no longer stops the running
+  service** (which made managing zester with zester's own `pkg` module fatal).
+  The `.deb` `prerm` stopped and disabled the unit unconditionally, but dpkg
+  runs `prerm` on **upgrades** too (`prerm upgrade`), so upgrading the peel from
+  inside its own cgroup (e.g. `pkg.latest zester-peel`) killed watchdog + peel +
+  apt + dpkg mid-unpack, leaving dpkg half-configured and the service
+  down+disabled. `prerm` now acts only on a real removal (`prerm remove`); an
+  upgrade leaves the running service untouched (postinst only no-op *starts*).
+- **The apt package provider now runs fully non-interactively.** `apt-get
+  install/remove` set `DEBIAN_FRONTEND=noninteractive` and
+  `--force-confdef --force-confold`, so a modified conffile (e.g. an
+  operator-edited `/etc/zester/peel.yaml`) can no longer trigger a prompt that
+  hangs the peel's serialized exec worker and blocks every mutating job behind
+  it.
+
+### Added
+- **Docs: [Upgrading Zester](operations/upgrading)** — the two upgrade channels
+  (self-update plane for the running binary; apt / the `pkg` module for
+  package + config alignment) and the rule that a node must never synchronously
+  restart its own service from a job.
+
 ## [0.3.5] - 2026-07-09
 
 Fix the 0.3.4 release-blocker (peel creds too large for NATS default
@@ -419,7 +446,8 @@ Initial release.
   Docker-based integration suite (82 tests).
 - Apache-2.0 license.
 
-[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/nirnx/zester/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/nirnx/zester/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/nirnx/zester/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/nirnx/zester/compare/v0.3.2...v0.3.3
