@@ -70,6 +70,10 @@ func TestFileserverService_LeaderRepliesStandbySilent(t *testing.T) {
 	runCtx, cancelRun := context.WithCancel(ctx)
 	for _, d := range []*Daemon{d1, d2} {
 		d.cfg.FilesRepublishInterval = 0
+		// This test exercises the fileserver service, not mirroring; disable
+		// the mirror so the teardown lease-loss (OnLost) never spins up a
+		// mirror that could write into a tempdir mid-cleanup.
+		d.cfg.FilesMirror = false
 		d.runCtx = runCtx
 	}
 	t.Cleanup(func() {
@@ -147,13 +151,37 @@ func TestFileserverStatusService(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := newLeaseTestDaemon(t, js, "master-1", t.TempDir(), "m1.zy", nil)
+	d.cfg.FilesMirror = false // status service test; no mirroring needed
 	runCtx, cancelRun := context.WithCancel(ctx)
 	d.runCtx = runCtx
-	statusFile := filepath.Join(t.TempDir(), "publisher-status")
+	// The status FILE is asserted below, so it needs a real path — but NOT a
+	// t.TempDir(): the teardown lease-ctx cancel fires OnLost asynchronously
+	// and its status-file write would race the framework's RemoveAll. Use a
+	// manually managed dir, drain the final OnLost write (role=standby is the
+	// last write — the lease goroutine exits after it), then remove
+	// best-effort.
+	statusDir, err := os.MkdirTemp("", "zester-pubstatus-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusFile := filepath.Join(statusDir, "publisher-status")
 	d.cfg.PublisherStatusFile = statusFile
 	t.Cleanup(func() {
 		cancelRun()
 		d.stopFilesMirrors()
+		// Drain the final OnLost write: the deferred cancelLease (which runs
+		// BEFORE this cleanup) makes the lease goroutine write role=standby
+		// as its last act before exiting; wait for it so RemoveAll cannot
+		// race a re-creating MkdirAll+write. Bounded: on timeout just remove
+		// best-effort (worst case a stray temp dir, never a test failure).
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if data, err := os.ReadFile(statusFile); err == nil && strings.Contains(string(data), "role=standby") {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		os.RemoveAll(statusDir) //nolint:errcheck // best-effort
 	})
 
 	ps := bustest.NewFakePubSub()
@@ -203,14 +231,14 @@ func TestFileserverStatusService(t *testing.T) {
 		t.Error("status missing the acquisition time")
 	}
 
-	// The status FILE reflects the transition too (the MOTD source).
-	data, err := os.ReadFile(statusFile)
-	if err != nil {
-		t.Fatalf("publisher status file: %v", err)
-	}
-	if !strings.Contains(string(data), "role=leader") {
-		t.Errorf("status file = %q, want role=leader", data)
-	}
+	// The status FILE reflects the transition too (the MOTD source). It is
+	// written by the OnAcquired callback on the lease goroutine, which runs
+	// AFTER the IsLeader flag flips (what waitFor gated on above) — so poll,
+	// never one-shot read.
+	waitFor(t, 2*time.Second, "status file role=leader", func() bool {
+		data, err := os.ReadFile(statusFile)
+		return err == nil && strings.Contains(string(data), "role=leader")
+	})
 }
 
 // TestFilesRepublishTickerPublishesEdits: the interval loop picks up on-disk

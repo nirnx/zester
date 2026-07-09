@@ -252,6 +252,16 @@ func (c *Cache) Sync(ctx context.Context) (int, error) {
 	c.syncMu.Lock()
 	defer c.syncMu.Unlock()
 
+	// Re-check ctx UNDER the sync lock: Quiesce (cancel-then-wait teardown)
+	// must guarantee no disk write starts after it returns. A sync goroutine
+	// preempted between its loop-top ctx check and this lock would otherwise
+	// run a full staging+swap with a cancelled ctx — real NATS would fail the
+	// KV reads, but ctx-ignoring test fakes (and any future KV impl) would
+	// not, and the write would race a directory teardown.
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
 	kv, err := bus.GetBucket(ctx, c.js, c.bucket)
 	if err != nil {
 		return 0, fmt.Errorf("statefiles: get bucket: %w", err)

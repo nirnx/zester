@@ -96,6 +96,11 @@ func (d *Daemon) buildFilesMirrors() []*filesMirror {
 func (d *Daemon) startFilesMirrors(ctx context.Context) {
 	d.mirrorMu.Lock()
 	defer d.mirrorMu.Unlock()
+	// A cancelled ctx (shutdown / lease-context teardown) must never spin up
+	// mirrors that then write to dirs being removed.
+	if ctx.Err() != nil {
+		return
+	}
 	// Re-check leadership UNDER the mirror lock: the standby timer's
 	// leadership check races a concurrent acquisition, and a mirror must
 	// never start on the leader (runLeaderPublish's stopFilesMirrors
@@ -224,6 +229,13 @@ func (d *Daemon) startMirrorsWhenStandby(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(2 * ttl):
+		}
+		// Re-check ctx: if it was cancelled DURING the wait, both select
+		// cases are ready and the runtime may have picked the timer — a
+		// cancelled daemon/shutdown must not start a mirror that then writes
+		// as everything tears down.
+		if ctx.Err() != nil {
+			return
 		}
 		if d.publisherLeader() {
 			return

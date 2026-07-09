@@ -98,9 +98,14 @@ func newLeaseTestDaemon(t *testing.T, js bus.JetStreamAPI, id, statesDir, settin
 	cfg.Reactor.Dir = ""
 	cfg.FilesWatch = false
 	cfg.FilesRepublishInterval = config.Duration(50 * time.Millisecond)
-	// Never write the real /run/zester/publisher-status from a unit test;
-	// each daemon gets its own tempdir path.
-	cfg.PublisherStatusFile = filepath.Join(t.TempDir(), "publisher-status")
+	// DISABLED (empty = no writes): the default /run/zester path must never
+	// be touched from a unit test, and a t.TempDir() path races teardown —
+	// the deferred lease-ctx cancel fires OnLost on the lease goroutine,
+	// whose setPublisherRole → writePublisherStatusFile MkdirAll+write
+	// re-creates the dir mid-RemoveAll ("directory not empty" flake).
+	// TestFileserverStatusService, which asserts the file, manages its own
+	// non-auto-removed dir.
+	cfg.PublisherStatusFile = ""
 
 	d := &Daemon{
 		cfg:      &cfg,
@@ -195,6 +200,17 @@ func TestPublisherLeaseGatesPublishes(t *testing.T) {
 	defer cancel1()
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
+	// Deterministic teardown for EVERY exit path (including a mid-test
+	// t.Fatal while a standby mirror is mid-sync): cancel the lease contexts
+	// and stop the mirrors — stopFilesMirrors Quiesces in-flight syncs — so
+	// TempDir cleanup never races a directory swap. (This runs before the
+	// TempDir RemoveAll cleanups: LIFO, registered after them.)
+	t.Cleanup(func() {
+		cancel1()
+		cancel2()
+		d1.stopFilesMirrors()
+		d2.stopFilesMirrors()
+	})
 
 	if err := d1.startPublisherLease(ctx1); err != nil {
 		t.Fatalf("start publisher lease d1: %v", err)

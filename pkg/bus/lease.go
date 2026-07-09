@@ -115,6 +115,15 @@ func (l *LeaderLease) Run(ctx context.Context) error {
 
 	for {
 		if rev, err := kv.Create(ctx, l.cfg.Key, []byte(l.cfg.HolderID)); err == nil {
+			// Never fire OnAcquired during shutdown: a Create that raced ctx
+			// cancellation (ctx-ignoring KV impls, or cancellation landing
+			// just after the write) must not start leader work that would run
+			// under an already-cancelled context. Release the key we just
+			// claimed so another candidate takes it immediately.
+			if ctx.Err() != nil {
+				l.release(kv, rev)
+				return ctx.Err()
+			}
 			l.cfg.Logger.Info("leader lease acquired",
 				"key", l.cfg.Key, "holder", l.cfg.HolderID)
 			l.setLeader(true)
