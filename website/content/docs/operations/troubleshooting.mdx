@@ -91,6 +91,27 @@ systemctl status zester-peel
 journalctl -u zester-peel --since '5 minutes ago' --no-pager | tail -20
 ```
 
+## Permissions Violations (a JWT grant gap)
+
+### Symptoms
+
+- A component connects and runs fine, but **one specific operation** fails, logged as a NATS async error:
+  ```
+  nats: permissions violation: Permissions Violation for Publish to "$JS.FC.OBJ_update-binaries.…"
+  ```
+- Self-updates never complete (the watchdog can't download the binary); a settings/state watch stalls under load; a status heartbeat never appears.
+
+Unlike an *authorization* failure (bad/expired creds — the connection itself is refused), a *permissions* violation means the connection is fine but the creds lack a grant for a subject an operation needs — often a JetStream subject the client library mints at runtime (flow control `$JS.FC.<stream>.>`, acks, deliver inboxes).
+
+### Debugging Steps
+
+```bash
+# Decode the affected creds and check for JetStream grant gaps (offline).
+zester auth lint /var/lib/zester/auth/<id>.creds
+```
+
+`auth lint` reports the companion subjects a granted access pattern requires — an object-store download gap is an error, a KV-watch gap a warning. If it flags a gap, the creds were issued by a version missing that grant: **re-issue them** (revoke + re-enroll the peel, or regenerate master/admin creds) from a build that includes the fix. See [JWT flow control](/docs/reference/authentication/jwt) for the grant set.
+
 ## Authentication Failures
 
 ### Symptoms

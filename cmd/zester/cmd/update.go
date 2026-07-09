@@ -12,6 +12,7 @@ Publish binaries, start rollouts, monitor progress, and manage versions.`,
 
 func init() {
 	updateCmd.AddCommand(updatePublishCmd)
+	updateCmd.AddCommand(updateFetchCmd)
 	updateCmd.AddCommand(updateRolloutCmd)
 	updateCmd.AddCommand(updateStatusCmd)
 	updateCmd.AddCommand(updateAbortCmd)

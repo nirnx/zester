@@ -15,9 +15,16 @@ import (
 // self-update system. They use the admin container (which has NATS creds) to
 // run `zester update` subcommands.
 //
-// Note: The Docker Compose stack does not include watchdog processes, so
-// rollout, soak, and rollback end-to-end tests are not included here.
-// Those paths are covered by unit tests in pkg/update/.
+// The stack DOES include a watchdog-supervised peel (wd-01), so the
+// peel-creds paths of the update plane are exercised here:
+// TestUpdateStatus_WatchdogReports covers status heartbeats, and
+// TestUpdateFetch_PeelCredsDownload downloads a real binary from the object
+// store under peel credentials — the flow-controlled path whose missing grant
+// ($JS.FC.OBJ_update-binaries.>) silently broke every field self-update. Those
+// grants are hand-enumerated (two gaps have shipped: $KV.update-status.peel.<id>
+// and the flow-control subject), so the zzz_ permissions sentinel also fails
+// the suite on ANY permissions violation across component logs. Full
+// rollback/soak sequencing remains in pkg/update unit tests with fakes.
 // ---------------------------------------------------------------------------
 
 // TestUpdateVersions_EmptyBefore verifies that before publishing any binary,
@@ -229,6 +236,50 @@ func TestUpdateStatus_WatchdogReports(t *testing.T) {
 		time.Sleep(5 * time.Second)
 	}
 	t.Fatalf("wd-01 never appeared in update status (watchdog status heartbeat with peel creds); last output: %s", output)
+}
+
+// TestUpdateFetch_PeelCredsDownload drives the self-update DOWNLOAD path with
+// PEEL credentials — the exact operation that silently stalled in the field
+// because the peel JWT lacked the object-store flow-control publish grant
+// ($JS.FC.OBJ_update-binaries.>). It publishes the REAL (multi-MB) peel binary
+// so the chunked object-store transfer actually engages JetStream flow control,
+// then downloads it via `zester --creds <peel.creds> update fetch`. This is
+// non-mutating — it touches no peel process — so it needs no special ordering
+// and cannot destabilize the fleet; execInContainer fails the test if the CLI
+// exits non-zero (a denied flow-control publish stalls the download to error).
+func TestUpdateFetch_PeelCredsDownload(t *testing.T) {
+	execInContainer(t, "admin", []string{"cp", "/usr/local/bin/zester-peel", "/tmp/fetch-peel"})
+	t.Cleanup(func() {
+		execInContainer(t, "admin", []string{"rm", "-f", "/tmp/fetch-peel", "/tmp/fetch-out"})
+	})
+
+	const ver = "v9.9.9-fctest"
+	const objKey = "peel/linux/amd64/" + ver
+	pub := execInContainer(t, "admin", []string{
+		"zester", "update", "publish", "/tmp/fetch-peel",
+		"--component", "peel", "--version", ver, "--goos", "linux", "--goarch", "amd64",
+	})
+	if !strings.Contains(pub, "Published peel") {
+		t.Fatalf("publish failed: %s", pub)
+	}
+	sha := extractSHA256(pub)
+	if sha == "" {
+		t.Fatalf("could not extract SHA-256 from publish output: %s", pub)
+	}
+
+	// Download AS THE PEEL via the object-key path — exactly what the watchdog
+	// does (it gets the key + SHA from the master's update command and never
+	// touches the manifest bucket, which peel creds cannot open). --creds
+	// points at wd-01's peel credentials (the admin container mounts the auth
+	// volume read-only), so the flow-controlled ordered-consumer Get runs under
+	// the peel's least-privilege grants.
+	out := execInContainer(t, "admin", []string{
+		"zester", "--creds", "/data/auth/wd-01.creds",
+		"update", "fetch", "--object-key", objKey, "--sha256", sha, "--out", "/tmp/fetch-out",
+	})
+	if !strings.Contains(out, "verified") {
+		t.Fatalf("peel-creds object-store download did not verify:\n%s", out)
+	}
 }
 
 // extractSHA256 extracts the SHA-256 hex digest from CLI publish output.

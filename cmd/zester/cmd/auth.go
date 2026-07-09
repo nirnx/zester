@@ -172,5 +172,6 @@ func init() {
 	authInitCmd.Flags().Bool("force", false, "regenerate even if auth material exists (invalidates all issued credentials)")
 
 	authCmd.AddCommand(authInitCmd)
+	authCmd.AddCommand(authLintCmd)
 	rootCmd.AddCommand(authCmd)
 }

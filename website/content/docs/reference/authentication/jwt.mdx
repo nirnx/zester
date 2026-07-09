@@ -183,6 +183,41 @@ This sets the following permissions:
 Each peel can only publish to its own subjects and subscribe to commands targeted at it. A compromised peel cannot impersonate other peels or intercept their traffic.
 </Callout>
 
+## JetStream Flow Control (and why grants drift)
+
+JetStream operations need companion subjects that the **client library mints at runtime** — they appear nowhere in Zester's source, so a static scan of our code can never discover them. The important one is **flow control**: any *ordered/push consumer* — an object-store download or a KV watch — must be able to **publish** flow-control acks to `$JS.FC.<stream>.>`, or the server stalls the delivery and the client logs a permissions violation.
+
+This bit us in the field: the peel could open the `update-binaries` object store but not publish to `$JS.FC.OBJ_update-binaries.>`, so **every self-update download stalled** with:
+
+```
+nats: permissions violation: Permissions Violation for Publish to "$JS.FC.OBJ_update-binaries.…"
+```
+
+So the peel grants pair each consumer-create with its flow-control subject:
+
+| Subject Pattern | Purpose |
+|-|-|
+| `$JS.FC.OBJ_update-binaries.>` | Flow control for the self-update binary download (ordered consumer) |
+| `$JS.FC.KV_settings-files.>` | Flow control for the settings-files watch |
+| `$JS.FC.KV_state-files.>` | Flow control for the state-files watch |
+| `$JS.FC.KV_secrets.>` | Flow control for the secrets / cluster-info watch |
+| `$JS.FC.KV_basket.>` | Flow control for basket reads |
+| `$JS.FC.KV_facts.>` | Flow control for facts reads |
+
+### `zester auth lint`
+
+Because these grants are hand-enumerated and easy to miss, `zester auth lint` decodes a `.creds` file and flags the gaps offline:
+
+```bash
+$ zester auth lint /var/lib/zester/auth/web-01.creds
+/var/lib/zester/auth/web-01.creds:
+  OK — no JetStream grant gaps found
+```
+
+It keys off the grants the creds **do** carry (a consumer-create on a stream) and reports the companion flow-control (and inbox) subjects that access pattern requires — an object-store gap is an **error**, a KV-watch gap a **warning** (works until backpressure). Two runtime nets back it up: a permissions **sentinel** fails the integration suite on any `permissions violation` across component logs, and a test downloads a real binary from the object store under peel credentials (`zester update fetch --creds <peel.creds>`) so that flow-controlled path is actually exercised.
+
+The master and admin creds are trusted control-plane identities and carry broad JetStream access (`$JS.>`, not `$JS.API.>`) precisely so their durable consumers can publish acks (`$JS.ACK.<stream>.>`) and flow control (`$JS.FC.<stream>.>`) — scoping them to `$JS.API.>` silently stalled reactor event acks.
+
 ## Full Hierarchy Generation
 
 For bootstrapping or testing, generate a complete operator-account-user chain in one call:

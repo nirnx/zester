@@ -324,21 +324,26 @@ func GenerateFullHierarchy(operatorName, accountName, userName string) (
 }
 
 // MasterUserJWTOptions provides defaults suitable for the master service.
-// The master needs broad access to manage all zester subjects and JetStream.
+// The master is a trusted control-plane component: it manages streams,
+// buckets, and durable consumers, so it gets broad JetStream access. This is
+// `$JS.>` (not `$JS.API.>`) on purpose — the durable reactor/schedule
+// consumers use explicit acks ($JS.ACK.<stream>.>) and ordered/watch consumers
+// use flow control ($JS.FC.<stream>.>), neither of which lives under
+// $JS.API.>; scoping to $JS.API.> silently stalled reactor event acks.
 func MasterUserJWTOptions(accountPub string) UserJWTOptions {
 	return UserJWTOptions{
 		Name:          "zester-master",
 		IssuerAccount: accountPub,
 		AllowPub: []string{
 			"zester.>",
-			"$JS.API.>",
+			"$JS.>",
 			"$KV.>",
 			"$O.>",
 			"_INBOX.>",
 		},
 		AllowSub: []string{
 			"zester.>",
-			"$JS.API.>",
+			"$JS.>",
 			"$KV.>",
 			"$O.>",
 			"_INBOX.>",
@@ -374,7 +379,7 @@ func AdminUserJWTOptions(accountPub string) UserJWTOptions {
 			// Target-resolution service (request/reply against the masters'
 			// in-memory facts index); falls back to KV scans without it.
 			"zester.target.resolve",
-			"$JS.API.>",
+			"$JS.>",
 			"$KV.>",
 			"$O.>",
 			"_INBOX.>",
@@ -384,7 +389,7 @@ func AdminUserJWTOptions(accountPub string) UserJWTOptions {
 			"zester.update.>",
 			// Event stream watching (`zester event watch`).
 			"zester.event.>",
-			"$JS.API.>",
+			"$JS.>",
 			"$KV.>",
 			"$O.>",
 			"_INBOX.>",
@@ -467,7 +472,12 @@ func PeelUserJWTOptions(peelID string, accountPub string) UserJWTOptions {
 			// zester-watchdog, which connects with the peel's creds):
 			// update-status bucket handle + own-key status Put ($KV grant
 			// below), and read-only download access to the update-binaries
-			// object store (ordered consumers deliver chunks to _INBOX.>).
+			// object store. The object-store Get uses an ORDERED push consumer
+			// that delivers chunks to _INBOX.> with flow control enabled, so
+			// the client must also PUBLISH flow-control acks to
+			// $JS.FC.OBJ_update-binaries.> — without it the binary download
+			// stalls with a permissions violation and self-update never
+			// completes.
 			"$JS.API.STREAM.INFO.KV_update-status",
 			"$JS.API.STREAM.INFO.OBJ_update-binaries",
 			"$JS.API.DIRECT.GET.OBJ_update-binaries.>",
@@ -475,6 +485,18 @@ func PeelUserJWTOptions(peelID string, accountPub string) UserJWTOptions {
 			"$JS.API.CONSUMER.CREATE.OBJ_update-binaries",
 			"$JS.API.CONSUMER.CREATE.OBJ_update-binaries.>",
 			"$JS.API.CONSUMER.DELETE.OBJ_update-binaries.>",
+			"$JS.FC.OBJ_update-binaries.>",
+			// Flow control for the KV WATCHES the peel runs (settings-files,
+			// state-files, secrets, basket, facts). KV watches are ordered
+			// consumers too; the small payloads rarely trigger flow control,
+			// but without these grants a watch stalls under backpressure — the
+			// same class of latent gap as the object-store download above
+			// (flagged by `zester auth lint`).
+			"$JS.FC.KV_settings-files.>",
+			"$JS.FC.KV_state-files.>",
+			"$JS.FC.KV_secrets.>",
+			"$JS.FC.KV_basket.>",
+			"$JS.FC.KV_facts.>",
 			fmt.Sprintf("$KV.basket.%s.>", peelID),
 			fmt.Sprintf("$KV.facts.%s", peelID),
 			fmt.Sprintf("$KV.peel-heartbeat.%s", peelID),

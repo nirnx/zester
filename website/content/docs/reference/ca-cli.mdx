@@ -128,8 +128,10 @@ zester ca issue <nats-server|enroll> [--dns a,b] [--ip 1.2.3.4] [--out <dir>] [-
 
 | Profile | Output files | CN | SAN requirements |
 |---------|-------------|----|------------------|
-| `nats-server` | `nats-server.crt`, `nats-server.key` | `nats` | At least one `--dns` or `--ip` **required** — SANs must cover **every** name or IP peels dial (`nats_url` / `nats_advertise_urls`, plus `localhost` for a colocated watchdog) |
+| `nats-server` | `nats-server.crt`, `nats-server.key`, **`nats-ca.crt`** | `nats` | At least one `--dns` or `--ip` **required** — SANs must cover **every** name or IP peels dial (`nats_url` / `nats_advertise_urls`, plus `localhost` for a colocated watchdog) |
 | `enroll` | `enroll.crt`, `enroll.key` | `zester-master` | Defaults to the machine hostname + `localhost` when no SANs are given |
+
+The `nats-server` profile also drops **`nats-ca.crt`** — the CA **root** — next to the cert. That is the trust anchor peels verify the NATS TLS chain against (servers present leaf+intermediate; clients anchor on the root), and it is the path the packaged peel config expects. Distribute it to peels as their `nats_ca`; no separate "export the root" step is needed.
 
 **Example — NATS server certificate:**
 
@@ -138,9 +140,10 @@ $ zester ca issue nats-server --dns nats.example.com,nats --ip 10.0.0.5 --out /e
 Issued nats-server certificate (valid until 2027-07-08T10:00:00Z)
   Certificate: /etc/nats/tls/nats-server.crt (leaf + intermediate chain)
   Private key: /etc/nats/tls/nats-server.key
+  NATS CA:     /etc/nats/tls/nats-ca.crt (root — distribute to peels as nats-ca.crt)
   SANs:        dns=[nats.example.com nats] ip=[10.0.0.5]
 
-Install on the NATS host, point the tls{} block at the files, then:
+Install on the NATS host, point the tls{} block at the cert + key, then:
   nats-server --signal reload   # hitless for live connections
 ```
 

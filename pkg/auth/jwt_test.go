@@ -393,7 +393,7 @@ func TestAdminUserJWTOptions(t *testing.T) {
 		"zester.job.>",
 		"zester.event._admin.>",
 		"zester.reactor.>",
-		"$JS.API.>",
+		"$JS.>",
 		"_INBOX.>",
 	}
 	for _, subj := range wantPub {
@@ -407,7 +407,7 @@ func TestAdminUserJWTOptions(t *testing.T) {
 	wantSub := []string{
 		"zester.job.>",
 		"zester.event.>",
-		"$JS.API.>",
+		"$JS.>",
 		"$KV.>",
 		"_INBOX.>",
 	}
@@ -479,14 +479,14 @@ func TestMasterUserJWTOptions(t *testing.T) {
 	}
 
 	// Master needs broad zester.> access for all operations.
-	wantPub := []string{"zester.>", "$JS.API.>", "$KV.>", "_INBOX.>"}
+	wantPub := []string{"zester.>", "$JS.>", "$KV.>", "_INBOX.>"}
 	for _, subj := range wantPub {
 		if !containsStr(opts.AllowPub, subj) {
 			t.Errorf("AllowPub missing %q", subj)
 		}
 	}
 
-	wantSub := []string{"zester.>", "$JS.API.>", "$KV.>", "_INBOX.>"}
+	wantSub := []string{"zester.>", "$JS.>", "$KV.>", "_INBOX.>"}
 	for _, subj := range wantSub {
 		if !containsStr(opts.AllowSub, subj) {
 			t.Errorf("AllowSub missing %q", subj)
@@ -660,6 +660,9 @@ func TestPeelUserJWTOptions_UpdatePlaneGrants(t *testing.T) {
 		"$JS.API.CONSUMER.CREATE.OBJ_update-binaries",
 		"$JS.API.CONSUMER.CREATE.OBJ_update-binaries.>",
 		"$JS.API.CONSUMER.DELETE.OBJ_update-binaries.>",
+		// Flow-control publish for the ordered download consumer — without it
+		// the binary download stalls with a permissions violation.
+		"$JS.FC.OBJ_update-binaries.>",
 	}
 	for _, w := range wantPub {
 		if !contains(opts.AllowPub, w) {

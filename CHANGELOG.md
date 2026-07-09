@@ -6,6 +6,45 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-09
+
+Self-update permission fixes and tooling to catch the whole grant-drift class.
+
+### Security / Fixed
+- **Self-update binary downloads no longer stall with a permissions violation.**
+  The peel JWT granted the object-store read APIs but not the JetStream
+  flow-control publish subject `$JS.FC.OBJ_update-binaries.>` the ordered
+  download consumer needs, so every watchdog self-update on peel credentials
+  died with `Permissions Violation for Publish to "$JS.FC.OBJ_update-binaries.…"`
+  and never completed. The grant is now issued. The same latent gap is closed
+  for the peel's KV watches (`$JS.FC.KV_{settings-files,state-files,secrets,basket,facts}.>`),
+  which could stall under backpressure. **Re-issue peel creds (re-enroll) to
+  pick up the new grants.**
+- **Reactor event acks are no longer denied.** The master/admin creds were
+  scoped to `$JS.API.>`, which does not cover the durable reactor/schedule
+  consumers' ack subjects (`$JS.ACK.<stream>.>`) or flow control
+  (`$JS.FC.<stream>.>`); reactions still fired (dedup masked it) but events
+  were never acked, causing redelivery churn until MaxDeliver. These trusted
+  control-plane creds now carry `$JS.>`. **Re-issue master/admin creds** (from
+  `zester auth init`) to pick it up. Surfaced by the new permissions sentinel.
+
+### Added
+- **`zester auth lint <creds-file>...`** (offline): decodes a NATS `.creds`
+  file and flags JetStream access-pattern gaps — the class of bug where a
+  component connects fine but a specific operation is silently denied at
+  runtime. It keys off the grants the creds carry (a consumer-create on a
+  stream) and reports the companion flow-control / inbox subjects that access
+  pattern requires; an object-store gap is an error, a KV-watch gap a warning.
+- **`zester update fetch --component <c> --version <v> [--out <path>]`**:
+  downloads a published binary from the object store and verifies its SHA-256 —
+  the non-mutating counterpart to a rollout's internal download. With
+  `--creds <peel.creds>` it checks that peel credentials can complete the
+  flow-controlled object-store download self-update depends on.
+- **Integration coverage for the whole permissions class**: a sentinel that
+  fails the suite on any `permissions violation` across all component logs, and
+  a test that downloads a real (multi-MB) binary under peel credentials
+  (`update fetch`), exercising the object-store flow-control path end-to-end.
+
 ## [0.3.3] - 2026-07-08
 
 Deployment papercuts surfaced by the first production install.
@@ -337,7 +376,8 @@ Initial release.
   Docker-based integration suite (82 tests).
 - Apache-2.0 license.
 
-[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/nirnx/zester/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/nirnx/zester/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/nirnx/zester/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/nirnx/zester/compare/v0.3.0...v0.3.1
