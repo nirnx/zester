@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"os"
@@ -89,6 +90,16 @@ func TestCACommands(t *testing.T) {
 		DNSName:       "nats",
 	}); err != nil {
 		t.Fatalf("issued chain does not verify against the root anchor: %v", err)
+	}
+
+	// nats-server also drops the CA root next to the cert as nats-ca.crt (the
+	// trust material peels anchor on); it must be exactly the root bundle.
+	natsCA, err := os.ReadFile(filepath.Join(out, "nats-ca.crt"))
+	if err != nil {
+		t.Fatalf("issue nats-server did not write nats-ca.crt: %v", err)
+	}
+	if !bytes.Equal(natsCA, authority.Bundle()) {
+		t.Fatal("nats-ca.crt is not the CA root bundle")
 	}
 
 	// unknown profile is refused.

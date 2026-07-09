@@ -183,7 +183,17 @@ Profiles:
 		fmt.Printf("  Private key: %s\n", keyPath)
 		fmt.Printf("  SANs:        dns=%v ip=%v\n", leaf.Cert.DNSNames, leaf.Cert.IPAddresses)
 		if profile == "nats-server" {
-			fmt.Println("\nInstall on the NATS host, point the tls{} block at the files, then:")
+			// Drop the CA root next to the server cert as nats-ca.crt: peels
+			// verify the NATS TLS chain against the ROOT (servers present
+			// leaf+intermediate), and the packaged peel config expects the CA
+			// at the conventional nats-ca.crt path. Emitting it here closes the
+			// "where do I get the NATS CA?" seam in the manual bootstrap.
+			caPath := filepath.Join(outDir, "nats-ca.crt")
+			if err := os.WriteFile(caPath, authority.Bundle(), 0644); err != nil {
+				return err
+			}
+			fmt.Printf("  NATS CA:     %s (root — distribute to peels as nats-ca.crt)\n", caPath)
+			fmt.Println("\nInstall on the NATS host, point the tls{} block at the cert + key, then:")
 			fmt.Println("  nats-server --signal reload   # hitless for live connections")
 		}
 		return nil

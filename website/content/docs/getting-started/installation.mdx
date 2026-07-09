@@ -166,9 +166,11 @@ is the easiest way to install and stay up to date — upgrades then arrive throu
 the normal `apt upgrade` flow.
 
 ```bash
-# 1. Trust the repository signing key
-sudo curl -fsSL https://repo.zester.cc/debian/repository.key \
-  -o /usr/share/keyrings/zester.gpg
+# 1. Trust the repository signing key. The published key is ASCII-armored, so
+#    dearmor it into the binary keyring apt expects — writing the armored bytes
+#    straight to a .gpg keyring makes `apt update` fail with NO_PUBKEY.
+curl -fsSL https://repo.zester.cc/debian/repository.key \
+  | sudo gpg --dearmor -o /usr/share/keyrings/zester.gpg
 
 # 2. Add the repository
 echo "deb [signed-by=/usr/share/keyrings/zester.gpg] https://repo.zester.cc/debian noble main" \

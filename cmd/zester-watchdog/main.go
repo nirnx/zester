@@ -241,14 +241,22 @@ func main() {
 		go followBootstrapCache(ctx, client, f.bootstrapCache, natsURLs, logger)
 	}
 
+	// The update buckets are created by the master at storage init; a
+	// watchdog that boots alongside a fresh master briefly sees them missing
+	// (its peel creds cannot create them). This is expected and transient, so
+	// warn ONCE and drop to Debug for the retries instead of spamming a
+	// warning every second until the master finishes init.
 	var statusKV bus.KV
 	for attempt := 1; ; attempt++ {
 		var err error
 		statusKV, err = bus.GetBucket(ctx, client.JetStream(), bus.BucketUpdateStatus)
 		if err == nil {
+			if attempt > 1 {
+				logger.Info("update-status KV bucket ready", "attempts", attempt)
+			}
 			break
 		}
-		logger.Warn("update-status KV bucket unavailable, retrying", "attempt", attempt, "error", err)
+		logBucketWait(logger, attempt, "update-status KV bucket", err)
 		if !retryWait(attempt) {
 			stopChild()
 			return
@@ -260,9 +268,12 @@ func main() {
 		var err error
 		objStore, err = client.JetStream().ObjectStore(ctx, bus.ObjectBucketUpdateBinaries)
 		if err == nil {
+			if attempt > 1 {
+				logger.Info("update-binaries object store ready", "attempts", attempt)
+			}
 			break
 		}
-		logger.Warn("update-binaries object store unavailable, retrying", "attempt", attempt, "error", err)
+		logBucketWait(logger, attempt, "update-binaries object store", err)
 		if !retryWait(attempt) {
 			stopChild()
 			return
@@ -427,6 +438,17 @@ func followBootstrapCache(ctx context.Context, client *bus.Client, path string, 
 		last = urls
 		logger.Info("watchdog: repointed NATS endpoints from bootstrap cache", "count", len(urls))
 	}
+}
+
+// logBucketWait logs a transient "update bucket not ready" retry: a single
+// Warn on the first attempt (so the wait is visible), then Debug thereafter so
+// a fresh-boot startup window does not spam the log every second.
+func logBucketWait(logger *slog.Logger, attempt int, what string, err error) {
+	if attempt == 1 {
+		logger.Warn(what+" not ready yet (waiting for master storage init)", "error", err)
+		return
+	}
+	logger.Debug(what+" still unavailable, retrying", "attempt", attempt, "error", err)
 }
 
 // sameURLs reports whether two URL lists are equal in order and content.

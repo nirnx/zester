@@ -6,6 +6,32 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-08
+
+Deployment papercuts surfaced by the first production install.
+
+### Added
+- **`zester enroll approve --peel <peel-id>`** approves a peel's current
+  enrollment without copying the enrollment KSUID, and **`--all-pending`**
+  approves every pending record at once. Exactly one of {enrollment ID,
+  `--peel`, `--all-pending`} must be given.
+
+### Changed
+- **`zester ca issue nats-server` now also writes `nats-ca.crt`** (the CA root)
+  next to the issued cert/key, so the material peels anchor on is produced in
+  the same step — no separate "export the root" seam in the manual bootstrap,
+  and it lands at the path the packaged peel config expects.
+
+### Fixed
+- **Docs: the APT setup no longer fails with `NO_PUBKEY`.** The published
+  signing key is ASCII-armored, so the install guide now pipes it through
+  `gpg --dearmor` into the binary keyring apt expects instead of writing the
+  armored bytes straight to `zester.gpg`.
+- The self-update watchdog no longer logs `update-status KV bucket unavailable`
+  every second during a fresh-boot startup window (before the master finishes
+  storage init): it warns once, then drops the retries to Debug and logs when
+  the buckets become ready.
+
 ## [0.3.2] - 2026-07-08
 
 Correctness and security fixes from an adversarial review of the 0.3.0/0.3.1
@@ -311,7 +337,8 @@ Initial release.
   Docker-based integration suite (82 tests).
 - Apache-2.0 license.
 
-[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/nirnx/zester/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/nirnx/zester/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/nirnx/zester/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/nirnx/zester/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nirnx/zester/compare/v0.2.0...v0.3.0
