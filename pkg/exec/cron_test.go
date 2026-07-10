@@ -1,6 +1,9 @@
 package exec
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFindCronEntryByComment(t *testing.T) {
 	existing := []CronEntry{
@@ -97,4 +100,16 @@ func TestParseCrontabHumanCommentDoesNotClearPendingLabel(t *testing.T) {
 	if out[0].Comment != "backup" {
 		t.Errorf("Comment = %q, want %q", out[0].Comment, "backup")
 	}
+}
+
+// parseCrontab adapts the line-indexed parser to the entry-list shape these
+// identity tests assert on.
+func parseCrontab(output string) []CronEntry {
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	parsed := parseCrontabLines(lines)
+	entries := make([]CronEntry, 0, len(parsed))
+	for _, pe := range parsed {
+		entries = append(entries, pe.entry)
+	}
+	return entries
 }

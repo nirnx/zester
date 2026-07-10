@@ -163,11 +163,11 @@ func (f *FileManaged) desiredMode() (fs.FileMode, error) {
 	if f.Mode == "" {
 		return 0644, nil
 	}
-	m, err := strconv.ParseUint(f.Mode, 8, 32)
+	m, err := parseFileMode(f.Mode)
 	if err != nil {
 		return 0, fmt.Errorf("file.managed: invalid mode %q: %w", f.Mode, err)
 	}
-	return fs.FileMode(m), nil
+	return m, nil
 }
 
 func (f *FileManaged) Check(ctx context.Context) (state.CheckResult, error) {
@@ -205,10 +205,10 @@ func (f *FileManaged) Check(ctx context.Context) (state.CheckResult, error) {
 	if err != nil {
 		return state.CheckResult{}, fmt.Errorf("file.managed: stat %s: %w", f.Path, err)
 	}
-	if info.Mode().Perm() != mode {
+	if !modesEqual(info.Mode(), mode) {
 		return state.CheckResult{
 			NeedsChange: true,
-			Diff:        fmt.Sprintf("mode %o != %o for %s", info.Mode().Perm(), mode, f.Path),
+			Diff:        fmt.Sprintf("mode %s != %s for %s", octalMode(info.Mode()), octalMode(mode), f.Path),
 		}, nil
 	}
 
@@ -287,15 +287,18 @@ func (f *FileManaged) Apply(ctx context.Context) (state.ApplyResult, error) {
 		f.wasCreated = true
 	}
 
+	// Ownership BEFORE mode: chown on an executable clears setuid/setgid
+	// (kernel behavior), so chmod must run last or a declared "4755" +
+	// user:/group: would lose the setuid bit every apply.
+	if err := f.setOwnership(ctx); err != nil {
+		return state.ApplyResult{}, err
+	}
+
 	// os.WriteFile applies perm at creation only — enforce the desired mode
 	// on pre-existing files too, or the mode drift Check reports would never
 	// converge (Apply would rewrite identical bytes forever).
 	if err := f.file.Chmod(ctx, f.Path, mode); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("file.managed: chmod %s: %w", f.Path, err)
-	}
-
-	if err := f.setOwnership(ctx); err != nil {
-		return state.ApplyResult{}, err
 	}
 
 	return state.ApplyResult{

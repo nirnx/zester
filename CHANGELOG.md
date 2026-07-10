@@ -50,7 +50,12 @@ paths, and read errors conflated with "file absent" (data-loss paths).
   so mode drift on an existing file was reported by Check forever but never
   fixed — permanent churn firing `watch` dependents every highstate. Apply
   now chmods after writing; Revert restores the CAPTURED prior mode, not
-  the desired one.
+  the desired one. Octal modes with setuid/setgid/sticky digits
+  ("4755", "1777") are translated to the Go FileMode flags — previously the
+  special bit was silently dropped by chmod and the state re-applied forever
+  without ever setting it — and ownership is applied BEFORE mode (chown on
+  an executable clears setuid). Applies to file.managed, file.directory,
+  and file.recurse modes.
 - **Debian `rc`-state packages (removed, conffiles remain) no longer count
   as installed.** The apt probe requires dpkg status `installed`
   (`dpkg-query -W -f='${db:Status-Status}'`) instead of the `dpkg -s` exit
@@ -97,7 +102,13 @@ paths, and read errors conflated with "file absent" (data-loss paths).
   same-command lines are adopted (a human descriptive comment neither
   blocks adoption nor duplicates the job) and stamped on the next apply.
   Converged Apply is a no-op, so watch-forced runs no longer rewrite the
-  crontab.
+  crontab. Crontab edits are LINE-PRESERVING: Set/Remove splice only
+  the targeted entry and its marker — MAILTO=/PATH= environment lines,
+  human comments, blank lines, and @reboot/@daily nickname entries survive
+  untouched (the previous whole-crontab reconstruction silently destroyed
+  them), and a Remove that matches nothing does not rewrite the crontab at
+  all. Commands are compared whitespace-normalized, so a declared command
+  with consecutive spaces converges instead of rewriting every run.
 - **`git.cloned`/`git.latest` with a symbolic `rev:` (tag) converge** —
   the rev was compared against the HEAD sha by string prefix, which never
   matches a tag name, so every run re-applied (needless fetches, `watch`

@@ -110,9 +110,15 @@ func (c *CronPresent) desiredEntry() exec.CronEntry {
 // entryDiffs reports how e drifts from the desired entry. Empty means fully
 // converged. Shared by Check and Apply so what Check compares is exactly what
 // Apply enforces (and vice versa).
+//
+// Commands are compared whitespace-normalized: the crontab parser collapses
+// internal runs of spaces (fields are re-joined with single spaces), so a
+// declared command containing consecutive spaces would otherwise mismatch
+// its own installed line forever — perpetual churn rewriting the crontab
+// every run.
 func (c *CronPresent) entryDiffs(e exec.CronEntry) []string {
 	var diffs []string
-	if e.Command != c.Command {
+	if normalizeCronCommand(e.Command) != normalizeCronCommand(c.Command) {
 		diffs = append(diffs, fmt.Sprintf("command %q != %q", e.Command, c.Command))
 	}
 	if e.Minute != c.Minute || e.Hour != c.Hour ||
@@ -246,7 +252,12 @@ func (c *CronPresent) Revert(ctx context.Context) (state.ApplyResult, error) {
 		return state.ApplyResult{}, fmt.Errorf("cron.present: revert remove %s: %w", c.Command, err)
 	}
 	// Re-add preserved entries: labeled ones first — a label-less Set matches
-	// only label-less lines, so this order re-adds every line exactly once.
+	// only label-less lines, so labeled and label-less lines each land once.
+	// KNOWN LIMITATION: multiple pre-existing label-less lines with the
+	// IDENTICAL command (different schedules) collapse to one on revert —
+	// Set keys label-less identity on the command, so the second re-add
+	// replaces the first. Pathological input; documented rather than
+	// re-modeled (CronExec has no append primitive).
 	for _, e := range labeled {
 		if err := c.cron.Set(ctx, c.User, e); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("cron.present: revert re-add %q: %w", e.Comment, err)
@@ -352,4 +363,11 @@ func (c *CronAbsent) Revert(_ context.Context) (state.ApplyResult, error) {
 		Changed: false,
 		Diff:    "cannot revert cron entry deletion",
 	}, nil
+}
+
+// normalizeCronCommand collapses internal whitespace runs the way the
+// crontab parser does (fields re-joined with single spaces), so desired and
+// parsed commands compare on equal footing.
+func normalizeCronCommand(cmd string) string {
+	return strings.Join(strings.Fields(cmd), " ")
 }

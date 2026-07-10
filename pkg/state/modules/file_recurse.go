@@ -87,11 +87,11 @@ func (r *FileRecurse) desiredFileMode() (fs.FileMode, error) {
 	if r.FileMode == "" {
 		return 0644, nil
 	}
-	m, err := strconv.ParseUint(r.FileMode, 8, 32)
+	m, err := parseFileMode(r.FileMode)
 	if err != nil {
 		return 0, fmt.Errorf("file.recurse: invalid file_mode %q: %w", r.FileMode, err)
 	}
-	return fs.FileMode(m), nil
+	return m, nil
 }
 
 // desiredDirMode returns the declared dir_mode, or the 0755 default. The
@@ -102,11 +102,11 @@ func (r *FileRecurse) desiredDirMode() (fs.FileMode, error) {
 	if r.DirMode == "" {
 		return 0755, nil
 	}
-	m, err := strconv.ParseUint(r.DirMode, 8, 32)
+	m, err := parseFileMode(r.DirMode)
 	if err != nil {
 		return 0, fmt.Errorf("file.recurse: invalid dir_mode %q: %w", r.DirMode, err)
 	}
-	return fs.FileMode(m), nil
+	return m, nil
 }
 
 func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
@@ -167,7 +167,7 @@ func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
 			// existing directory modes (including a pre-existing dest root)
 			// are left alone, so Check must not compare them — Apply doesn't
 			// chmod undeclared dirs either.
-			if r.DirMode != "" && info.Mode().Perm() != dirMode {
+			if r.DirMode != "" && !modesEqual(info.Mode(), dirMode) {
 				diffCount++
 			}
 			return nil
@@ -201,7 +201,7 @@ func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
 			diffCount++
 			return nil
 		}
-		if info.Mode().Perm() != fileMode {
+		if !modesEqual(info.Mode(), fileMode) {
 			diffCount++
 			return nil
 		}

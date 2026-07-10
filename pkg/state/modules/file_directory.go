@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"strconv"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/state"
@@ -66,11 +65,11 @@ func (d *FileDirectory) desiredMode() (fs.FileMode, error) {
 	if modeStr == "" {
 		return 0755, nil
 	}
-	m, err := strconv.ParseUint(modeStr, 8, 32)
+	m, err := parseFileMode(modeStr)
 	if err != nil {
 		return 0, fmt.Errorf("file.directory: invalid mode %q: %w", modeStr, err)
 	}
-	return fs.FileMode(m), nil
+	return m, nil
 }
 
 func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
@@ -100,7 +99,7 @@ func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
 		return state.CheckResult{}, err
 	}
 
-	if info.Mode().Perm() != mode {
+	if !modesEqual(info.Mode(), mode) {
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("mode %04o != %04o for %s", info.Mode().Perm(), mode, d.Path),
