@@ -214,6 +214,11 @@ func (s *BinaryStore) List(ctx context.Context) ([]*jetstream.ObjectInfo, error)
 }
 
 // List returns every manifest in the store, across components and platforms.
+// STRICT: any unreadable entry fails the whole listing. The GC's orphan
+// sweep deletes every object absent from this listing — a silently PARTIAL
+// listing (one transient KV read blip) would make it reap a still-manifested,
+// possibly PROMOTED binary as an "orphan", irrecoverably. Callers that
+// prefer tolerance (the versions CLI) use ListByComponent.
 func (s *ManifestStore) List(ctx context.Context) ([]*Manifest, error) {
 	keys, err := s.kv.Keys(ctx)
 	if err != nil {
@@ -229,7 +234,7 @@ func (s *ManifestStore) List(ctx context.Context) ([]*Manifest, error) {
 		}
 		var m Manifest
 		if err := bus.KVGet(ctx, s.kv, key, &m); err != nil {
-			continue // skip unreadable entries
+			return nil, fmt.Errorf("update: read manifest %q (listing must be complete): %w", key, err)
 		}
 		manifests = append(manifests, &m)
 	}

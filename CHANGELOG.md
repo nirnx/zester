@@ -14,10 +14,13 @@ All notable changes to Zester are documented here. The format follows
   budget, degraded-node exclusion) — promotion is now the one-command
   release act. Auto-rollout never downgrades (nodes at or ahead of the
   promoted version are untouched), starts at most one rollout per component
-  at a time, and uses deterministic rollout ids
-  (`rol-auto-<component>-<version>`) so racing masters CAS-conflict instead
-  of double-rolling; an operator-aborted auto-rollout is never retried
-  automatically. The fleet switch is stored in NATS and **on by default** —
+  at a time, and uses deterministic generation ids
+  (`rol-auto-<component>-<version>-r<N>`) so racing masters CAS-conflict
+  instead of double-rolling. A COMPLETED run never blocks convergence: a
+  node that was offline during the rollout (or enrolled later) still lags
+  and gets the next generation, targeting exactly the laggards; an
+  operator-ABORTED auto-rollout, by contrast, is never retried
+  automatically for that version. The fleet switch is stored in NATS and **on by default** —
   safe, because nothing rolls until something is explicitly promoted — and
   flippable at runtime with `zester update auto on|off|status` (no master
   restart). Per-master participation and tuning via `update_auto_rollout`

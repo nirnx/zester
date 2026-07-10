@@ -137,3 +137,29 @@ func TestBinaryGCOrphanSweep(t *testing.T) {
 }
 
 func objMeta(name string) jetstream.ObjectMeta { return jetstream.ObjectMeta{Name: name} }
+
+// TestBinaryGCRefusesPartialListing pins the HIGH review finding: a manifest
+// listing that cannot be read COMPLETELY must abort the whole pass — a
+// silently partial listing under-populates the orphan guard and would reap a
+// still-manifested (possibly promoted) binary as an "orphan".
+func TestBinaryGCRefusesPartialListing(t *testing.T) {
+	gc, objStore, manifests, ctx := gcFixture(t)
+	now := time.Now()
+
+	publishFixtureVersion(t, ctx, objStore, manifests, &Manifest{
+		Component: "peel", GOOS: "linux", GOARCH: "amd64",
+		Version: "0.5.0", Published: now, Promoted: true,
+	})
+	objStore.setModTime("peel/linux/amd64/0.5.0", now.Add(-2*time.Hour))
+	// Corrupt the manifest entry: Keys() lists it, KVGet fails to decode.
+	if _, err := gc.Manifests.kv.Put(ctx, "peel.linux.amd64.0.5.0", []byte("not-msgpack-garbage\xff\xfe")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := gc.Run(ctx, now); err == nil {
+		t.Fatal("GC must fail on an unreadable manifest instead of sweeping with a partial guard")
+	}
+	if _, err := NewBinaryStore(objStore).Info(ctx, "peel/linux/amd64/0.5.0"); err != nil {
+		t.Fatal("binary must survive a partial-listing GC pass")
+	}
+}

@@ -38,6 +38,9 @@ a manual `update rollout`: batches, per-node soak with auto-rollback, the
 failure budget, degraded-node exclusion. Auto-rollout never downgrades (nodes
 at or ahead of the promoted version are untouched), runs at most one rollout
 per component at a time, and never retries a rollout an operator aborted.
+A completed run does not freeze convergence: nodes that were offline during
+it (or enrolled later) are picked up by a follow-up generation targeting
+just the laggards.
 
 The fleet-wide switch lives in NATS — flip it at runtime, no master restart:
 

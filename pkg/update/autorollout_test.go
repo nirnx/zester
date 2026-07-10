@@ -128,12 +128,27 @@ func TestPickAutoRollout(t *testing.T) {
 		t.Fatal("must not plan while another rollout is active for the component")
 	}
 
-	// A terminal record under the deterministic id means "already ran" —
-	// including aborted: an operator abort must not be auto-retried forever.
-	done := []*RolloutState{{ID: AutoRolloutID("peel", "0.5.0"), State: RolloutAborted,
+	// An operator ABORT of any generation blocks the version permanently.
+	aborted := []*RolloutState{{ID: AutoRolloutID("peel", "0.5.0", 1), State: RolloutAborted,
 		Config: RolloutConfig{Component: "peel", Version: "0.5.0"}}}
-	if p := PickAutoRollout("peel", autoManifests("0.5.0"), statuses, done); p != nil {
-		t.Fatal("an already-run (aborted) auto-rollout id must not restart")
+	if p := PickAutoRollout("peel", autoManifests("0.5.0"), statuses, aborted); p != nil {
+		t.Fatal("an operator-aborted auto-rollout must never be auto-retried")
+	}
+
+	// A COMPLETED generation does NOT block convergence: an
+	// offline-during-rollout or late-enrolled node still lags and gets the
+	// next generation targeting exactly the laggards.
+	completed := []*RolloutState{{ID: AutoRolloutID("peel", "0.5.0", 1), State: RolloutCompleted,
+		Config: RolloutConfig{Component: "peel", Version: "0.5.0"}}}
+	p = PickAutoRollout("peel", autoManifests("0.5.0"), statuses, completed)
+	if p == nil {
+		t.Fatal("completed generation must not block late-arrival convergence")
+	}
+	if p.Generation != 2 || p.RolloutConfig(5, time.Minute, 1).RolloutID != AutoRolloutID("peel", "0.5.0", 2) {
+		t.Fatalf("expected generation 2, got %d (%s)", p.Generation, p.RolloutConfig(5, time.Minute, 1).RolloutID)
+	}
+	if len(p.NodeIDs) != 1 || p.NodeIDs[0] != "web-01" {
+		t.Fatalf("generation 2 must target only laggards, got %v", p.NodeIDs)
 	}
 
 	// Fleet fully current: nothing to do.
@@ -150,10 +165,13 @@ func TestPickAutoRollout(t *testing.T) {
 }
 
 func TestAutoRolloutIDDeterministic(t *testing.T) {
-	a := AutoRolloutID("peel", "0.5.0")
-	b := AutoRolloutID("peel", "0.5.0")
-	if a != b || a != "rol-auto-peel-0-5-0" {
+	a := AutoRolloutID("peel", "0.5.0", 1)
+	b := AutoRolloutID("peel", "0.5.0", 1)
+	if a != b || a != "rol-auto-peel-0-5-0-r1" {
 		t.Fatalf("id = %q / %q", a, b)
+	}
+	if AutoRolloutID("peel", "0.5.0", 2) != "rol-auto-peel-0-5-0-r2" {
+		t.Fatal("generation must be part of the id")
 	}
 }
 

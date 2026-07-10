@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/nirnx/zester/pkg/bus"
@@ -52,6 +53,8 @@ func SaveAutoSwitch(ctx context.Context, kv bus.KV, s AutoSwitch) error {
 type AutoRolloutPlan struct {
 	Component string
 	Version   string
+	// Generation numbers this convergence run (see AutoRolloutID).
+	Generation int
 	// NodeIDs are the nodes actually below the promoted version (nodes
 	// already at or above it are never touched — auto-rollout must not
 	// restart current nodes or downgrade ahead-of-promoted ones).
@@ -61,11 +64,22 @@ type AutoRolloutPlan struct {
 // rolloutIDSanitize maps a version string into the id-safe charset.
 var rolloutIDSanitize = regexp.MustCompile(`[^a-zA-Z0-9-]`)
 
-// AutoRolloutID is the deterministic rollout id for a component+version:
-// when two masters race the same trigger, the second StartRollout
-// CAS-conflicts on Create instead of double-rolling the fleet.
-func AutoRolloutID(component, version string) string {
+// autoRolloutBase is the deterministic id prefix for a component+version.
+func autoRolloutBase(component, version string) string {
 	return "rol-auto-" + component + "-" + rolloutIDSanitize.ReplaceAllString(version, "-")
+}
+
+// AutoRolloutID is the deterministic rollout id for the Nth convergence run
+// of a component+version ("rol-auto-peel-0-5-0-r1"). Determinism is the
+// same-instant dedup: two masters racing the same tick compute the same
+// generation from the same store listing, so the second StartRollout
+// CAS-conflicts on Create instead of double-rolling; skewed ticks are
+// covered by the one-active-rollout-per-component guard. Generations exist
+// because a COMPLETED run must not block convergence forever: a node that
+// was offline during generation N (its status TTL'd out, so it was never in
+// the plan) or enrolled later still lags — generation N+1 picks it up.
+func AutoRolloutID(component, version string, generation int) string {
+	return fmt.Sprintf("%s-r%d", autoRolloutBase(component, version), generation)
 }
 
 // PickAutoRollout decides whether a promoted version warrants an
@@ -94,7 +108,14 @@ func PickAutoRollout(component string, manifests []*Manifest, statuses []*NodeSt
 		return nil
 	}
 
-	id := AutoRolloutID(component, target.Version)
+	// One rollout per component at a time; an operator ABORT of any prior
+	// auto-rollout generation for this version blocks it permanently (until
+	// a newer version is promoted) — an abort is a human "stop", never to be
+	// auto-retried. COMPLETED generations do NOT block: nodes that were
+	// offline during (or enrolled after) a completed run still lag and get a
+	// fresh generation.
+	base := autoRolloutBase(component, target.Version)
+	generation := 1
 	for _, r := range rollouts {
 		if r == nil {
 			continue
@@ -102,8 +123,11 @@ func PickAutoRollout(component string, manifests []*Manifest, statuses []*NodeSt
 		if r.Config.Component == component && !RolloutTerminal(r.State) && !r.Config.DryRun {
 			return nil // something is already rolling this component
 		}
-		if r.ID == id {
-			return nil // this exact auto-rollout already ran (or is running)
+		if strings.HasPrefix(r.ID, base+"-r") || r.ID == base {
+			if r.State == RolloutAborted {
+				return nil // operator aborted this version's auto-rollout
+			}
+			generation++
 		}
 	}
 
@@ -121,7 +145,7 @@ func PickAutoRollout(component string, manifests []*Manifest, statuses []*NodeSt
 		return nil
 	}
 
-	return &AutoRolloutPlan{Component: component, Version: target.Version, NodeIDs: nodes}
+	return &AutoRolloutPlan{Component: component, Version: target.Version, Generation: generation, NodeIDs: nodes}
 }
 
 // AutoRolloutConfig builds the RolloutConfig for a plan with the given
@@ -134,6 +158,6 @@ func (p *AutoRolloutPlan) RolloutConfig(batchSize int, soak time.Duration, maxFa
 		BatchSize: batchSize,
 		SoakTime:  soak,
 		MaxFailed: maxFailed,
-		RolloutID: AutoRolloutID(p.Component, p.Version),
+		RolloutID: AutoRolloutID(p.Component, p.Version, p.Generation),
 	}
 }
