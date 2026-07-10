@@ -7,42 +7,58 @@ All notable changes to Zester are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
-- **File states now detect ownership drift.** `file.managed`,
-  `file.directory`, and `file.recurse` (files) compare the on-disk owner
-  against declared `user:`/`group:` in Check — previously ownership was only
-  ever set in Apply, so a converged file that got chowned away (backup
-  restore, package reinstall, or `user:`/`group:` added to an
-  already-converged state) was never re-converged and `--test` reported
-  clean. The facet fires only when `user:`/`group:` is declared; undeclared
-  ownership never causes churn.
-- **`file.recurse` Check now sees what Apply enforces.** With `clean: true`,
-  extra files in the destination (what `cleanDestination` would remove) now
-  count as drift — previously the clean feature's primary use case was a
-  silent permanent no-op once the managed set converged, since only Apply
-  ever looked at extras. Extra *directories* are ignored, matching Apply,
-  which never removes them. Check also verifies `dir_mode` on every managed
-  directory (default `0755`), including the destination root — exactly what
-  Apply chmods — so world-writable drift on managed dirs is converged
-  instead of ignored.
-- **`file.recurse` no longer bypasses the injected file provider.** Check,
-  Apply, and clean-up walked the REAL filesystem with `filepath.WalkDir`
-  while all reads/writes went through `exec.FileExec`; all walks now go
-  through the new `FileExec.Walk`, so the module is fully testable against
-  fakes and correct under any non-OS provider.
-- **Revert contract: a fresh instance never destroys state.**
-  `file.managed` and `file.copy` Revert with no Apply recorded on the
-  instance previously DELETED the target ("no prior state"); `file.copy`
-  additionally hard-errored when the destination was already absent. Revert
-  without an in-instance memo is now an explicit clean no-op
-  (`nothing to revert (no apply recorded in this run)`); a same-instance
-  revert of an Apply-created file still removes it (now tolerating an
-  already-missing file), and a captured backup still restores.
-- **File-absent vs read-error no longer conflated.** `file.managed`,
-  `file.copy`, and `file.recurse` treat only `fs.ErrNotExist` as "file
-  absent"; any other read/stat error (e.g. permissions) now fails the phase
-  instead of being misread as "missing" — which could overwrite a file whose
-  current content was never captured (Check reported "does not exist",
-  Apply skipped the backup and clobbered it).
+- **State-module audit fixes (service, user, group, cron, mount, sysctl)** —
+  convergence gaps where Check reported compliance for drift Apply would have
+  fixed, plus Apply/Revert contract violations:
+  - `service.running`/`service.dead`: a DECLARED `enable:` facet is now
+    compared in Check (running-but-disabled with `enable: true` — the RHEL
+    post-install case — and stopped-but-still-enabled with `enable: false`
+    were reported compliant forever; the latter resurrected at every reboot).
+    `service.running` with `enable: false` now also disables (previously
+    unenforced). An Apply reached only for enable-facet drift enables/disables
+    WITHOUT restarting the running service; `service.dead` Apply is now a
+    self-contained full flow (clean no-op on an already-converged service
+    instead of a lying `changed: true`).
+  - `user.present`: a declared `password:` hash is now compared against the
+    shadow hash (via the new `UserExec.PasswordHash`) in BOTH Check and Apply
+    — password drift converges, and an in-sync password no longer forces
+    `changed: true` on every modify. A name-based primary group
+    (`gid: '<name>'` / `primary_group:`) is now compared (group-name → GID
+    resolution) and enforced on existing users via `usermod -g <name>`
+    (`UserModifyOpts.PrimaryGroup`); previously it was silently unenforced
+    outside user creation. Declaring it now requires a group provider.
+  - `user.absent`/`group.absent`: Apply re-checks existence first — a
+    watch-forced Apply on an already-absent user/group is a clean no-op
+    instead of a `userdel`/`groupdel` exit-6 failure.
+  - `cron.present`: entries are now KEYED ON THE LABEL (identifier comment,
+    Salt `SALT_CRON_IDENTIFIER` semantics) instead of the exact command
+    string — editing a state's command replaces the old crontab line instead
+    of orphaning it to run forever. Comment-less pre-existing lines with the
+    same command are adopted (and stamped with the label on the next apply);
+    same-command entries under different labels coexist.
+  - `mount.mounted`: Check now compares the LIVE mount (device and fstype
+    exactly, declared options as a subset of the active option set — no
+    churn on kernel-added defaults) by reading the kernel mount table, and
+    Apply remounts on live mismatch — a wrong device/options serving the
+    mountpoint previously reported compliant forever and could never
+    converge. The fstab comparison now includes `dump`/`pass`. Apply is a
+    clean no-op when converged and its diff no longer claims a mount that
+    did not happen.
+  - `sysctl.present` with `persist: true` (the default): Check now verifies
+    the drop-in file entry too — a runtime-only match (manual `sysctl -w`)
+    was reported compliant and silently died at the next reboot. Apply
+    persists even when the runtime value already matches, and no-ops cleanly
+    when fully converged.
+  - Revert contract: `service.running`, `user.present`, `group.present`,
+    `mount.mounted`, and `sysctl.present` Reverts on a never-applied instance
+    are now explicit clean no-ops (`nothing to revert (no apply recorded in
+    this run)`) — `sysctl.present` previously wrote the EMPTY STRING into the
+    kernel parameter and the persist file, and `mount.mounted` reported a
+    diff claiming an unmount/fstab removal it never performed.
+    `group.present` Revert now really restores original membership (it
+    claimed to but only restored the GID) and reports `changed` honestly;
+    `service.running` Revert now reports `changed: true` when it reverted an
+    enable.
 - **`pkg.latest` now refreshes the package cache BEFORE checking
   upgradability** (Salt parity). Refresh (default on) previously ran only in
   Apply, but Check consulted the stale on-disk index and short-circuited

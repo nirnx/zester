@@ -336,6 +336,243 @@ func TestUserPresentRevertModified(t *testing.T) {
 	}
 }
 
+// --- password convergence ---
+
+func TestUserPresentCheckPasswordDrift(t *testing.T) {
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
+	fakeUser.SetPasswordHash("deploy", "$6$oldhash")
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"shell":    "/bin/bash",
+		"password": "$6$newhash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange when shadow hash differs from declared password")
+	}
+}
+
+func TestUserPresentCheckPasswordMatchesNoChange(t *testing.T) {
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
+	fakeUser.SetPasswordHash("deploy", "$6$samehash")
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"shell":    "/bin/bash",
+		"password": "$6$samehash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when hash matches, diff: %s", cr.Diff)
+	}
+}
+
+func TestUserPresentCheckPasswordUnverifiable(t *testing.T) {
+	// "" from the provider (no hash / cannot verify) with a declared
+	// password is drift — Apply's usermod -p is idempotent.
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy"})
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"password": "$6$declared",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange when the provider reports no hash for a declared password")
+	}
+}
+
+func TestUserPresentApplyPasswordInSyncIsNoOp(t *testing.T) {
+	// Watch-forced Apply with everything (incl. password) in sync must not
+	// report a change — the old code always set Password and lied Changed=true.
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
+	fakeUser.SetPasswordHash("deploy", "$6$samehash")
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"shell":    "/bin/bash",
+		"password": "$6$samehash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected Changed=false when password and all attributes are in sync")
+	}
+}
+
+func TestUserPresentApplyPasswordDrift(t *testing.T) {
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy"})
+	fakeUser.SetPasswordHash("deploy", "$6$oldhash")
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"password": "$6$newhash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed=true on password drift")
+	}
+	hash, _ := fakeUser.PasswordHash(context.Background(), "deploy")
+	if hash != "$6$newhash" {
+		t.Errorf("hash after Apply = %q, want %q", hash, "$6$newhash")
+	}
+}
+
+// --- name-based primary group convergence ---
+
+func TestUserPresentCheckPrimaryGroupDrift(t *testing.T) {
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", GID: 100})
+	fakeGroup := exectest.NewFakeGroupExec()
+	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999})
+	mctx := testUserMctx(fakeUser)
+	mctx.Group = fakeGroup
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"gid": "docker", // string form maps to PrimaryGroup (Salt compat)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange when primary group differs from declared name")
+	}
+}
+
+func TestUserPresentCheckPrimaryGroupMatchesNoChange(t *testing.T) {
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", GID: 999})
+	fakeGroup := exectest.NewFakeGroupExec()
+	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999})
+	mctx := testUserMctx(fakeUser)
+	mctx.Group = fakeGroup
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"primary_group": "docker",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when primary group matches, diff: %s", cr.Diff)
+	}
+}
+
+func TestUserPresentApplyPrimaryGroup(t *testing.T) {
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", GID: 100})
+	fakeGroup := exectest.NewFakeGroupExec()
+	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999})
+	mctx := testUserMctx(fakeUser)
+	mctx.Group = fakeGroup
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"gid": "docker",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed=true on primary group drift")
+	}
+	if got := fakeUser.PrimaryGroupOf("deploy"); got != "docker" {
+		t.Errorf("PrimaryGroupOf = %q, want %q (name-based usermod -g)", got, "docker")
+	}
+}
+
+func TestUserPresentApplyPrimaryGroupMissingGroupFails(t *testing.T) {
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", GID: 100})
+	mctx := testUserMctx(fakeUser) // FakeGroupExec has no "docker"
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"primary_group": "docker",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(context.Background()); err == nil {
+		t.Error("expected Apply error when the declared primary group does not exist")
+	}
+}
+
+func TestUserPresentPrimaryGroupRequiresGroupProvider(t *testing.T) {
+	mctx := testUserMctx(exectest.NewFakeUserExec())
+	mctx.Group = nil
+	_, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"primary_group": "docker",
+	})
+	if err == nil {
+		t.Error("expected builder error: primary group declared but no group provider")
+	}
+}
+
+// --- revert contract ---
+
+func TestUserPresentRevertFreshInstanceNoOp(t *testing.T) {
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"shell": "/bin/sh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected Changed=false on fresh-instance Revert")
+	}
+	if ar.Diff != "nothing to revert (no apply recorded in this run)" {
+		t.Errorf("Diff = %q, want the explicit no-op explanation", ar.Diff)
+	}
+	u, _ := fakeUser.GetUser("deploy")
+	if u.Shell != "/bin/bash" {
+		t.Error("fresh-instance Revert must not touch the user")
+	}
+}
+
 func TestUserPresentNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{
 		ProviderSet: exec.ProviderSet{
@@ -498,8 +735,32 @@ func TestUserAbsentRequisites(t *testing.T) {
 	}
 }
 
+func TestUserAbsentApplyAlreadyAbsentNoOp(t *testing.T) {
+	// Watch-forced Apply bypasses Check: an already-absent user must be a
+	// clean no-op, never a userdel failure. DeleteErr proves Delete is
+	// not even attempted.
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.DeleteErr = fmt.Errorf("userdel: user does not exist (exit 6)")
+	mctx := testUserMctx(fakeUser)
+	builder := NewUserAbsentBuilder(mctx)
+
+	s, err := builder("ghost", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatalf("expected clean no-op for absent user, got error: %v", err)
+	}
+	if ar.Changed {
+		t.Error("expected Changed=false for already-absent user")
+	}
+}
+
 func TestUserAbsentApplyError(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "olduser"}) // exists, so Delete IS attempted
 	fakeUser.DeleteErr = fmt.Errorf("user is logged in")
 	mctx := testUserMctx(fakeUser)
 	builder := NewUserAbsentBuilder(mctx)

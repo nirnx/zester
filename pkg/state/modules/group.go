@@ -227,11 +227,46 @@ func (g *GroupPresent) Revert(ctx context.Context) (state.ApplyResult, error) {
 	}
 
 	if g.original != nil {
-		// Restore original GID and membership.
-		opts := exec.GroupModifyOpts{}
-		if g.GID != 0 {
-			opts.GID = &g.original.GID
+		// Restore original GID and membership by diffing the CURRENT group
+		// against the memoized original — only actual drift is reverted, and
+		// the reported Diff reflects what was really done.
+		info, err := g.group.Lookup(ctx, g.GroupName)
+		if err != nil {
+			return state.ApplyResult{}, fmt.Errorf("group.present: revert lookup %s: %w", g.GroupName, err)
 		}
+		if info == nil {
+			return state.ApplyResult{
+				Changed: false,
+				Diff:    fmt.Sprintf("group %s no longer exists; nothing to restore", g.GroupName),
+			}, nil
+		}
+
+		opts := exec.GroupModifyOpts{}
+		changed := false
+		if info.GID != g.original.GID {
+			opts.GID = &g.original.GID
+			changed = true
+		}
+		for _, m := range g.original.Members {
+			if !containsString(info.Members, m) {
+				opts.AddMembers = append(opts.AddMembers, m)
+				changed = true
+			}
+		}
+		for _, m := range info.Members {
+			if !containsString(g.original.Members, m) {
+				opts.DelMembers = append(opts.DelMembers, m)
+				changed = true
+			}
+		}
+
+		if !changed {
+			return state.ApplyResult{
+				Changed: false,
+				Diff:    fmt.Sprintf("group %s already matches original state", g.GroupName),
+			}, nil
+		}
+
 		if err := g.group.Modify(ctx, g.GroupName, opts); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("group.present: revert modify %s: %w", g.GroupName, err)
 		}
@@ -241,7 +276,10 @@ func (g *GroupPresent) Revert(ctx context.Context) (state.ApplyResult, error) {
 		}, nil
 	}
 
-	return state.ApplyResult{Changed: false}, nil
+	return state.ApplyResult{
+		Changed: false,
+		Diff:    "nothing to revert (no apply recorded in this run)",
+	}, nil
 }
 
 // GroupAbsent implements the group.absent state.
@@ -296,6 +334,20 @@ func (g *GroupAbsent) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (g *GroupAbsent) Apply(ctx context.Context) (state.ApplyResult, error) {
+	// Self-contained full flow: a watch-forced Apply bypasses Check, and
+	// groupdel on a nonexistent group exits non-zero — re-verify existence so
+	// an already-absent group is a clean no-op, not a failure.
+	info, err := g.group.Lookup(ctx, g.GroupName)
+	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("group.absent: lookup %s: %w", g.GroupName, err)
+	}
+	if info == nil {
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    fmt.Sprintf("group %s already absent", g.GroupName),
+		}, nil
+	}
+
 	if err := g.group.Delete(ctx, g.GroupName); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("group.absent: delete %s: %w", g.GroupName, err)
 	}
