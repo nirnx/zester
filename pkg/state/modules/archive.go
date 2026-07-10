@@ -31,6 +31,9 @@ import (
 //     the declaration no longer matches the recorded value (version bump).
 //     The value is an opaque declaration (e.g. "sha256=<hex>") compared as a
 //     string — it is NOT verified against the archive bytes.
+//
+// The guard is evaluated in BOTH Check and Apply (watch-forced applies
+// bypass Check): an already-extracted archive is a clean Apply no-op.
 type ArchiveExtracted struct {
 	id   string
 	reqs state.Requisites
@@ -64,6 +67,13 @@ type ArchiveExtracted struct {
 	// createdByApply tracks whether Apply created the target directory,
 	// so Revert knows whether it is safe to remove it.
 	createdByApply bool
+
+	// extractedByApply tracks whether a same-instance Apply completed a
+	// successful extraction. It distinguishes "the target dir exists because
+	// extraction succeeded" from "the target dir exists only because this
+	// instance's makedirs created it before a failed extraction" — a retried
+	// Apply must proceed instead of latching on its own directory.
+	extractedByApply bool
 }
 
 // NewArchiveExtractedBuilder returns a state.Builder that creates
@@ -119,29 +129,36 @@ func (a *ArchiveExtracted) markerPath() string {
 	return filepath.Join(a.Dir, fmt.Sprintf(".zester-archive-%x.hash", sum[:8]))
 }
 
-func (a *ArchiveExtracted) Check(ctx context.Context) (state.CheckResult, error) {
-	// Existence gate: if_missing (preferred, Salt parity) or the weak
-	// target-dir fallback. Only fs.ErrNotExist counts as absent; any other
-	// stat error fails the check rather than triggering a re-extraction.
+// alreadyExtracted evaluates the extraction guard — the if_missing path
+// (preferred, Salt parity) or the weak target-dir fallback, plus the
+// source_hash marker — and reports whether the archive is already extracted,
+// with the reason. Only fs.ErrNotExist counts as absent; any other stat/read
+// error fails the phase rather than triggering a re-extraction. The guard is
+// evaluated independently in BOTH Check and Apply: watch-forced applies
+// bypass Check entirely, and a converged archive must not be re-downloaded
+// and re-extracted (clobbering post-extraction local modifications
+// if_missing exists to protect) just because a watched dependency changed —
+// Salt's archive.extracted checks if_missing in the state function itself.
+func (a *ArchiveExtracted) alreadyExtracted(ctx context.Context) (bool, string, error) {
 	if a.IfMissing != "" {
 		if _, err := a.file.Stat(ctx, a.IfMissing); err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
-				return state.CheckResult{}, fmt.Errorf("archive.extracted: stat %s: %w", a.IfMissing, err)
+				return false, "", fmt.Errorf("archive.extracted: stat %s: %w", a.IfMissing, err)
 			}
-			return state.CheckResult{
-				NeedsChange: true,
-				Diff:        fmt.Sprintf("if_missing path %s does not exist", a.IfMissing),
-			}, nil
+			return false, fmt.Sprintf("if_missing path %s does not exist", a.IfMissing), nil
 		}
 	} else {
 		if _, err := a.file.Stat(ctx, a.Dir); err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
-				return state.CheckResult{}, fmt.Errorf("archive.extracted: stat %s: %w", a.Dir, err)
+				return false, "", fmt.Errorf("archive.extracted: stat %s: %w", a.Dir, err)
 			}
-			return state.CheckResult{
-				NeedsChange: true,
-				Diff:        fmt.Sprintf("target %s does not exist", a.Dir),
-			}, nil
+			return false, fmt.Sprintf("target %s does not exist", a.Dir), nil
+		}
+		if a.createdByApply && !a.extractedByApply {
+			// The dir exists only because this instance's makedirs created
+			// it before a failed extraction — no evidence of prior success;
+			// a retried Apply must proceed instead of no-oping.
+			return false, fmt.Sprintf("target %s was created by this run's failed attempt", a.Dir), nil
 		}
 	}
 
@@ -150,35 +167,48 @@ func (a *ArchiveExtracted) Check(ctx context.Context) (state.CheckResult, error)
 	if a.SourceHash != "" {
 		recorded, existed, err := readManagedFile(ctx, a.file, a.markerPath())
 		if err != nil {
-			return state.CheckResult{}, fmt.Errorf("archive.extracted: read marker %s: %w", a.markerPath(), err)
+			return false, "", fmt.Errorf("archive.extracted: read marker %s: %w", a.markerPath(), err)
 		}
 		if !existed {
-			return state.CheckResult{
-				NeedsChange: true,
-				Diff:        fmt.Sprintf("source_hash declared but no extraction marker at %s", a.markerPath()),
-			}, nil
+			return false, fmt.Sprintf("source_hash declared but no extraction marker at %s", a.markerPath()), nil
 		}
 		if strings.TrimSpace(recorded) != a.SourceHash {
-			return state.CheckResult{
-				NeedsChange: true,
-				Diff:        fmt.Sprintf("source_hash changed (recorded %q, declared %q)", strings.TrimSpace(recorded), a.SourceHash),
-			}, nil
+			return false, fmt.Sprintf("source_hash changed (recorded %q, declared %q)", strings.TrimSpace(recorded), a.SourceHash), nil
 		}
 	}
 
 	if a.IfMissing != "" {
-		return state.CheckResult{
-			NeedsChange: false,
-			Diff:        fmt.Sprintf("if_missing path %s exists; already extracted", a.IfMissing),
-		}, nil
+		return true, fmt.Sprintf("if_missing path %s exists; already extracted", a.IfMissing), nil
+	}
+	return true, fmt.Sprintf("target %s exists (no if_missing set)", a.Dir), nil
+}
+
+func (a *ArchiveExtracted) Check(ctx context.Context) (state.CheckResult, error) {
+	done, reason, err := a.alreadyExtracted(ctx)
+	if err != nil {
+		return state.CheckResult{}, err
 	}
 	return state.CheckResult{
-		NeedsChange: false,
-		Diff:        fmt.Sprintf("target %s exists (no if_missing set)", a.Dir),
+		NeedsChange: !done,
+		Diff:        reason,
 	}, nil
 }
 
 func (a *ArchiveExtracted) Apply(ctx context.Context) (state.ApplyResult, error) {
+	// Re-evaluate the guard here, not just in Check: a watch-forced apply
+	// skips Check, and an already-extracted archive must be a clean no-op —
+	// never a re-download/re-extract over local modifications.
+	done, reason, err := a.alreadyExtracted(ctx)
+	if err != nil {
+		return state.ApplyResult{}, err
+	}
+	if done {
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    reason + "; nothing to do",
+		}, nil
+	}
+
 	if a.MakeDirs {
 		if _, err := a.file.Stat(ctx, a.Dir); err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
@@ -230,6 +260,7 @@ func (a *ArchiveExtracted) Apply(ctx context.Context) (state.ApplyResult, error)
 			return state.ApplyResult{}, fmt.Errorf("archive.extracted: write marker %s: %w", a.markerPath(), err)
 		}
 	}
+	a.extractedByApply = true
 
 	return state.ApplyResult{
 		Changed: true,

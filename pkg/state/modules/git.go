@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -86,8 +88,13 @@ func (g *GitCloned) Name() string           { return "git.cloned:" + g.id }
 func (g *GitCloned) Reqs() state.Requisites { return g.reqs }
 
 func (g *GitCloned) Check(ctx context.Context) (state.CheckResult, error) {
-	_, err := g.file.Stat(ctx, g.Path)
-	if err != nil {
+	// Only fs.ErrNotExist means absent; any other stat error (EACCES, EIO,
+	// ESTALE) fails the phase — reporting a bogus pending clone for an
+	// unreadable existing checkout would misdiagnose the real failure.
+	if _, err := g.file.Stat(ctx, g.Path); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("git.cloned: stat %s: %w", g.Path, err)
+		}
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("directory %s does not exist", g.Path),
@@ -178,7 +185,14 @@ func (g *GitCloned) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (g *GitCloned) Apply(ctx context.Context) (state.ApplyResult, error) {
+	// Same absence discrimination as Check: a non-not-exist stat error must
+	// fail the phase, not select the clone branch — cloning over an existing
+	// checkout that merely failed to stat either errors misleadingly or, for
+	// an empty pre-created dir, re-clones it and mis-arms createdByApply.
 	_, statErr := g.file.Stat(ctx, g.Path)
+	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+		return state.ApplyResult{}, fmt.Errorf("git.cloned: stat %s: %w", g.Path, statErr)
+	}
 	dirMissing := statErr != nil
 
 	if dirMissing {
