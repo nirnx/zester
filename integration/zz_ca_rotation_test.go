@@ -134,18 +134,28 @@ func TestCARotation_FileDropWithoutProcessRestart(t *testing.T) {
 	// Job mode exercises the master path (dispatch, KV, watcher): the
 	// masters also reconnected under the new CA without a restart. Right
 	// after rolling every NATS node the JetStream META LEADER may still be
-	// re-electing — core-NATS pings answer while KV bucket lookups
-	// transiently time out — so retry the dispatch through that window
-	// instead of parsing a "context deadline exceeded" error as JSON.
-	deadline := time.Now().Add(60 * time.Second)
+	// re-electing — core-NATS pings answer while KV/stream operations
+	// transiently fail in several shapes ("context deadline exceeded",
+	// "no response from stream", "no responders"). Run via sh so a non-zero
+	// CLI exit reaches us as output+rc instead of an execInContainer fatal,
+	// and retry every transient shape through the election window.
+	deadline := time.Now().Add(90 * time.Second)
 	for {
-		out := execInContainer(t, "admin",
-			[]string{"zester", "--format", "json", "--no-color", "web-01", "test.ping"})
-		if strings.Contains(out, "context deadline exceeded") && time.Now().Before(deadline) {
-			t.Logf("JetStream not ready after NATS roll, retrying job dispatch: %s", strings.TrimSpace(out))
-			time.Sleep(3 * time.Second)
-			continue
+		out := execInContainer(t, "admin", []string{"sh", "-c",
+			"zester --format json --no-color web-01 test.ping 2>&1; echo rc=$?"})
+		transient := strings.Contains(out, "context deadline exceeded") ||
+			strings.Contains(out, "no response from stream") ||
+			strings.Contains(out, "no responders") ||
+			strings.Contains(out, "timeout")
+		if !strings.Contains(out, "rc=0") {
+			if transient && time.Now().Before(deadline) {
+				t.Logf("JetStream not ready after NATS roll, retrying job dispatch: %s", strings.TrimSpace(out))
+				time.Sleep(3 * time.Second)
+				continue
+			}
+			t.Fatalf("job dispatch failed after CA rotation (non-transient or deadline exceeded): %s", out)
 		}
+		out = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(out), "rc=0"))
 		var jobResults []cliResult
 		if err := json.Unmarshal(extractJSON([]byte(out)), &jobResults); err != nil {
 			t.Fatalf("parse job-mode CLI JSON: %v\nraw output: %s", err, out)
