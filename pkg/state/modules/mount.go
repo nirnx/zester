@@ -10,9 +10,18 @@ import (
 )
 
 // MountMounted implements the mount.mounted state.
-// It ensures the DECLARED filesystem is live-mounted at the mount point
-// (device and fstype compared exactly, declared options as a subset of the
-// live option set) and optionally present in fstab.
+// It ensures SOMETHING is mounted at the mount point and that the declared
+// entry is present in fstab (including dump/pass).
+//
+// Deliberately NOT compared: the live mount's device/fstype/options. Comparing
+// the declared fstab-language configuration against the kernel's /proc/mounts
+// view needs Salt-style normalization (fstab-only options like nofail/_netdev
+// never appear in /proc/mounts, negotiated fstypes like nfs→nfs4, UUID=/LABEL=
+// device aliasing) — without it every mismatch would escalate to an
+// unmount+remount of a live production filesystem on every run. That facet is
+// deferred until the normalization exists; silent blindness beats production
+// unmounts. Apply therefore mounts ONLY when nothing is mounted at the
+// mount point and never unmounts.
 type MountMounted struct {
 	id   string
 	reqs state.Requisites
@@ -26,11 +35,6 @@ type MountMounted struct {
 	Persist    bool
 
 	mount exec.MountExec
-	// file reads the kernel mount table (exec.ProcMountsPath): MountExec
-	// exposes only IsMounted (presence), not the live entry, so device/
-	// fstype/options drift is verified via the file provider — still the
-	// exec layer, mirroring FstabProvider's own /proc/mounts read.
-	file exec.FileExec
 
 	// applied tracks what was done during Apply for Revert.
 	appliedMount bool
@@ -43,15 +47,12 @@ func NewMountMountedBuilder(mctx *exec.ModuleContext) state.Builder {
 		if mctx.Mount == nil {
 			return nil, fmt.Errorf("mount.mounted: no mount provider available")
 		}
-		if mctx.File == nil {
-			return nil, fmt.Errorf("mount.mounted: no file provider available (required to read %s)", exec.ProcMountsPath)
-		}
-		return newMountMounted(id, config, mctx.Mount, mctx.File)
+		return newMountMounted(id, config, mctx.Mount)
 	}
 }
 
-func newMountMounted(id string, config map[string]any, mount exec.MountExec, file exec.FileExec) (state.State, error) {
-	m := &MountMounted{id: id, mount: mount, file: file}
+func newMountMounted(id string, config map[string]any, mount exec.MountExec) (state.State, error) {
+	m := &MountMounted{id: id, mount: mount}
 
 	m.MountPoint, _ = config["name"].(string)
 	if m.MountPoint == "" {
@@ -92,65 +93,6 @@ func newMountMounted(id string, config map[string]any, mount exec.MountExec, fil
 func (m *MountMounted) Name() string           { return "mount.mounted:" + m.id }
 func (m *MountMounted) Reqs() state.Requisites { return m.reqs }
 
-// procMountsUnescape decodes the octal escapes the kernel uses in
-// /proc/mounts fields (\040 space, \011 tab, \012 newline, \134 backslash).
-var procMountsUnescape = strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
-
-// liveMount returns the kernel mount table entry for the mount point, or nil
-// when nothing is mounted there. An unreadable (including absent) mount table
-// fails the phase — mount state cannot be determined without it, and guessing
-// "not mounted" could trigger a spurious mount.
-func (m *MountMounted) liveMount(ctx context.Context) (*exec.MountEntry, error) {
-	data, err := m.file.ReadFile(ctx, exec.ProcMountsPath)
-	if err != nil {
-		return nil, fmt.Errorf("mount.mounted: read %s: %w", exec.ProcMountsPath, err)
-	}
-	var found *exec.MountEntry
-	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		if procMountsUnescape.Replace(fields[1]) != m.MountPoint {
-			continue
-		}
-		// Later lines shadow earlier ones (stacked mounts): keep the last.
-		found = &exec.MountEntry{
-			Device:     procMountsUnescape.Replace(fields[0]),
-			MountPoint: m.MountPoint,
-			FSType:     fields[2],
-			Options:    procMountsUnescape.Replace(fields[3]),
-		}
-	}
-	return found, nil
-}
-
-// liveMatches reports whether the live mount satisfies the declared state.
-// Device and fstype compare exactly; declared options must be a SUBSET of the
-// live option set — the kernel adds its own (rw, relatime, ...) and requiring
-// equality would churn forever — with "defaults" imposing no requirement.
-func (m *MountMounted) liveMatches(live *exec.MountEntry) (bool, string) {
-	if live.Device != m.Device {
-		return false, fmt.Sprintf("device %s != %s", live.Device, m.Device)
-	}
-	if live.FSType != m.FSType {
-		return false, fmt.Sprintf("fstype %s != %s", live.FSType, m.FSType)
-	}
-	liveOpts := make(map[string]bool)
-	for _, o := range strings.Split(live.Options, ",") {
-		liveOpts[o] = true
-	}
-	for _, o := range strings.Split(m.Options, ",") {
-		if o == "" || o == "defaults" {
-			continue
-		}
-		if !liveOpts[o] {
-			return false, fmt.Sprintf("option %q not active", o)
-		}
-	}
-	return true, ""
-}
-
 // fstabMatches reports whether the fstab entry matches the declared state
 // exactly, including dump and pass.
 func (m *MountMounted) fstabMatches(e *exec.MountEntry) bool {
@@ -159,16 +101,14 @@ func (m *MountMounted) fstabMatches(e *exec.MountEntry) bool {
 }
 
 func (m *MountMounted) Check(ctx context.Context) (state.CheckResult, error) {
-	live, err := m.liveMount(ctx)
+	mounted, err := m.mount.IsMounted(ctx, m.MountPoint)
 	if err != nil {
-		return state.CheckResult{}, err
+		return state.CheckResult{}, fmt.Errorf("mount.mounted: check %s: %w", m.MountPoint, err)
 	}
 
 	var diffs []string
-	if live == nil {
+	if !mounted {
 		diffs = append(diffs, fmt.Sprintf("%s is not mounted", m.MountPoint))
-	} else if ok, why := m.liveMatches(live); !ok {
-		diffs = append(diffs, fmt.Sprintf("%s live mount does not match: %s", m.MountPoint, why))
 	}
 
 	if m.Persist {
@@ -202,11 +142,9 @@ func (m *MountMounted) Apply(ctx context.Context) (state.ApplyResult, error) {
 		Pass:       m.Pass,
 	}
 
-	// Read the mount table first: an unreadable table fails the phase
-	// BEFORE any mutation.
-	live, err := m.liveMount(ctx)
+	mounted, err := m.mount.IsMounted(ctx, m.MountPoint)
 	if err != nil {
-		return state.ApplyResult{}, err
+		return state.ApplyResult{}, fmt.Errorf("mount.mounted: check %s: %w", m.MountPoint, err)
 	}
 
 	var actions []string
@@ -225,27 +163,15 @@ func (m *MountMounted) Apply(ctx context.Context) (state.ApplyResult, error) {
 		}
 	}
 
-	switch {
-	case live == nil:
+	// Mount ONLY when nothing is mounted at the mount point — an existing
+	// mount is never unmounted or remounted (see the type doc: the live
+	// config facet is deferred).
+	if !mounted {
 		if err := m.mount.Mount(ctx, entry); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("mount.mounted: mount %s: %w", m.MountPoint, err)
 		}
 		m.appliedMount = true
 		actions = append(actions, fmt.Sprintf("mounted %s (%s)", m.Device, m.FSType))
-	default:
-		if ok, why := m.liveMatches(live); !ok {
-			// The live mount does not match the declared state (wrong device,
-			// fstype, or missing options) — remount with the desired config.
-			// Not memoized for Revert: the prior mount configuration cannot be
-			// restored faithfully (mirrors service.running's restart).
-			if err := m.mount.Unmount(ctx, m.MountPoint); err != nil {
-				return state.ApplyResult{}, fmt.Errorf("mount.mounted: unmount %s for remount: %w", m.MountPoint, err)
-			}
-			if err := m.mount.Mount(ctx, entry); err != nil {
-				return state.ApplyResult{}, fmt.Errorf("mount.mounted: mount %s: %w", m.MountPoint, err)
-			}
-			actions = append(actions, fmt.Sprintf("remounted %s (%s)", m.Device, why))
-		}
 	}
 
 	if len(actions) == 0 {

@@ -336,6 +336,135 @@ func TestUserPresentRevertModified(t *testing.T) {
 	}
 }
 
+func TestUserPresentRevertAfterNoOpApplyNoOp(t *testing.T) {
+	// Round-2 regression: the memo was armed BEFORE drift detection, so a
+	// fully converged Apply (Changed=false) still triggered a full usermod +
+	// Changed=true on Revert. The memo must arm only when drift is applied.
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
+	fakeUser.ModifyErr = fmt.Errorf("Modify must not be called on a converged user")
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"shell": "/bin/bash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Fatal("expected converged Apply to be a no-op")
+	}
+	rr, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr.Changed {
+		t.Error("expected Changed=false on Revert after a no-op Apply")
+	}
+	if rr.Diff != "nothing to revert (no apply recorded in this run)" {
+		t.Errorf("Diff = %q, want the explicit no-op explanation", rr.Diff)
+	}
+}
+
+func TestUserPresentRevertRestoresPassword(t *testing.T) {
+	// Round-2 regression: the password facet was read in Apply but never
+	// memoized, so Revert claimed "reverted to original state" while leaving
+	// the Apply-set hash in the shadow — the ONE facet Apply actually changed
+	// survived the revert.
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
+	fakeUser.SetPasswordHash("deploy", "$6$oldhash")
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"shell":    "/bin/bash",
+		"password": "$6$newhash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Fatal("expected Changed=true on password drift")
+	}
+	rr, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rr.Changed {
+		t.Error("expected Changed=true when restoring the password")
+	}
+	hash, _ := fakeUser.PasswordHash(context.Background(), "deploy")
+	if hash != "$6$oldhash" {
+		t.Errorf("hash after Revert = %q, want the original %q restored", hash, "$6$oldhash")
+	}
+}
+
+func TestUserPresentRevertNoDriftReportsNoChange(t *testing.T) {
+	// Revert diffs the CURRENT user against the memoized original (mirrors
+	// group.present): when they already match, no usermod runs and
+	// Changed=false is reported honestly.
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/sh"})
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"shell": "/bin/bash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The user is externally restored before the revert runs.
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/sh"})
+	fakeUser.ModifyErr = fmt.Errorf("Modify must not be called when nothing drifts from original")
+	rr, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr.Changed {
+		t.Errorf("expected Changed=false when current already matches original, diff: %s", rr.Diff)
+	}
+}
+
+func TestUserPresentConvergencePassword(t *testing.T) {
+	// Check → Apply → Check for the password facet.
+	fakeUser := exectest.NewFakeUserExec()
+	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
+	fakeUser.SetPasswordHash("deploy", "$6$oldhash")
+	mctx := testUserMctx(fakeUser)
+	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+		"shell":    "/bin/bash",
+		"password": "$6$newhash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange=true before Apply")
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected converged after Apply, diff: %s", cr.Diff)
+	}
+}
+
 // --- password convergence ---
 
 func TestUserPresentCheckPasswordDrift(t *testing.T) {

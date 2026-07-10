@@ -213,3 +213,24 @@ func TestDetectProvidersServiceMatchesEnvironment(t *testing.T) {
 		t.Error("no systemctl on PATH: Service should be nil")
 	}
 }
+
+func TestDetectProvidersCronSysctlMountMatchEnvironment(t *testing.T) {
+	// Round-2 regression: these constructors existed but were never wired in
+	// DetectProviders, so cron.present/sysctl.present/mount.mounted failed
+	// "no X provider available" on every real peel. Same PATH-based contract
+	// as the service check.
+	ps := DetectProviders(nil, nil)
+	checks := []struct {
+		bin string
+		set bool
+	}{
+		{"crontab", ps.Cron != nil},
+		{"sysctl", ps.Sysctl != nil},
+		{"mount", ps.Mount != nil},
+	}
+	for _, c := range checks {
+		if have := commandExists(c.bin); have != c.set {
+			t.Errorf("%s on PATH = %v, but provider set = %v — DetectProviders must wire it exactly when the binary exists", c.bin, have, c.set)
+		}
+	}
+}

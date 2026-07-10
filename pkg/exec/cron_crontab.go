@@ -76,7 +76,9 @@ func (p *CrontabProvider) writeCrontab(ctx context.Context, user string, entries
 	var buf bytes.Buffer
 	for _, e := range entries {
 		if e.Comment != "" {
-			fmt.Fprintf(&buf, "# %s\n", e.Comment)
+			// Labels are serialized with the identity marker so parseCrontab
+			// can tell them apart from ordinary human comments.
+			fmt.Fprintf(&buf, "# %s %s\n", CronLabelPrefix, e.Comment)
 		}
 		minute := e.Minute
 		if minute == "" {
@@ -106,26 +108,10 @@ func (p *CrontabProvider) writeCrontab(ctx context.Context, user string, entries
 		args = []string{"-u", user, "-"}
 	}
 
-	opts := CommandOpts{Command: "crontab", Args: args}
-	// We inject stdin via a shell redirect trick using CommandOpts.Shell + Command.
-	// Instead, we use a temporary approach: write to a temp file is not available here.
-	// Use echo piped via shell.
-	opts = CommandOpts{
-		Command: fmt.Sprintf("echo %s | crontab %s", shellQuote(buf.String()), strings.Join(args, " ")),
-		Shell:   true,
-	}
-	// The cleanest approach without temp files: pipe via sh -c with heredoc.
-	// Build the sh -c command manually.
-	shCmd := "crontab " + strings.Join(args, " ")
-	opts = CommandOpts{
-		Command: shCmd,
-		Shell:   false,
-		Args:    args,
-		Env:     map[string]string{"CRONTAB_STDIN": buf.String()},
-	}
-	// CommandExec.Run doesn't support stdin injection. Use Shell mode with printf.
+	// CommandExec.Run has no stdin injection — pipe the content in via
+	// shell-mode printf.
 	quoted := shellQuote(buf.String())
-	opts = CommandOpts{
+	opts := CommandOpts{
 		Command: fmt.Sprintf("printf '%%s' %s | crontab %s", quoted, strings.Join(args, " ")),
 		Shell:   true,
 	}
@@ -137,7 +123,11 @@ func (p *CrontabProvider) writeCrontab(ctx context.Context, user string, entries
 }
 
 // parseCrontab parses the output of `crontab -l` into CronEntry values.
-// Comment lines (# ...) are attached to the next non-comment entry.
+// Only `# ZESTER_CRON_ID: <label>` marker lines carry entry identity and are
+// attached (as Comment) to the next entry; ordinary human comments are
+// annotations, deliberately NOT identity — treating them as labels made a
+// descriptive comment above a hand-written line block command-based adoption
+// and silently duplicate the job.
 func parseCrontab(output string) []CronEntry {
 	var entries []CronEntry
 	var pendingComment string
@@ -148,7 +138,12 @@ func parseCrontab(output string) []CronEntry {
 			continue
 		}
 		if strings.HasPrefix(line, "#") {
-			pendingComment = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			text := strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			if strings.HasPrefix(text, CronLabelPrefix) {
+				pendingComment = strings.TrimSpace(strings.TrimPrefix(text, CronLabelPrefix))
+			}
+			// Non-marker comments neither set nor clear a pending label, so a
+			// human annotating below a marker cannot orphan the labeled entry.
 			continue
 		}
 		// Skip environment variable assignments (e.g. MAILTO=...)

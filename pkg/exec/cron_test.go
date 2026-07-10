@@ -38,23 +38,27 @@ func TestFindCronEntryAdoptsCommentless(t *testing.T) {
 	}
 }
 
-func TestFindCronEntryNoCommentFallsBackToCommand(t *testing.T) {
+func TestFindCronEntryNoCommentMatchesOnlyUnlabeled(t *testing.T) {
 	existing := []CronEntry{
 		{Command: "/usr/bin/backup.sh", Comment: "backup-job"},
+		{Command: "/usr/bin/backup.sh"},
 	}
-	// A label-less desired entry keys on the exact command (historical
-	// behavior), matching regardless of the existing comment.
+	// A label-less desired entry keys on the exact command among LABEL-LESS
+	// lines only — it never steals a labeled managed entry.
 	i := FindCronEntry(existing, CronEntry{Command: "/usr/bin/backup.sh"})
-	if i != 0 {
-		t.Errorf("FindCronEntry command fallback = %d, want 0", i)
+	if i != 1 {
+		t.Errorf("FindCronEntry label-less match = %d, want 1 (the unlabeled line)", i)
+	}
+	if j := FindCronEntry(existing[:1], CronEntry{Command: "/usr/bin/backup.sh"}); j != -1 {
+		t.Errorf("FindCronEntry = %d, want -1 (only a labeled line exists)", j)
 	}
 	if j := FindCronEntry(existing, CronEntry{Command: "/usr/bin/missing.sh"}); j != -1 {
 		t.Errorf("FindCronEntry miss = %d, want -1", j)
 	}
 }
 
-func TestParseCrontabAttachesComments(t *testing.T) {
-	out := parseCrontab("# backup-job\n0 2 * * * /usr/local/bin/backup.sh\n30 4 * * * /usr/bin/uncommented.sh\n")
+func TestParseCrontabLabelMarkerIsIdentity(t *testing.T) {
+	out := parseCrontab("# ZESTER_CRON_ID: backup-job\n0 2 * * * /usr/local/bin/backup.sh\n30 4 * * * /usr/bin/uncommented.sh\n")
 	if len(out) != 2 {
 		t.Fatalf("parsed %d entries, want 2", len(out))
 	}
@@ -63,5 +67,34 @@ func TestParseCrontabAttachesComments(t *testing.T) {
 	}
 	if out[1].Comment != "" {
 		t.Errorf("entry 1 comment = %q, want empty", out[1].Comment)
+	}
+}
+
+func TestParseCrontabHumanCommentIsNotIdentity(t *testing.T) {
+	// An ordinary descriptive comment above a hand-written line is an
+	// annotation, NOT a label: the entry parses label-less so command-based
+	// adoption still matches it (treating it as identity silently DUPLICATED
+	// the job when a state adopted the line).
+	out := parseCrontab("# nightly db dump\n0 2 * * * /usr/local/bin/dump.sh\n")
+	if len(out) != 1 {
+		t.Fatalf("parsed %d entries, want 1", len(out))
+	}
+	if out[0].Comment != "" {
+		t.Errorf("Comment = %q, want empty (human comments are not identity)", out[0].Comment)
+	}
+	if out[0].Command != "/usr/local/bin/dump.sh" {
+		t.Errorf("Command = %q", out[0].Command)
+	}
+}
+
+func TestParseCrontabHumanCommentDoesNotClearPendingLabel(t *testing.T) {
+	// A human annotating between the marker and the entry must not orphan
+	// the labeled entry.
+	out := parseCrontab("# ZESTER_CRON_ID: backup\n# temporarily bumped to 3am\n0 3 * * * /usr/bin/backup.sh\n")
+	if len(out) != 1 {
+		t.Fatalf("parsed %d entries, want 1", len(out))
+	}
+	if out[0].Comment != "backup" {
+		t.Errorf("Comment = %q, want %q", out[0].Comment, "backup")
 	}
 }

@@ -30,10 +30,15 @@ type SysctlPresent struct {
 	// Required only when Persist is enabled.
 	file exec.FileExec
 
-	// original stores the value before Apply for Revert; originalSet guards
-	// the never-applied case (a fresh instance must not Set the zero value).
-	original    string
-	originalSet bool
+	// Revert memos — armed ONLY for the facets Apply actually changed, so
+	// Revert undoes exactly those and nothing else (a persist-only Apply must
+	// not touch the runtime value on revert, and vice versa).
+	appliedSet bool   // Apply changed the runtime value
+	original   string // pre-Apply runtime value (valid when appliedSet)
+
+	appliedPersist  bool   // Apply wrote the drop-in entry
+	persistHadEntry bool   // the drop-in had an entry for the key before Apply
+	persistOriginal string // its value (valid when persistHadEntry)
 }
 
 // NewSysctlPresentBuilder returns a state.Builder that creates SysctlPresent states.
@@ -146,11 +151,13 @@ func (s *SysctlPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 
 	setNeeded := current != s.Value
 	persistNeeded := false
+	persistedVal, persistedFound := "", false
 	if s.Persist {
 		pv, found, err := s.persistedValue(ctx)
 		if err != nil {
 			return state.ApplyResult{}, err
 		}
+		persistedVal, persistedFound = pv, found
 		persistNeeded = !found || pv != s.Value
 	}
 
@@ -163,19 +170,21 @@ func (s *SysctlPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 		}, nil
 	}
 
-	s.original = current
-	s.originalSet = true
-
 	if setNeeded {
 		if err := s.sysctl.Set(ctx, s.Key, s.Value); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("sysctl.present: set %s: %w", s.Key, err)
 		}
+		s.original = current
+		s.appliedSet = true
 	}
 
 	if persistNeeded {
 		if err := s.sysctl.Persist(ctx, s.Key, s.Value); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("sysctl.present: persist %s: %w", s.Key, err)
 		}
+		s.persistOriginal = persistedVal
+		s.persistHadEntry = persistedFound
+		s.appliedPersist = true
 	}
 
 	return state.ApplyResult{
@@ -190,25 +199,80 @@ func (s *SysctlPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 	}, nil
 }
 
+// removePersistEntry deletes the key's lines from the Zester drop-in,
+// mirroring ProcfsProvider.Persist's key matching. A missing file or an
+// absent entry means there is nothing to remove.
+func (s *SysctlPresent) removePersistEntry(ctx context.Context) error {
+	data, err := s.file.ReadFile(ctx, exec.SysctlConfPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("sysctl.present: read %s: %w", exec.SysctlConfPath, err)
+	}
+
+	var out []string
+	removed := false
+	for _, l := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, s.Key+"=") || strings.HasPrefix(trimmed, s.Key+" =") ||
+			strings.HasPrefix(trimmed, s.Key+"\t=") {
+			removed = true
+			continue
+		}
+		out = append(out, l)
+	}
+	if !removed {
+		return nil
+	}
+	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+		out = out[:len(out)-1]
+	}
+	content := ""
+	if len(out) > 0 {
+		content = strings.Join(out, "\n") + "\n"
+	}
+	if err := s.file.WriteFile(ctx, exec.SysctlConfPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("sysctl.present: rewrite %s: %w", exec.SysctlConfPath, err)
+	}
+	return nil
+}
+
 func (s *SysctlPresent) Revert(ctx context.Context) (state.ApplyResult, error) {
-	if !s.originalSet {
-		// Never write the zero value: a fresh instance has no captured
-		// original, and Set/Persist of "" would corrupt the key.
+	if !s.appliedSet && !s.appliedPersist {
+		// Fresh instance or converged Apply: nothing was changed this run —
+		// never write the zero value or invent a persist entry.
 		return state.ApplyResult{
 			Changed: false,
 			Diff:    "nothing to revert (no apply recorded in this run)",
 		}, nil
 	}
-	if err := s.sysctl.Set(ctx, s.Key, s.original); err != nil {
-		return state.ApplyResult{}, fmt.Errorf("sysctl.present: revert set %s: %w", s.Key, err)
+
+	var acts []string
+	if s.appliedSet {
+		if err := s.sysctl.Set(ctx, s.Key, s.original); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("sysctl.present: revert set %s: %w", s.Key, err)
+		}
+		acts = append(acts, fmt.Sprintf("runtime reverted to %q", s.original))
 	}
-	if s.Persist {
-		if err := s.sysctl.Persist(ctx, s.Key, s.original); err != nil {
-			return state.ApplyResult{}, fmt.Errorf("sysctl.present: revert persist %s: %w", s.Key, err)
+	if s.appliedPersist {
+		// Undo the persist facet Apply changed — never re-persist the old
+		// RUNTIME value: a pre-existing entry is restored to its prior value,
+		// and an entry Apply introduced is removed outright.
+		if s.persistHadEntry {
+			if err := s.sysctl.Persist(ctx, s.Key, s.persistOriginal); err != nil {
+				return state.ApplyResult{}, fmt.Errorf("sysctl.present: revert persist %s: %w", s.Key, err)
+			}
+			acts = append(acts, fmt.Sprintf("persist entry restored to %q", s.persistOriginal))
+		} else {
+			if err := s.removePersistEntry(ctx); err != nil {
+				return state.ApplyResult{}, err
+			}
+			acts = append(acts, "persist entry removed")
 		}
 	}
 	return state.ApplyResult{
 		Changed: true,
-		Diff:    fmt.Sprintf("%s: reverted to %q", s.Key, s.original),
+		Diff:    fmt.Sprintf("%s: %s (revert)", s.Key, strings.Join(acts, "; ")),
 	}, nil
 }

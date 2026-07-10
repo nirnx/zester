@@ -426,6 +426,97 @@ func TestSvcEnabled_Revert(t *testing.T) {
 	}
 }
 
+func TestSvcEnabled_ApplyAlreadyEnabledNoOp(t *testing.T) {
+	// Watch-forced Apply on an already-enabled service: clean no-op, and the
+	// Enable call must not even be attempted.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, true)
+	fake.EnableErr = errors.New("Enable must not be called when already enabled")
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	result, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed {
+		t.Errorf("expected Changed=false when already enabled, diff: %s", result.Diff)
+	}
+}
+
+func TestSvcEnabled_RevertFreshInstanceNoOp(t *testing.T) {
+	// A fresh instance (standalone ModeRevert) never enabled anything this
+	// run: Revert must NOT disable the service — the old code unconditionally
+	// disabled sshd-class services at boot.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("sshd", true, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcEnabledBuilder(mctx)("sshd", map[string]any{})
+	result, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed {
+		t.Error("expected Changed=false on fresh-instance Revert")
+	}
+	if result.Diff != "nothing to revert (no apply recorded in this run)" {
+		t.Errorf("Diff = %q, want the explicit no-op explanation", result.Diff)
+	}
+	if !fake.IsEnabledSync("sshd") {
+		t.Error("fresh-instance Revert must not disable the service")
+	}
+}
+
+func TestSvcEnabled_RevertAfterNoOpApplyNoOp(t *testing.T) {
+	// Same-instance: a converged Apply (Changed=false) arms no memo, so
+	// Revert stays a no-op instead of disabling the service.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Fatal("expected converged Apply to be a no-op")
+	}
+	rr, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr.Changed {
+		t.Error("expected Changed=false on Revert after a no-op Apply")
+	}
+	if !fake.IsEnabledSync("nginx") {
+		t.Error("Revert after a no-op Apply must not disable the service")
+	}
+}
+
+func TestSvcEnabled_Convergence(t *testing.T) {
+	// Check → Apply → Check must report converged.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", false, false)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange=true before Apply")
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected converged after Apply, diff: %s", cr.Diff)
+	}
+}
+
 func TestSvcEnabled_NilProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Service: nil}}
 	_, err := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
@@ -612,6 +703,105 @@ func TestSvcDead_ApplyConvergedNoOp(t *testing.T) {
 	}
 	if result.Changed {
 		t.Error("expected Changed=false when already converged")
+	}
+}
+
+func TestSvcDead_RevertFreshInstanceNoOp(t *testing.T) {
+	// A fresh instance (standalone ModeRevert) has no apply memo: Revert must
+	// NOT start the very service this state declares dead — the old code
+	// unconditionally Started it with a lying "started X (revert stop)" diff.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("telemetry-agent", false, false) // stopped weeks ago, not by this run
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcDeadBuilder(mctx)("telemetry-agent", map[string]any{})
+	result, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed {
+		t.Error("expected Changed=false on fresh-instance Revert")
+	}
+	if result.Diff != "nothing to revert (no apply recorded in this run)" {
+		t.Errorf("Diff = %q, want the explicit no-op explanation", result.Diff)
+	}
+	if fake.IsRunningSync("telemetry-agent") {
+		t.Error("fresh-instance Revert must not start the service")
+	}
+}
+
+func TestSvcDead_RevertAfterNoOpApplyNoOp(t *testing.T) {
+	// Same-instance: Apply on an already-stopped service is a no-op and arms
+	// no memo — Revert must not start it.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", false, false)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Fatal("expected converged Apply to be a no-op")
+	}
+	rr, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr.Changed {
+		t.Error("expected Changed=false on Revert after a no-op Apply")
+	}
+	if fake.IsRunningSync("nginx") {
+		t.Error("Revert after a no-op Apply must not start the service")
+	}
+}
+
+func TestSvcDead_RevertRestoresOnlyAppliedActs(t *testing.T) {
+	// Apply only disabled (service was already stopped): Revert re-enables
+	// but must NOT start the service — and the diff reflects only that.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", false, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed {
+		t.Error("expected Changed=true (disable was reverted)")
+	}
+	if !fake.IsEnabledSync("nginx") {
+		t.Error("expected nginx re-enabled after Revert")
+	}
+	if fake.IsRunningSync("nginx") {
+		t.Error("Revert must not start a service this Apply never stopped")
+	}
+}
+
+func TestSvcDead_Convergence(t *testing.T) {
+	// Check → Apply → Check must report converged for both facets.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange=true before Apply")
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected converged after Apply, diff: %s", cr.Diff)
 	}
 }
 
