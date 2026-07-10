@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -290,6 +291,147 @@ func TestSysctlPresentRevertFreshInstanceNoOp(t *testing.T) {
 	}
 	if fake.IsPersisted("net.ipv4.ip_forward") {
 		t.Error("fresh-instance Revert must not persist anything")
+	}
+}
+
+// testSysctlProcfsMctx wires the REAL ProcfsProvider over command/file fakes
+// so the persist drop-in the provider writes is the same file the module
+// verifies — full Check/Apply/Revert coherence on the persist facet.
+func testSysctlProcfsMctx(cmd *exectest.FakeCommandExec, file *exectest.FakeFileExec) *exec.ModuleContext {
+	return &exec.ModuleContext{
+		ProviderSet: exec.ProviderSet{
+			Sysctl:  exec.NewProcfsProvider(cmd, file),
+			File:    file,
+			Command: cmd,
+			Package: exectest.NewFakePackageExec("apt"),
+		},
+	}
+}
+
+// sysctlWriteCalls returns the recorded `sysctl -w key=value` argument
+// strings, in order.
+func sysctlWriteCalls(cmd *exectest.FakeCommandExec) []string {
+	var writes []string
+	for _, call := range cmd.Calls() {
+		if call.Command == "sysctl" && len(call.Args) == 2 && call.Args[0] == "-w" {
+			writes = append(writes, call.Args[1])
+		}
+	}
+	return writes
+}
+
+func TestSysctlPresentRevertRemovesAddedPersistEntry(t *testing.T) {
+	// Round-2 regression: a persist-only Apply (runtime already matched,
+	// drop-in entry added) was "reverted" by re-persisting the same runtime
+	// value — the entry Apply introduced survived. Revert must REMOVE it,
+	// and must not touch the runtime facet Apply never changed.
+	cmd := exectest.NewFakeCommandExec()
+	cmd.SetResult("sysctl", &exec.CommandResult{Stdout: "10\n"}, nil) // runtime already 10
+	file := exectest.NewFakeFileExec()
+	mctx := testSysctlProcfsMctx(cmd, file)
+	s, err := NewSysctlPresentBuilder(mctx)("vm.swappiness", map[string]any{
+		"value": "10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Fatal("expected Changed=true (persist entry was added)")
+	}
+	data, _ := file.GetFile(exec.SysctlConfPath)
+	if !strings.Contains(string(data), "vm.swappiness = 10") {
+		t.Fatalf("expected the drop-in entry after Apply, got: %q", string(data))
+	}
+
+	rr, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rr.Changed {
+		t.Error("expected Changed=true on Revert (entry removed)")
+	}
+	data, _ = file.GetFile(exec.SysctlConfPath)
+	if strings.Contains(string(data), "vm.swappiness") {
+		t.Errorf("the persist entry Apply added survived the revert: %q", string(data))
+	}
+	if writes := sysctlWriteCalls(cmd); len(writes) != 0 {
+		t.Errorf("Revert ran sysctl -w %v, but Apply never changed the runtime value", writes)
+	}
+}
+
+func TestSysctlPresentRevertRestoresPriorPersistEntry(t *testing.T) {
+	// A pre-existing drop-in entry is restored to its PRIOR value on revert
+	// (not to the pre-Apply runtime value, which may differ).
+	cmd := exectest.NewFakeCommandExec()
+	cmd.SetResult("sysctl", &exec.CommandResult{Stdout: "35\n"}, nil) // runtime drifted to 35
+	file := exectest.NewFakeFileExec()
+	file.PreCreate(exec.SysctlConfPath, []byte("vm.swappiness = 60\n"), 0644)
+	mctx := testSysctlProcfsMctx(cmd, file)
+	s, err := NewSysctlPresentBuilder(mctx)("vm.swappiness", map[string]any{
+		"value": "10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := file.GetFile(exec.SysctlConfPath)
+	if !strings.Contains(string(data), "vm.swappiness = 10") {
+		t.Fatalf("expected the drop-in updated to 10 after Apply, got: %q", string(data))
+	}
+
+	if _, err := s.Revert(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = file.GetFile(exec.SysctlConfPath)
+	content := string(data)
+	if !strings.Contains(content, "vm.swappiness = 60") {
+		t.Errorf("expected the PRIOR persisted value 60 restored, got: %q", content)
+	}
+	if strings.Count(content, "vm.swappiness") != 1 {
+		t.Errorf("expected exactly one drop-in entry after revert, got: %q", content)
+	}
+	// The runtime facet is restored to the pre-Apply runtime value (35).
+	writes := sysctlWriteCalls(cmd)
+	if len(writes) != 2 || writes[0] != "vm.swappiness=10" || writes[1] != "vm.swappiness=35" {
+		t.Errorf("sysctl -w calls = %v, want [vm.swappiness=10 vm.swappiness=35]", writes)
+	}
+}
+
+func TestSysctlPresentConvergencePersistFacet(t *testing.T) {
+	// Check → Apply → Check over the real provider: what Check compares (the
+	// drop-in file) is exactly what Apply's Persist produces.
+	cmd := exectest.NewFakeCommandExec()
+	cmd.SetResult("sysctl", &exec.CommandResult{Stdout: "10\n"}, nil) // runtime already 10
+	file := exectest.NewFakeFileExec()
+	mctx := testSysctlProcfsMctx(cmd, file)
+	s, err := NewSysctlPresentBuilder(mctx)("vm.swappiness", map[string]any{
+		"value": "10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange=true before Apply (not persisted)")
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected converged after Apply, diff: %s", cr.Diff)
 	}
 }
 

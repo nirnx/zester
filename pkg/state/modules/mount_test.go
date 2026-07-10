@@ -10,28 +10,19 @@ import (
 	"github.com/nirnx/zester/pkg/exec/exectest"
 )
 
-// testMountMctx wires the mount fake plus a file fake the module reads the
-// kernel mount table from. seedProcMounts populates that table.
-func testMountMctx(mount *exectest.FakeMountExec, file *exectest.FakeFileExec) *exec.ModuleContext {
+func testMountMctx(mount *exectest.FakeMountExec) *exec.ModuleContext {
 	return &exec.ModuleContext{
 		ProviderSet: exec.ProviderSet{
 			Mount:   mount,
 			Package: exectest.NewFakePackageExec("apt"),
-			File:    file,
+			File:    exectest.NewFakeFileExec(),
 			Command: exectest.NewFakeCommandExec(),
 		},
 	}
 }
 
-// seedProcMounts writes /proc/mounts-format lines into the fake filesystem.
-// Pass no lines for an empty (nothing mounted) table.
-func seedProcMounts(file *exectest.FakeFileExec, lines ...string) {
-	file.PreCreate(exec.ProcMountsPath, []byte(strings.Join(lines, "\n")+"\n"), 0444)
-}
-
 func TestMountMountedName(t *testing.T) {
-	file := exectest.NewFakeFileExec()
-	mctx := testMountMctx(exectest.NewFakeMountExec(), file)
+	mctx := testMountMctx(exectest.NewFakeMountExec())
 	s, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -44,8 +35,7 @@ func TestMountMountedName(t *testing.T) {
 }
 
 func TestMountMountedDefaultMountPoint(t *testing.T) {
-	file := exectest.NewFakeFileExec()
-	mctx := testMountMctx(exectest.NewFakeMountExec(), file)
+	mctx := testMountMctx(exectest.NewFakeMountExec())
 	s, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -59,8 +49,7 @@ func TestMountMountedDefaultMountPoint(t *testing.T) {
 }
 
 func TestMountMountedDeviceRequired(t *testing.T) {
-	file := exectest.NewFakeFileExec()
-	mctx := testMountMctx(exectest.NewFakeMountExec(), file)
+	mctx := testMountMctx(exectest.NewFakeMountExec())
 	_, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when device is missing")
@@ -68,10 +57,8 @@ func TestMountMountedDeviceRequired(t *testing.T) {
 }
 
 func TestMountMountedCheckNeedsChange(t *testing.T) {
-	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file) // nothing mounted
-	mctx := testMountMctx(fake, file)
+	fake := exectest.NewFakeMountExec() // nothing mounted
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -86,11 +73,9 @@ func TestMountMountedCheckNeedsChange(t *testing.T) {
 
 func TestMountMountedCheckNoChange(t *testing.T) {
 	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	// Kernel shows its own default options; declared "defaults" imposes none.
-	seedProcMounts(file, "/dev/sdb1 /mnt/data ext4 rw,relatime 0 0")
+	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults"})
-	mctx := testMountMctx(fake, file)
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -99,78 +84,40 @@ func TestMountMountedCheckNoChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cr.NeedsChange {
-		t.Errorf("expected NeedsChange=false when live mount and fstab match, diff: %s", cr.Diff)
+		t.Errorf("expected NeedsChange=false when mounted and fstab matches, diff: %s", cr.Diff)
 	}
 }
 
-func TestMountMountedCheckLiveDeviceMismatch(t *testing.T) {
-	// The wrong device serving the mountpoint was reported compliant before
-	// — fstab matched and IsMounted only proved *something* was mounted.
+func TestMountMountedCheckDoesNotCompareLiveConfig(t *testing.T) {
+	// BINDING (round-2): the live mount's device/fstype/options are NOT
+	// compared — fstab-language options (nofail/_netdev) and negotiated
+	// fstypes (nfs→nfs4) never appear verbatim in the kernel view, so a
+	// live-config comparison would perma-churn and escalate to production
+	// unmounts. Presence at the mount point is enough.
 	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file, "/dev/sdc1 /mnt/data ext4 rw,relatime 0 0")
-	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults"})
-	mctx := testMountMctx(fake, file)
+	fake.PreMount(exec.MountEntry{Device: "10.0.0.5:/vol", MountPoint: "/mnt/data", FSType: "nfs4", Options: "rw,relatime"})
+	fake.PreFstab(exec.MountEntry{Device: "10.0.0.5:/vol", MountPoint: "/mnt/data", FSType: "nfs", Options: "defaults,nofail,_netdev"})
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
-		"device": "/dev/sdb1",
-	})
-	cr, err := s.Check(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cr.NeedsChange {
-		t.Error("expected NeedsChange=true when a different device is live-mounted")
-	}
-}
-
-func TestMountMountedCheckLiveOptionsSubset(t *testing.T) {
-	// Declared options are a SUBSET check: kernel-added defaults never churn.
-	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file, "/dev/sdb1 /mnt/data ext4 rw,noatime,relatime 0 0")
-	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults,noatime"})
-	mctx := testMountMctx(fake, file)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
-		"device": "/dev/sdb1",
-		"opts":   "defaults,noatime",
+		"device": "10.0.0.5:/vol",
+		"fstype": "nfs",
+		"opts":   "defaults,nofail,_netdev",
 	})
 	cr, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cr.NeedsChange {
-		t.Errorf("expected NeedsChange=false: declared options are active, diff: %s", cr.Diff)
-	}
-}
-
-func TestMountMountedCheckLiveOptionMissing(t *testing.T) {
-	// Declared noatime not active on the live mount: the opts-drift case
-	// that previously never converged after the first fstab-only Apply.
-	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file, "/dev/sdb1 /mnt/data ext4 rw,relatime 0 0")
-	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults,noatime"})
-	mctx := testMountMctx(fake, file)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
-		"device": "/dev/sdb1",
-		"opts":   "defaults,noatime",
-	})
-	cr, err := s.Check(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cr.NeedsChange {
-		t.Error("expected NeedsChange=true when a declared option is not active")
+		t.Errorf("expected NeedsChange=false: live config is not a compared facet, diff: %s", cr.Diff)
 	}
 }
 
 func TestMountMountedCheckFstabPassDrift(t *testing.T) {
-	// Dump/Pass are part of the fstab comparison now.
+	// Dump/Pass are part of the fstab comparison.
 	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file, "/dev/sdb1 /mnt/data ext4 rw,relatime 0 0")
+	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults", Pass: 0})
-	mctx := testMountMctx(fake, file)
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 		"pass":   2,
@@ -184,29 +131,9 @@ func TestMountMountedCheckFstabPassDrift(t *testing.T) {
 	}
 }
 
-func TestMountMountedCheckReadErrorFails(t *testing.T) {
-	// A non-not-exist read error on the mount table fails the phase — it is
-	// never treated as "not mounted".
-	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	file.SetReadError(exec.ProcMountsPath, errors.New("permission denied"))
-	mctx := testMountMctx(fake, file)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
-		"device": "/dev/sdb1",
-	})
-	if _, err := s.Check(context.Background()); err == nil {
-		t.Error("expected Check error when the mount table is unreadable")
-	}
-	if _, err := s.Apply(context.Background()); err == nil {
-		t.Error("expected Apply error when the mount table is unreadable")
-	}
-}
-
 func TestMountMountedApply(t *testing.T) {
-	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file) // nothing mounted
-	mctx := testMountMctx(fake, file)
+	fake := exectest.NewFakeMountExec() // nothing mounted
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 		"fstype": "xfs",
@@ -229,9 +156,8 @@ func TestMountMountedApply(t *testing.T) {
 
 func TestMountMountedApplyAlreadyMountedAddsFstab(t *testing.T) {
 	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file, "/dev/sdb1 /mnt/data ext4 rw,relatime 0 0")
-	mctx := testMountMctx(fake, file)
+	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -252,15 +178,18 @@ func TestMountMountedApplyAlreadyMountedAddsFstab(t *testing.T) {
 	}
 }
 
-func TestMountMountedApplyRemountsOnLiveMismatch(t *testing.T) {
-	// The live mount serves the wrong device: Apply must remount with the
-	// declared config instead of skipping Mount because "something" is there.
+func TestMountMountedApplyNeverUnmountsExistingMount(t *testing.T) {
+	// BINDING (round-2): a mount already serving the mount point — even one
+	// that would look "wrong" under a naive live comparison — is left alone.
+	// Apply mounts only when nothing is mounted there.
 	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file, "/dev/sdc1 /mnt/data ext4 rw,relatime 0 0")
-	fake.PreMount(exec.MountEntry{Device: "/dev/sdc1", MountPoint: "/mnt/data", FSType: "ext4"})
+	fake.PreMount(exec.MountEntry{Device: "/dev/sdc1", MountPoint: "/mnt/data", FSType: "xfs"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults"})
-	mctx := testMountMctx(fake, file)
+	// Any Mount/Unmount attempt would error the Apply — a clean pass proves
+	// the existing mount was left completely untouched.
+	fake.MountErr = errors.New("Mount must not be called on an occupied mount point")
+	fake.UnmountErr = errors.New("Unmount must never be called from Apply")
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -268,24 +197,20 @@ func TestMountMountedApplyRemountsOnLiveMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ar.Changed {
-		t.Error("expected Changed=true")
-	}
-	if !strings.Contains(ar.Diff, "remounted") {
-		t.Errorf("Diff = %q, want a remount", ar.Diff)
+	if ar.Changed {
+		t.Errorf("expected Changed=false (mounted + fstab matches), diff: %s", ar.Diff)
 	}
 	if !fake.IsMountedSync("/mnt/data") {
-		t.Error("expected /mnt/data mounted after remount")
+		t.Error("expected /mnt/data to still be mounted")
 	}
 }
 
 func TestMountMountedApplyConvergedNoOp(t *testing.T) {
 	// Watch-forced Apply on a fully converged mount: clean no-op.
 	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file, "/dev/sdb1 /mnt/data ext4 rw,relatime 0 0")
+	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults"})
-	mctx := testMountMctx(fake, file)
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -298,11 +223,39 @@ func TestMountMountedApplyConvergedNoOp(t *testing.T) {
 	}
 }
 
+func TestMountMountedConvergence(t *testing.T) {
+	// Check → Apply → Check must report converged for every compared facet
+	// (mounted presence + fstab entry incl. dump/pass).
+	fake := exectest.NewFakeMountExec() // nothing mounted, empty fstab
+	mctx := testMountMctx(fake)
+	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+		"device": "/dev/sdb1",
+		"fstype": "xfs",
+		"opts":   "defaults,noatime",
+		"pass":   2,
+	})
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange=true before Apply")
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected converged after Apply, diff: %s", cr.Diff)
+	}
+}
+
 func TestMountMountedRevert(t *testing.T) {
-	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file) // nothing mounted
-	mctx := testMountMctx(fake, file)
+	fake := exectest.NewFakeMountExec() // nothing mounted
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -328,11 +281,9 @@ func TestMountMountedRevertFreshInstanceNoOp(t *testing.T) {
 	// honest diff — the old code claimed "unmounted ... and removed fstab
 	// entry" while doing neither.
 	fake := exectest.NewFakeMountExec()
-	file := exectest.NewFakeFileExec()
-	seedProcMounts(file, "/dev/sdb1 /mnt/data ext4 rw,relatime 0 0")
 	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults"})
-	mctx := testMountMctx(fake, file)
+	mctx := testMountMctx(fake)
 	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
@@ -362,17 +313,8 @@ func TestMountMountedNoProvider(t *testing.T) {
 	}
 }
 
-func TestMountMountedNoFileProvider(t *testing.T) {
-	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Mount: exectest.NewFakeMountExec()}}
-	_, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{"device": "/dev/sdb1"})
-	if err == nil {
-		t.Fatal("expected error when file provider is nil (mount table unreadable)")
-	}
-}
-
 func TestMountMountedRequisites(t *testing.T) {
-	file := exectest.NewFakeFileExec()
-	mctx := testMountMctx(exectest.NewFakeMountExec(), file)
+	mctx := testMountMctx(exectest.NewFakeMountExec())
 	s, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
 		"device":  "/dev/sdb1",
 		"require": []any{"pkg.installed:nfs-utils"},

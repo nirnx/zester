@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -234,20 +235,276 @@ func TestCronPresentApply(t *testing.T) {
 	}
 }
 
-func TestCronPresentRevert(t *testing.T) {
+func TestCronPresentRevertCreatedEntry(t *testing.T) {
+	// Same-instance Apply (created a new entry) then Revert: the created
+	// entry is removed.
+	fake := exectest.NewFakeCronExec()
+	mctx := testCronMctx(fake)
+	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+		"command": "/usr/bin/backup.sh",
+	})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed=true on revert of a created entry")
+	}
+	if len(fake.ListSync("root")) != 0 {
+		t.Error("expected entry removed after Revert")
+	}
+}
+
+func TestCronPresentRevertFreshInstanceNoOp(t *testing.T) {
+	// A fresh instance (standalone ModeRevert) has no apply memo: Revert must
+	// be an explicit clean no-op — the old code deleted the pre-existing
+	// entry by bare command and reported Changed=true.
 	fake := exectest.NewFakeCronExec()
 	fake.PreAdd("root", exec.CronEntry{Command: "/usr/bin/backup.sh"})
 	mctx := testCronMctx(fake)
 	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
-	_, err := s.Revert(context.Background())
+	ar, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.ListSync("root")) != 0 {
-		t.Error("expected entry removed after Revert")
+	if ar.Changed {
+		t.Error("expected Changed=false on fresh-instance Revert")
 	}
+	if ar.Diff != "nothing to revert (no apply recorded in this run)" {
+		t.Errorf("Diff = %q, want the explicit no-op explanation", ar.Diff)
+	}
+	if len(fake.ListSync("root")) != 1 {
+		t.Error("fresh-instance Revert must not delete pre-existing entries")
+	}
+}
+
+func TestCronPresentRevertAfterConvergedApplyNoOp(t *testing.T) {
+	// Apply that no-op'd (already converged) must not arm the revert memo:
+	// Revert leaves the entry alone.
+	fake := exectest.NewFakeCronExec()
+	fake.PreAdd("root", exec.CronEntry{
+		Minute: "0", Hour: "2", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		Command: "/usr/bin/backup.sh", Comment: "backup",
+	})
+	mctx := testCronMctx(fake)
+	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+		"command": "/usr/bin/backup.sh",
+		"minute":  "0",
+		"hour":    "2",
+	})
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Fatalf("expected converged Apply to be a no-op, diff: %s", ar.Diff)
+	}
+	rr, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr.Changed {
+		t.Error("expected Changed=false on Revert after a no-op Apply")
+	}
+	if len(fake.ListSync("root")) != 1 {
+		t.Error("Revert after a no-op Apply must not delete the entry")
+	}
+}
+
+func TestCronPresentRevertPreservesOtherLabelsSameCommand(t *testing.T) {
+	// Two states manage the same command under distinct labels (blessed
+	// coexistence). Reverting one must not delete the other's entry, even
+	// though CronExec.Remove is command-scoped.
+	fake := exectest.NewFakeCronExec()
+	fake.PreAdd("root", exec.CronEntry{
+		Minute: "0", Hour: "*", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		Command: "/usr/bin/sync.sh", Comment: "sync-daily",
+	})
+	mctx := testCronMctx(fake)
+	s, _ := NewCronPresentBuilder(mctx)("sync-hourly", map[string]any{
+		"command": "/usr/bin/sync.sh",
+		"minute":  "30",
+	})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(fake.ListSync("root")); got != 2 {
+		t.Fatalf("expected 2 coexisting entries after Apply, got %d", got)
+	}
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed=true on revert of the created entry")
+	}
+	entries := fake.ListSync("root")
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly the other label's entry to survive, got %v", entries)
+	}
+	if entries[0].Comment != "sync-daily" {
+		t.Errorf("surviving entry = %+v, want the sync-daily one", entries[0])
+	}
+}
+
+func TestCronPresentRevertRestoresAdoptedLine(t *testing.T) {
+	// Apply adopted a hand-written label-less line (stamping the label and
+	// fixing the schedule); a same-instance Revert restores the original
+	// line instead of deleting it.
+	fake := exectest.NewFakeCronExec()
+	fake.PreAdd("root", exec.CronEntry{
+		Minute: "15", Hour: "3", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		Command: "/usr/bin/backup.sh",
+	})
+	mctx := testCronMctx(fake)
+	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+		"command": "/usr/bin/backup.sh",
+		"minute":  "0",
+		"hour":    "2",
+	})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed=true when restoring the adopted line")
+	}
+	entries := fake.ListSync("root")
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 restored entry, got %v", entries)
+	}
+	e := entries[0]
+	if e.Comment != "" || e.Minute != "15" || e.Hour != "3" {
+		t.Errorf("restored entry = %+v, want the original label-less 15 3 line", e)
+	}
+}
+
+func TestCronPresentRevertRestoresSameLabelOriginal(t *testing.T) {
+	// Apply replaced a prior run's entry (same label, edited command); a
+	// same-instance Revert restores the original command in place.
+	fake := exectest.NewFakeCronExec()
+	fake.PreAdd("root", exec.CronEntry{
+		Minute: "0", Hour: "2", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		Command: "/usr/local/bin/backup.sh", Comment: "backup-job",
+	})
+	mctx := testCronMctx(fake)
+	s, _ := NewCronPresentBuilder(mctx)("backup-job", map[string]any{
+		"command": "/usr/local/bin/backup.sh --v2",
+		"minute":  "0",
+		"hour":    "2",
+	})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed=true when restoring the original entry")
+	}
+	entries := fake.ListSync("root")
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 entry after revert, got %v", entries)
+	}
+	if entries[0].Command != "/usr/local/bin/backup.sh" || entries[0].Comment != "backup-job" {
+		t.Errorf("restored entry = %+v, want the original command under the same label", entries[0])
+	}
+}
+
+func TestCronPresentApplyConvergedNoOp(t *testing.T) {
+	// Watch-forced Apply (bypasses Check) on a fully converged entry: clean
+	// no-op — no crontab rewrite, no lying Changed=true.
+	fake := exectest.NewFakeCronExec()
+	fake.PreAdd("root", exec.CronEntry{
+		Minute: "0", Hour: "2", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		Command: "/usr/bin/backup.sh", Comment: "backup",
+	})
+	fake.SetErr = errors.New("Set must not be called when converged")
+	mctx := testCronMctx(fake)
+	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+		"command": "/usr/bin/backup.sh",
+		"minute":  "0",
+		"hour":    "2",
+	})
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Errorf("expected Changed=false when converged, diff: %s", ar.Diff)
+	}
+}
+
+// cronConvergenceWalk runs Check → Apply → Check and fails unless the second
+// Check reports converged: what Check compares must be exactly what Apply
+// produces.
+func cronConvergenceWalk(t *testing.T, fake *exectest.FakeCronExec, config map[string]any) {
+	t.Helper()
+	mctx := testCronMctx(fake)
+	s, err := NewCronPresentBuilder(mctx)("backup", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange=true before Apply")
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected converged after Apply, diff: %s", cr.Diff)
+	}
+}
+
+func TestCronPresentConvergenceCreate(t *testing.T) {
+	cronConvergenceWalk(t, exectest.NewFakeCronExec(), map[string]any{
+		"command": "/usr/bin/backup.sh",
+		"minute":  "0",
+		"hour":    "2",
+	})
+}
+
+func TestCronPresentConvergenceAdopt(t *testing.T) {
+	fake := exectest.NewFakeCronExec()
+	fake.PreAdd("root", exec.CronEntry{
+		Minute: "15", Hour: "3", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		Command: "/usr/bin/backup.sh",
+	})
+	cronConvergenceWalk(t, fake, map[string]any{
+		"command": "/usr/bin/backup.sh",
+		"minute":  "0",
+		"hour":    "2",
+	})
+}
+
+func TestCronPresentConvergenceCommandEdit(t *testing.T) {
+	fake := exectest.NewFakeCronExec()
+	fake.PreAdd("root", exec.CronEntry{
+		Minute: "0", Hour: "2", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		Command: "/usr/bin/backup.sh", Comment: "backup",
+	})
+	cronConvergenceWalk(t, fake, map[string]any{
+		"command": "/usr/bin/backup.sh --v2",
+		"minute":  "0",
+		"hour":    "2",
+	})
 }
 
 func TestCronPresentNoProvider(t *testing.T) {

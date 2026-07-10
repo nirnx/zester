@@ -34,9 +34,14 @@ type UserPresent struct {
 	// comparison; required only when PrimaryGroup is declared.
 	group exec.GroupExec
 
-	// backup stores original user info for revert.
-	original   *exec.UserInfo
-	wasCreated bool
+	// backup stores original user info for revert. original is armed ONLY
+	// when Apply actually modified the user (a converged Apply must leave
+	// Revert a clean no-op); originalHash/passwordChanged memo the password
+	// facet, which exec.UserInfo does not carry.
+	original        *exec.UserInfo
+	originalHash    string
+	passwordChanged bool
+	wasCreated      bool
 }
 
 // NewUserPresentBuilder returns a state.Builder that creates UserPresent states.
@@ -222,9 +227,10 @@ func (u *UserPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 	}
 
 	// Modify existing user.
-	u.original = info
 	opts := exec.UserModifyOpts{}
 	changed := false
+	passwordDrift := false
+	var currentHash string
 
 	if u.UID != 0 && info.UID != u.UID {
 		opts.UID = &u.UID
@@ -265,6 +271,8 @@ func (u *UserPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 		}
 		if hash != u.Password {
 			opts.Password = &u.Password
+			currentHash = hash
+			passwordDrift = true
 			changed = true
 		}
 	}
@@ -281,11 +289,20 @@ func (u *UserPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 	}
 
 	if !changed {
+		// Converged: no usermod, and the revert memo stays UNARMED — a later
+		// Revert on this instance is a clean no-op, not a gratuitous usermod.
 		return state.ApplyResult{Changed: false}, nil
 	}
 
 	if err := u.user.Modify(ctx, u.UserName, opts); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("user.present: modify %s: %w", u.UserName, err)
+	}
+
+	// Arm the revert memo only now that drift was actually applied.
+	u.original = info
+	if passwordDrift {
+		u.originalHash = currentHash
+		u.passwordChanged = true
 	}
 
 	return state.ApplyResult{
@@ -307,20 +324,89 @@ func (u *UserPresent) Revert(ctx context.Context) (state.ApplyResult, error) {
 	}
 
 	if u.original != nil {
-		opts := exec.UserModifyOpts{
-			UID:      &u.original.UID,
-			GID:      &u.original.GID,
-			Home:     &u.original.Home,
-			Shell:    &u.original.Shell,
-			FullName: &u.original.FullName,
-			Groups:   &u.original.Groups,
+		// Restore original attributes by diffing the CURRENT user against the
+		// memoized original — only actual drift is reverted, and the reported
+		// Diff reflects what was really done (mirrors group.present).
+		info, err := u.user.Lookup(ctx, u.UserName)
+		if err != nil {
+			return state.ApplyResult{}, fmt.Errorf("user.present: revert lookup %s: %w", u.UserName, err)
 		}
+		if info == nil {
+			return state.ApplyResult{
+				Changed: false,
+				Diff:    fmt.Sprintf("user %s no longer exists; nothing to restore", u.UserName),
+			}, nil
+		}
+
+		opts := exec.UserModifyOpts{}
+		changed := false
+		if info.UID != u.original.UID {
+			opts.UID = &u.original.UID
+			changed = true
+		}
+		if info.GID != u.original.GID {
+			opts.GID = &u.original.GID
+			changed = true
+		}
+		if info.Home != u.original.Home {
+			opts.Home = &u.original.Home
+			changed = true
+		}
+		if info.Shell != u.original.Shell {
+			opts.Shell = &u.original.Shell
+			changed = true
+		}
+		if info.FullName != u.original.FullName {
+			opts.FullName = &u.original.FullName
+			changed = true
+		}
+		if !stringSliceEqual(info.Groups, u.original.Groups) {
+			opts.Groups = &u.original.Groups
+			changed = true
+		}
+
+		// The password facet: exec.UserInfo carries no hash, so it is memoized
+		// separately when Apply changed it. An empty original hash (account had
+		// none / shadow unreadable) is not safely restorable via usermod -p —
+		// skip it and say so instead of silently leaving the Apply-set hash
+		// behind a "reverted to original state" claim.
+		passwordSkipped := false
+		if u.passwordChanged {
+			hash, err := u.user.PasswordHash(ctx, u.UserName)
+			if err != nil {
+				return state.ApplyResult{}, fmt.Errorf("user.present: revert password hash %s: %w", u.UserName, err)
+			}
+			if hash != u.originalHash {
+				if u.originalHash != "" {
+					opts.Password = &u.originalHash
+					changed = true
+				} else {
+					passwordSkipped = true
+				}
+			}
+		}
+
+		if !changed {
+			diff := fmt.Sprintf("user %s already matches original state", u.UserName)
+			if passwordSkipped {
+				diff += " (password not restored: no original hash recorded)"
+			}
+			return state.ApplyResult{
+				Changed: false,
+				Diff:    diff,
+			}, nil
+		}
+
 		if err := u.user.Modify(ctx, u.UserName, opts); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("user.present: revert modify %s: %w", u.UserName, err)
 		}
+		diff := fmt.Sprintf("reverted user %s to original state", u.UserName)
+		if passwordSkipped {
+			diff += " (password not restored: no original hash recorded)"
+		}
 		return state.ApplyResult{
 			Changed: true,
-			Diff:    fmt.Sprintf("reverted user %s to original state", u.UserName),
+			Diff:    diff,
 		}, nil
 	}
 

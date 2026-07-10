@@ -205,6 +205,11 @@ type SvcEnabled struct {
 	Service string
 
 	svc exec.ServiceExec
+
+	// revert state tracked during Apply: armed ONLY when Apply actually
+	// enabled the service, so a fresh-instance or no-op-Apply Revert never
+	// disables a service this run did not touch.
+	wasEnabled bool
 }
 
 // NewSvcEnabledBuilder returns a state.Builder that creates SvcEnabled states.
@@ -248,9 +253,24 @@ func (s *SvcEnabled) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (s *SvcEnabled) Apply(ctx context.Context) (state.ApplyResult, error) {
+	// Self-contained full flow: a watch-forced Apply bypasses Check, and an
+	// already-enabled service must be a clean no-op (and must not arm the
+	// revert memo).
+	enabled, err := s.svc.IsEnabled(ctx, s.Service)
+	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("service.enabled: check %s: %w", s.Service, err)
+	}
+	if enabled {
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    fmt.Sprintf("%s already enabled", s.Service),
+		}, nil
+	}
+
 	if err := s.svc.Enable(ctx, s.Service); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("service.enabled: enable %s: %w", s.Service, err)
 	}
+	s.wasEnabled = true
 	return state.ApplyResult{
 		Changed: true,
 		Diff:    fmt.Sprintf("enabled %s", s.Service),
@@ -262,6 +282,12 @@ func (s *SvcEnabled) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (s *SvcEnabled) Revert(ctx context.Context) (state.ApplyResult, error) {
+	if !s.wasEnabled {
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    "nothing to revert (no apply recorded in this run)",
+		}, nil
+	}
 	if err := s.svc.Disable(ctx, s.Service); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("service.enabled: revert disable %s: %w", s.Service, err)
 	}
@@ -282,7 +308,10 @@ type SvcDead struct {
 
 	svc exec.ServiceExec
 
-	// revert state tracked during Apply.
+	// revert state tracked during Apply: armed ONLY for the actions Apply
+	// really performed, so a fresh-instance or no-op-Apply Revert never
+	// starts the very service this state declares dead.
+	wasStopped  bool
 	wasDisabled bool
 }
 
@@ -363,6 +392,7 @@ func (s *SvcDead) Apply(ctx context.Context) (state.ApplyResult, error) {
 		if err := s.svc.Stop(ctx, s.Service); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("service.dead: stop %s: %w", s.Service, err)
 		}
+		s.wasStopped = true
 		acts = append(acts, "stopped")
 	}
 
@@ -400,16 +430,27 @@ func (s *SvcDead) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (s *SvcDead) Revert(ctx context.Context) (state.ApplyResult, error) {
+	var acts []string
 	if s.wasDisabled {
 		if err := s.svc.Enable(ctx, s.Service); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("service.dead: revert enable %s: %w", s.Service, err)
 		}
+		acts = append(acts, "re-enabled")
 	}
-	if err := s.svc.Start(ctx, s.Service); err != nil {
-		return state.ApplyResult{}, fmt.Errorf("service.dead: revert start %s: %w", s.Service, err)
+	if s.wasStopped {
+		if err := s.svc.Start(ctx, s.Service); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("service.dead: revert start %s: %w", s.Service, err)
+		}
+		acts = append(acts, "started")
+	}
+	if len(acts) == 0 {
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    "nothing to revert (no apply recorded in this run)",
+		}, nil
 	}
 	return state.ApplyResult{
 		Changed: true,
-		Diff:    fmt.Sprintf("started %s (revert stop)", s.Service),
+		Diff:    fmt.Sprintf("%s %s (revert)", strings.Join(acts, ", "), s.Service),
 	}, nil
 }

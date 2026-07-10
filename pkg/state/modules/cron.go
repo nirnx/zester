@@ -25,6 +25,14 @@ type CronPresent struct {
 	Command  string
 
 	cron exec.CronExec
+
+	// Revert memos — armed ONLY when Apply actually wrote the crontab.
+	// original is the pre-Apply entry at this identity (nil when Apply
+	// created a brand-new entry): a same-instance Revert restores it, and a
+	// fresh instance (or converged Apply) reverts as a clean no-op instead
+	// of blindly deleting by command.
+	applied  bool
+	original *exec.CronEntry
 }
 
 // NewCronPresentBuilder returns a state.Builder that creates CronPresent states.
@@ -99,6 +107,26 @@ func (c *CronPresent) desiredEntry() exec.CronEntry {
 	}
 }
 
+// entryDiffs reports how e drifts from the desired entry. Empty means fully
+// converged. Shared by Check and Apply so what Check compares is exactly what
+// Apply enforces (and vice versa).
+func (c *CronPresent) entryDiffs(e exec.CronEntry) []string {
+	var diffs []string
+	if e.Command != c.Command {
+		diffs = append(diffs, fmt.Sprintf("command %q != %q", e.Command, c.Command))
+	}
+	if e.Minute != c.Minute || e.Hour != c.Hour ||
+		e.DayOfMonth != c.DayMonth || e.Month != c.Month || e.DayOfWeek != c.DayWeek {
+		diffs = append(diffs, "schedule differs")
+	}
+	if e.Comment != c.Label {
+		// A label-less entry matched by command (adoption fallback): apply
+		// stamps the identifier so future command edits replace, not orphan.
+		diffs = append(diffs, fmt.Sprintf("entry is missing identifier comment %q", c.Label))
+	}
+	return diffs
+}
+
 func (c *CronPresent) Check(ctx context.Context) (state.CheckResult, error) {
 	entries, err := c.cron.List(ctx, c.User)
 	if err != nil {
@@ -114,22 +142,7 @@ func (c *CronPresent) Check(ctx context.Context) (state.CheckResult, error) {
 		}, nil
 	}
 
-	e := entries[i]
-	var diffs []string
-	if e.Command != c.Command {
-		diffs = append(diffs, fmt.Sprintf("command %q != %q", e.Command, c.Command))
-	}
-	if e.Minute != c.Minute || e.Hour != c.Hour ||
-		e.DayOfMonth != c.DayMonth || e.Month != c.Month || e.DayOfWeek != c.DayWeek {
-		diffs = append(diffs, "schedule differs")
-	}
-	if e.Comment != c.Label {
-		// A comment-less entry matched by command (adoption fallback): apply
-		// stamps the identifier so future command edits replace, not orphan.
-		diffs = append(diffs, fmt.Sprintf("entry is missing identifier comment %q", c.Label))
-	}
-
-	if len(diffs) > 0 {
+	if diffs := c.entryDiffs(entries[i]); len(diffs) > 0 {
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("cron entry %q: %s", c.Label, strings.Join(diffs, "; ")),
@@ -139,10 +152,31 @@ func (c *CronPresent) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (c *CronPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
+	// Self-contained full flow: a watch-forced Apply bypasses Check, and a
+	// converged entry must be a clean no-op — not a lossy full-crontab
+	// rewrite reported as a change.
+	entries, err := c.cron.List(ctx, c.User)
+	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("cron.present: list %s: %w", c.User, err)
+	}
+
 	entry := c.desiredEntry()
+	i := exec.FindCronEntry(entries, entry)
+	if i >= 0 {
+		if len(c.entryDiffs(entries[i])) == 0 {
+			return state.ApplyResult{
+				Changed: false,
+				Diff:    fmt.Sprintf("cron entry %q already converged", c.Label),
+			}, nil
+		}
+		orig := entries[i]
+		c.original = &orig
+	}
+
 	if err := c.cron.Set(ctx, c.User, entry); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("cron.present: set %s: %w", c.Command, err)
 	}
+	c.applied = true
 	return state.ApplyResult{
 		Changed: true,
 		Diff:    fmt.Sprintf("set cron entry %q for user %s", c.Command, c.User),
@@ -155,12 +189,86 @@ func (c *CronPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (c *CronPresent) Revert(ctx context.Context) (state.ApplyResult, error) {
+	if !c.applied {
+		// Fresh instance or converged Apply: nothing was written this run —
+		// never delete by bare command (that would destroy pre-existing lines
+		// and same-command entries owned by other labels).
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    "nothing to revert (no apply recorded in this run)",
+		}, nil
+	}
+
+	// Apply replaced a prior entry under the SAME label: the label still
+	// identifies the line, so a plain Set restores it in place.
+	if c.original != nil && c.original.Comment == c.Label {
+		if err := c.cron.Set(ctx, c.User, *c.original); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("cron.present: revert restore %s: %w", c.Command, err)
+		}
+		return state.ApplyResult{
+			Changed: true,
+			Diff:    fmt.Sprintf("restored cron entry %q (revert)", c.Label),
+		}, nil
+	}
+
+	// Apply created a new labeled entry or adopted a label-less line: remove
+	// OUR labeled line and, for an adoption, put the original back. Remove is
+	// command-scoped (label-scoped removal is inexpressible via CronExec), so
+	// same-command entries owned by other labels are preserved and re-added.
+	entries, err := c.cron.List(ctx, c.User)
+	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("cron.present: revert list %s: %w", c.User, err)
+	}
+	var labeled, unlabeled []exec.CronEntry
+	found := false
+	for _, e := range entries {
+		if e.Command != c.Command {
+			continue
+		}
+		if !found && e.Comment == c.Label {
+			found = true // the line this Apply wrote — dropped (or replaced by original)
+			continue
+		}
+		if e.Comment != "" {
+			labeled = append(labeled, e)
+		} else {
+			unlabeled = append(unlabeled, e)
+		}
+	}
+	if !found && c.original == nil {
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    fmt.Sprintf("cron entry %q no longer present; nothing to revert", c.Label),
+		}, nil
+	}
+
 	if err := c.cron.Remove(ctx, c.User, c.Command); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("cron.present: revert remove %s: %w", c.Command, err)
 	}
+	// Re-add preserved entries: labeled ones first — a label-less Set matches
+	// only label-less lines, so this order re-adds every line exactly once.
+	for _, e := range labeled {
+		if err := c.cron.Set(ctx, c.User, e); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("cron.present: revert re-add %q: %w", e.Comment, err)
+		}
+	}
+	for _, e := range unlabeled {
+		if err := c.cron.Set(ctx, c.User, e); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("cron.present: revert re-add %s: %w", e.Command, err)
+		}
+	}
+	if c.original != nil {
+		if err := c.cron.Set(ctx, c.User, *c.original); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("cron.present: revert restore %s: %w", c.Command, err)
+		}
+		return state.ApplyResult{
+			Changed: true,
+			Diff:    fmt.Sprintf("restored adopted cron entry for %q (revert)", c.Command),
+		}, nil
+	}
 	return state.ApplyResult{
 		Changed: true,
-		Diff:    fmt.Sprintf("removed cron entry %q (revert)", c.Command),
+		Diff:    fmt.Sprintf("removed cron entry %q (revert)", c.Label),
 	}, nil
 }
 
