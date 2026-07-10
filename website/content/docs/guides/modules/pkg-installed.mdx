@@ -57,9 +57,11 @@ Checks whether the package is installed using the manager-specific query command
 
 | Manager | Check Command |
 |---|---|
-| apt | `dpkg -s <package>` |
+| apt | `dpkg-query -W -f='${db:Status-Status}' <package>` — must report `installed`; a package in `rc` state (removed, conffiles remain) counts as **not** installed |
 | yum/dnf | `rpm -q <package>` |
 | brew | `brew list --formula <package>` |
+
+When `version:` is declared, Check also compares the installed version against the pin — any other installed version reports changes needed (both upgrade and downgrade directions), so version drift converges instead of being silently accepted. Without a declared `version:`, any installed version satisfies the state.
 
 ---
 

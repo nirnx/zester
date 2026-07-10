@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"strings"
 
@@ -36,8 +38,12 @@ type PkgrepoManaged struct {
 	// File overrides the default repository definition path.
 	File string
 
-	// KeyURL is an optional signing-key URL. On apt the key is fetched and
-	// imported; on yum it is written as the gpgkey= field.
+	// KeyURL is an optional signing-key URL. On apt the key is fetched to a
+	// persistent keyring file (see aptKeyringPath) and imported; Check
+	// verifies that file exists — a repo whose .list matches but whose key
+	// was never imported (or was deleted) is NOT converged. On yum it is
+	// written as the gpgkey= field, which the compared file content already
+	// covers.
 	KeyURL string
 
 	// Enabled controls the yum "enabled=" field. Defaults to true.
@@ -131,6 +137,14 @@ func (r *PkgrepoManaged) isPPA() bool {
 	return r.family == "debian" && r.PPA != "" && r.BaseURL == ""
 }
 
+// aptKeyringPath returns the persistent path the fetched apt signing key is
+// stored at. It is both the imported artifact and Check's convergence marker
+// for the key dimension (the KeyURL appears nowhere in the .list content, so
+// the content compare alone is blind to a never-imported key).
+func (r *PkgrepoManaged) aptKeyringPath() string {
+	return "/etc/apt/keyrings/zester-" + r.RepoName + ".gpg"
+}
+
 // filePath returns the repository definition file path.
 func (r *PkgrepoManaged) filePath() string {
 	if r.File != "" {
@@ -185,11 +199,18 @@ func (r *PkgrepoManaged) Check(ctx context.Context) (state.CheckResult, error) {
 
 	p := r.filePath()
 	current, err := r.file.ReadFile(ctx, p)
-	if err != nil {
+	switch {
+	case err == nil:
+	case errors.Is(err, fs.ErrNotExist):
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("repo file %s does not exist", p),
 		}, nil
+	default:
+		// Any non-not-exist read failure (permissions, I/O) is an answer we
+		// don't have, not "missing" — failing the phase beats an Apply that
+		// overwrites a file we couldn't read.
+		return state.CheckResult{}, fmt.Errorf("pkgrepo.managed: read %s: %w", p, err)
 	}
 
 	if string(current) != desired {
@@ -197,6 +218,25 @@ func (r *PkgrepoManaged) Check(ctx context.Context) (state.CheckResult, error) {
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("repo file %s content differs", p),
 		}, nil
+	}
+
+	// On Debian the signing key is part of the desired state but invisible
+	// in the compared .list bytes — verify the imported keyring artifact
+	// exists. Only when key_url is declared: an undeclared key must never
+	// churn the state.
+	if r.family == "debian" && r.KeyURL != "" {
+		kp := r.aptKeyringPath()
+		_, err := r.file.ReadFile(ctx, kp)
+		switch {
+		case err == nil:
+		case errors.Is(err, fs.ErrNotExist):
+			return state.CheckResult{
+				NeedsChange: true,
+				Diff:        fmt.Sprintf("signing key for repo %s is not imported (%s missing)", r.RepoName, kp),
+			}, nil
+		default:
+			return state.CheckResult{}, fmt.Errorf("pkgrepo.managed: read keyring %s: %w", kp, err)
+		}
 	}
 
 	return state.CheckResult{
@@ -289,6 +329,15 @@ func (r *PkgrepoManaged) Revert(ctx context.Context) (state.ApplyResult, error) 
 		return state.ApplyResult{}, fmt.Errorf("pkgrepo.managed: remove %s: %w", p, err)
 	}
 
+	// Clean up the keyring artifact Apply created; an already-absent file is
+	// fine (Apply may never have imported a key in this lifetime).
+	if r.family == "debian" && r.KeyURL != "" {
+		kp := r.aptKeyringPath()
+		if err := r.file.Remove(ctx, kp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return state.ApplyResult{}, fmt.Errorf("pkgrepo.managed: remove keyring %s: %w", kp, err)
+		}
+	}
+
 	return state.ApplyResult{
 		Changed: true,
 		Diff:    fmt.Sprintf("removed repo file %s", p),
@@ -315,15 +364,28 @@ func (r *PkgrepoManaged) writeRepoFile(ctx context.Context) error {
 	return nil
 }
 
-// importAptKey fetches and imports an apt signing key.
+// importAptKey fetches an apt signing key to the persistent keyring path
+// (Check's convergence marker — a /tmp download would vanish on reboot) and
+// imports it into the apt trust store.
 func (r *PkgrepoManaged) importAptKey(ctx context.Context) error {
-	keyfile := fmt.Sprintf("/tmp/zester-repo-%s.gpg", r.RepoName)
-	if _, err := r.cmd.Run(ctx, exec.CommandOpts{
+	res, err := r.cmd.Run(ctx, exec.CommandOpts{
 		Command: "curl",
-		Args:    []string{"-fsSL", "-o", keyfile, r.KeyURL},
-	}); err != nil {
+		Args:    []string{"-fsSL", r.KeyURL},
+	})
+	if err != nil || res == nil {
 		return fmt.Errorf("pkgrepo.managed: fetch key %s: %w", r.KeyURL, err)
 	}
+
+	keyfile := r.aptKeyringPath()
+	if dir := path.Dir(keyfile); dir != "" && dir != "." {
+		if err := r.file.MkdirAll(ctx, dir, 0755); err != nil {
+			return fmt.Errorf("pkgrepo.managed: mkdir %s: %w", dir, err)
+		}
+	}
+	if err := r.file.WriteFile(ctx, keyfile, []byte(res.Stdout), 0644); err != nil {
+		return fmt.Errorf("pkgrepo.managed: write keyring %s: %w", keyfile, err)
+	}
+
 	if _, err := r.cmd.Run(ctx, exec.CommandOpts{
 		Command: "apt-key",
 		Args:    []string{"add", keyfile},

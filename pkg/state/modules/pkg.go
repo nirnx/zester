@@ -17,7 +17,9 @@ type PkgInstalled struct {
 	// Package is the name of the package to install.
 	Package string
 
-	// Version is an optional version constraint.
+	// Version is an optional version constraint. When declared, Check
+	// compares it against the provider's InstalledVersion — any other
+	// installed version needs a change (upgrades AND downgrades converge).
 	Version string
 
 	// Refresh forces a package cache refresh before install.
@@ -63,16 +65,33 @@ func (p *PkgInstalled) Check(ctx context.Context) (state.CheckResult, error) {
 		return state.CheckResult{}, fmt.Errorf("pkg.installed: check %s: %w", p.Package, err)
 	}
 
-	if installed {
+	if !installed {
 		return state.CheckResult{
-			NeedsChange: false,
-			Diff:        fmt.Sprintf("%s is already installed", p.Package),
+			NeedsChange: true,
+			Diff:        fmt.Sprintf("%s needs to be installed", p.Package),
 		}, nil
 	}
 
+	// A declared version pin is part of the desired state: presence alone
+	// does not satisfy it. Only compare when the state declares version:
+	// — an undeclared pin must never churn on whatever happens to be
+	// installed.
+	if p.Version != "" {
+		got, err := p.pkg.InstalledVersion(ctx, p.Package)
+		if err != nil {
+			return state.CheckResult{}, fmt.Errorf("pkg.installed: installed version of %s: %w", p.Package, err)
+		}
+		if got != p.Version {
+			return state.CheckResult{
+				NeedsChange: true,
+				Diff:        fmt.Sprintf("%s version mismatch: got %q, want %q", p.Package, got, p.Version),
+			}, nil
+		}
+	}
+
 	return state.CheckResult{
-		NeedsChange: true,
-		Diff:        fmt.Sprintf("%s needs to be installed", p.Package),
+		NeedsChange: false,
+		Diff:        fmt.Sprintf("%s is already installed", p.Package),
 	}, nil
 }
 

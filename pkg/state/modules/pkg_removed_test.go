@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -166,7 +167,11 @@ func TestPkgRemovedApplyError(t *testing.T) {
 	}
 }
 
-func TestPkgRemovedRevert(t *testing.T) {
+// Revert deliberately no longer reinstalls: no phase records the removed
+// version and it cannot be re-derived, so the old reinstall-latest behavior
+// (driven by a never-written savedVersion memo) was a guess, not Apply's
+// inverse. A fresh instance's Revert must be an explicit clean no-op.
+func TestPkgRemovedRevertFreshInstanceIsCleanNoOp(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	mctx := testPkgRemovedMctx(fakePkg)
 	builder := NewPkgRemovedBuilder(mctx)
@@ -179,12 +184,101 @@ func TestPkgRemovedRevert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ar.Changed {
-		t.Error("expected Changed after revert (reinstall)")
+	if ar.Changed {
+		t.Error("expected Changed=false: revert has nothing recorded to restore")
+	}
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("expected an honest no-op diff, got %q", ar.Diff)
+	}
+	if fakePkg.IsInstalledSync("nginx") {
+		t.Error("revert must not install anything")
+	}
+}
+
+func TestPkgRemovedRevertAfterApplyIsCleanNoOp(t *testing.T) {
+	// Even same-instance revert cannot reconstruct the removed version, so
+	// it stays a no-op rather than reinstalling an arbitrary candidate.
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "1.20.1-1")
+	mctx := testPkgRemovedMctx(fakePkg)
+	builder := NewPkgRemovedBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	if !fakePkg.IsInstalledSync("nginx") {
-		t.Error("package should be reinstalled after Revert")
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected Changed=false from revert")
+	}
+	if fakePkg.IsInstalledSync("nginx") {
+		t.Error("revert must not reinstall the package")
+	}
+}
+
+func TestPkgRemovedConvergesAfterApply(t *testing.T) {
+	// Apply(remove) -> Check must observe convergence: the provider's
+	// installed-probe reports the package gone, so the state stops
+	// re-applying (and stops firing watch/onchanges dependents every run).
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "1.20.1-1")
+	mctx := testPkgRemovedMctx(fakePkg)
+	builder := NewPkgRemovedBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("precondition: installed package should need removal")
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected convergence after removal, diff %q", cr.Diff)
+	}
+}
+
+func TestPkgRemovedCheckConvergesOnDebianRcState(t *testing.T) {
+	// After `apt-get remove` a conffile-bearing package sits in dpkg 'rc'
+	// state ("config-files" status). The status-aware provider probe must
+	// report it NOT installed, so pkg.removed converges instead of
+	// re-running the removal (Changed=true) on every highstate.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: "config-files", ExitCode: 0}, nil)
+	mctx := &exec.ModuleContext{
+		ProviderSet: exec.ProviderSet{
+			Package: exec.NewAptProvider(fakeCmd),
+			Command: fakeCmd,
+		},
+	}
+	builder := NewPkgRemovedBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change for an rc-state package, diff %q", cr.Diff)
 	}
 }
 
