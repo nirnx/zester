@@ -2,12 +2,14 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -330,6 +332,142 @@ func TestFileBlockReplaceRevert(t *testing.T) {
 	}
 	if string(data) != initial {
 		t.Errorf("reverted content does not match original:\ngot:  %q\nwant: %q", data, initial)
+	}
+}
+
+func TestFileBlockReplaceFreshInstanceRevertIsNoOp(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	filePath := filepath.Join(tmp, "sshd_config")
+	original := "Port 22\n# START managed zone\nold\n# END managed zone\nUseDNS no\n"
+	if err := os.WriteFile(filePath, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx())(filePath, map[string]any{
+		"content": "new",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if ar.Changed {
+		t.Error("fresh-instance revert must not report a change")
+	}
+	if ar.Diff != fsxNothingToRevert {
+		t.Errorf("Diff: got %q, want %q", ar.Diff, fsxNothingToRevert)
+	}
+	got, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("file must survive a fresh-instance revert: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("content after revert: got %q, want %q", string(got), original)
+	}
+}
+
+func TestFileBlockReplaceRevertRemovesCreatedFile(t *testing.T) {
+	ctx := context.Background()
+	filePath := filepath.Join(t.TempDir(), "new.conf")
+
+	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx())(filePath, map[string]any{
+		"content": "hello", "append_if_not_found": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed reverting a file created by this instance's Apply")
+	}
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Error("expected created file removed on same-instance revert")
+	}
+}
+
+func TestFileBlockReplaceApplyRecomputesExistencePerInvocation(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	filePath := filepath.Join(tmp, "cfg.conf")
+	initial := "top\n# START managed zone\nold\n# END managed zone\nbottom\n"
+	if err := os.WriteFile(filePath, []byte(initial), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx())(filePath, map[string]any{
+		"content": "new", "append_if_not_found": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Apply(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Details["action"] != "replaced" {
+		t.Fatalf("first apply action: got %q, want %q", ar.Details["action"], "replaced")
+	}
+
+	// The file vanishes between invocations (e.g. between retry attempts).
+	if err := os.Remove(filePath); err != nil {
+		t.Fatal(err)
+	}
+
+	ar2, err := s.Apply(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar2.Details["action"] != "created" {
+		t.Errorf("apply on a now-missing file: action got %q, want %q (existence must be re-derived per invocation, not read from a stale instance flag)",
+			ar2.Details["action"], "created")
+	}
+
+	// The first invocation's genuine backup still wins on revert.
+	rr, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rr.Changed {
+		t.Error("expected Changed on revert")
+	}
+	got, _ := os.ReadFile(filePath)
+	if string(got) != initial {
+		t.Errorf("revert content: got %q, want original %q", string(got), initial)
+	}
+}
+
+func TestFileBlockReplaceReadErrorFailsCheckAndApply(t *testing.T) {
+	ctx := context.Background()
+	original := "# START managed zone\nold\n# END managed zone\n"
+	fake := exectest.NewFakeFileExec()
+	fake.PreCreate("/etc/cfg.conf", []byte(original), 0644)
+	fake.SetReadError("/etc/cfg.conf", errors.New("input/output error"))
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
+	s, err := NewFileBlockReplaceBuilder(mctx)("/etc/cfg.conf", map[string]any{
+		"content": "new", "append_if_not_found": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("Check: want error when read fails with a non-not-exist error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("Apply: want error when read fails with a non-not-exist error")
+	}
+	if got, _ := fake.GetFile("/etc/cfg.conf"); string(got) != original {
+		t.Errorf("file must not be modified on a read error: got %q", string(got))
 	}
 }
 

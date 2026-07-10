@@ -2,11 +2,13 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -196,6 +198,76 @@ func TestFileLineRevert(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != "a\nb\n" {
 		t.Errorf("revert content: got %q", string(got))
+	}
+}
+
+func TestFileLineFreshInstanceRevertIsNoOp(t *testing.T) {
+	ctx := context.Background()
+	original := "a\nb\n"
+	path := writeTempFile(t, "fresh.txt", original)
+	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{"content": "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if ar.Changed {
+		t.Error("fresh-instance revert must not report a change")
+	}
+	if ar.Diff != fsxNothingToRevert {
+		t.Errorf("Diff: got %q, want %q", ar.Diff, fsxNothingToRevert)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("file must survive a fresh-instance revert: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("content after revert: got %q, want %q", string(got), original)
+	}
+}
+
+func TestFileLineRevertRemovesCreatedFile(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "new.txt")
+	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{"content": "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed reverting a file created by this instance's Apply")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("expected created file removed on same-instance revert")
+	}
+}
+
+func TestFileLineReadErrorFailsCheckAndApply(t *testing.T) {
+	ctx := context.Background()
+	fake := exectest.NewFakeFileExec()
+	fake.PreCreate("/etc/app.conf", []byte("keep\n"), 0644)
+	fake.SetReadError("/etc/app.conf", errors.New("input/output error"))
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
+	s, err := NewFileLineBuilder(mctx)("/etc/app.conf", map[string]any{"content": "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("Check: want error when read fails with a non-not-exist error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("Apply: want error when read fails with a non-not-exist error")
+	}
+	if got, _ := fake.GetFile("/etc/app.conf"); string(got) != "keep\n" {
+		t.Errorf("file must not be modified on a read error: got %q", string(got))
 	}
 }
 

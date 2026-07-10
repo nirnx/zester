@@ -7,6 +7,31 @@ All notable changes to Zester are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **Text-editing file states no longer destroy files on a fresh-instance
+  Revert.** `file.line`, `file.append`, `file.blockreplace`, `file.comment`/
+  `file.uncomment`, `file.keyvalue`, and `file.replace` interpreted "no
+  backup recorded in this instance" as "the file did not exist before Apply"
+  and DELETED the target file — so a `ModeRevert` run over freshly built
+  states (the only realistic revert, since states are compiled fresh per
+  execution) removed pre-existing files wholesale (e.g. all of
+  `/etc/ssh/sshd_config` for a state that merely commented one line). Revert
+  without a same-instance Apply memo is now an explicit clean no-op
+  (`Changed: false`, diff `nothing to revert (no apply recorded in this
+  run)`); a file genuinely CREATED by this instance's Apply is still removed
+  on revert (tracked by a dedicated memo, not inferred from the missing
+  backup). The shared `fsxRevert` helper carries the fix, so `file.copy`
+  inherits the safe no-op as well.
+- **Text-editing file states no longer treat every read failure as "file
+  absent".** The same six states conflated ANY `ReadFile` error (EIO, EACCES,
+  NFS ESTALE, …) with "file does not exist"; with `append_if_not_found`-style
+  options a transiently unreadable-but-writable file could be truncated down
+  to just the managed content (worst in `file.replace`/`file.keyvalue`). Only
+  `fs.ErrNotExist` now selects the file-absent path; any other read error
+  fails the phase with a wrapped error and never writes.
+- **`file.blockreplace` Apply re-derives file existence per invocation** from
+  a fresh read instead of a persisting instance flag — a retried/watch-forced
+  apply after the file vanished mid-run now takes the create path (action
+  `created`) instead of misreporting an append on phantom content.
 - **`pkg.latest` now refreshes the package cache BEFORE checking
   upgradability** (Salt parity). Refresh (default on) previously ran only in
   Apply, but Check consulted the stale on-disk index and short-circuited

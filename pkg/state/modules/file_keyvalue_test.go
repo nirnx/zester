@@ -2,11 +2,13 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -137,6 +139,84 @@ func TestFileKeyValueRevert(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != original {
 		t.Errorf("revert content: got %q", string(got))
+	}
+}
+
+func TestFileKeyValueFreshInstanceRevertIsNoOp(t *testing.T) {
+	ctx := context.Background()
+	original := "K=old\n"
+	path := writeTempFile(t, "sysctl.conf", original)
+	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+		"key": "K", "value": "new",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if ar.Changed {
+		t.Error("fresh-instance revert must not report a change")
+	}
+	if ar.Diff != fsxNothingToRevert {
+		t.Errorf("Diff: got %q, want %q", ar.Diff, fsxNothingToRevert)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("file must survive a fresh-instance revert: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("content after revert: got %q, want %q", string(got), original)
+	}
+}
+
+func TestFileKeyValueRevertRemovesCreatedFile(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "new.conf")
+	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+		"key": "K", "value": "v",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed reverting a file created by this instance's Apply")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("expected created file removed on same-instance revert")
+	}
+}
+
+func TestFileKeyValueReadErrorFailsCheckAndApply(t *testing.T) {
+	ctx := context.Background()
+	original := "keep=me\nK=old\n"
+	fake := exectest.NewFakeFileExec()
+	fake.PreCreate("/etc/sysctl.conf", []byte(original), 0644)
+	fake.SetReadError("/etc/sysctl.conf", errors.New("input/output error"))
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
+	s, err := NewFileKeyValueBuilder(mctx)("/etc/sysctl.conf", map[string]any{
+		"key": "K", "value": "new",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("Check: want error when read fails with a non-not-exist error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("Apply: want error when read fails with a non-not-exist error")
+	}
+	// A read error must never truncate the file down to just the managed entries.
+	if got, _ := fake.GetFile("/etc/sysctl.conf"); string(got) != original {
+		t.Errorf("file must not be modified on a read error: got %q", string(got))
 	}
 }
 

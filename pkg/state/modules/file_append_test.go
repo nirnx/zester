@@ -2,11 +2,13 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -389,6 +391,63 @@ func TestFileAppendApplyNoTrailingNewline(t *testing.T) {
 	content := string(data)
 	if content != "line1\nline2\n" {
 		t.Errorf("expected newline between existing and appended, got: %q", content)
+	}
+}
+
+func TestFileAppendFreshInstanceRevertIsNoOp(t *testing.T) {
+	tmp := t.TempDir()
+	filePath := filepath.Join(tmp, "fresh.conf")
+	original := "keep me\n"
+	if err := os.WriteFile(filePath, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileAppendBuilder(testFileAppendMctx())(filePath, map[string]any{
+		"text": []any{"line"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if ar.Changed {
+		t.Error("fresh-instance revert must not report a change")
+	}
+	if ar.Diff != fsxNothingToRevert {
+		t.Errorf("Diff: got %q, want %q", ar.Diff, fsxNothingToRevert)
+	}
+	got, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("file must survive a fresh-instance revert: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("content after revert: got %q, want %q", string(got), original)
+	}
+}
+
+func TestFileAppendReadErrorFailsCheckAndApply(t *testing.T) {
+	ctx := context.Background()
+	fake := exectest.NewFakeFileExec()
+	fake.PreCreate("/etc/hosts", []byte("127.0.0.1 localhost\n"), 0644)
+	fake.SetReadError("/etc/hosts", errors.New("input/output error"))
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
+	s, err := NewFileAppendBuilder(mctx)("/etc/hosts", map[string]any{
+		"text": []any{"10.0.0.1 db"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("Check: want error when read fails with a non-not-exist error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("Apply: want error when read fails with a non-not-exist error")
+	}
+	if got, _ := fake.GetFile("/etc/hosts"); string(got) != "127.0.0.1 localhost\n" {
+		t.Errorf("file must not be modified on a read error: got %q", string(got))
 	}
 }
 

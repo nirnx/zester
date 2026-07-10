@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -20,9 +22,11 @@ type FileAppend struct {
 
 	file exec.FileExec
 
-	// backup stores original content for revert.
+	// backup stores original content for revert; created records that Apply
+	// created the file in this instance.
 	backup    []byte
 	backupSet bool
+	created   bool
 }
 
 // NewFileAppendBuilder returns a state.Builder that creates FileAppend states.
@@ -53,6 +57,9 @@ func (f *FileAppend) Reqs() state.Requisites { return f.reqs }
 func (f *FileAppend) Check(ctx context.Context) (state.CheckResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("file.append: read %s: %w", f.Path, err)
+		}
 		// File doesn't exist — need to create and append.
 		return state.CheckResult{
 			NeedsChange: true,
@@ -81,7 +88,11 @@ func (f *FileAppend) Check(ctx context.Context) (state.CheckResult, error) {
 func (f *FileAppend) Apply(ctx context.Context) (state.ApplyResult, error) {
 	// Read current content (may not exist).
 	existing, err := f.file.ReadFile(ctx, f.Path)
-	if err == nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return state.ApplyResult{}, fmt.Errorf("file.append: read %s: %w", f.Path, err)
+	}
+	existed := err == nil
+	if existed && !f.backupSet {
 		f.backup = existing
 		f.backupSet = true
 	}
@@ -106,6 +117,9 @@ func (f *FileAppend) Apply(ctx context.Context) (state.ApplyResult, error) {
 	if err := f.file.WriteFile(ctx, f.Path, []byte(content), 0644); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("file.append: write %s: %w", f.Path, err)
 	}
+	if !existed {
+		f.created = true
+	}
 
 	return state.ApplyResult{
 		Changed: true,
@@ -118,23 +132,5 @@ func (f *FileAppend) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (f *FileAppend) Revert(ctx context.Context) (state.ApplyResult, error) {
-	if !f.backupSet {
-		// File didn't exist before — remove it.
-		if err := f.file.Remove(ctx, f.Path); err != nil {
-			return state.ApplyResult{}, fmt.Errorf("file.append: revert remove %s: %w", f.Path, err)
-		}
-		return state.ApplyResult{
-			Changed: true,
-			Diff:    fmt.Sprintf("removed %s (revert append to new file)", f.Path),
-		}, nil
-	}
-
-	if err := f.file.WriteFile(ctx, f.Path, f.backup, 0644); err != nil {
-		return state.ApplyResult{}, fmt.Errorf("file.append: revert %s: %w", f.Path, err)
-	}
-
-	return state.ApplyResult{
-		Changed: true,
-		Diff:    fmt.Sprintf("reverted %s to previous content", f.Path),
-	}, nil
+	return fsxRevertWithCreate(ctx, f.file, f.Path, f.backup, f.backupSet, f.created, "file.append")
 }

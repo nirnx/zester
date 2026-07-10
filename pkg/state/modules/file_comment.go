@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"strings"
 
@@ -133,7 +135,11 @@ func (f *FileComment) compute(lines []string) ([]string, bool) {
 func (f *FileComment) Check(ctx context.Context) (state.CheckResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
-		return state.CheckResult{NeedsChange: false}, nil
+		if errors.Is(err, fs.ErrNotExist) {
+			// No file — nothing to comment/uncomment.
+			return state.CheckResult{NeedsChange: false}, nil
+		}
+		return state.CheckResult{}, fmt.Errorf("%s: read %s: %w", f.module(), f.Path, err)
 	}
 
 	lines, _ := fsxSplitLines(string(data))
@@ -150,11 +156,17 @@ func (f *FileComment) Check(ctx context.Context) (state.CheckResult, error) {
 func (f *FileComment) Apply(ctx context.Context) (state.ApplyResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
-		return state.ApplyResult{Changed: false}, nil
+		if errors.Is(err, fs.ErrNotExist) {
+			// No file — nothing to comment/uncomment.
+			return state.ApplyResult{Changed: false}, nil
+		}
+		return state.ApplyResult{}, fmt.Errorf("%s: read %s: %w", f.module(), f.Path, err)
 	}
 
-	f.backup = data
-	f.backupSet = true
+	if !f.backupSet {
+		f.backup = data
+		f.backupSet = true
+	}
 
 	lines, trailingNL := fsxSplitLines(string(data))
 	newLines, changed := f.compute(lines)
