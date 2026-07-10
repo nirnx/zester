@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // YumProvider implements PackageExec for RHEL/CentOS 7 systems using yum.
@@ -62,4 +63,15 @@ func (y *YumProvider) Refresh(ctx context.Context) error {
 		return fmt.Errorf("yum makecache: %w", err)
 	}
 	return nil
+}
+
+func (y *YumProvider) InstalledVersion(ctx context.Context, pkg string) (string, error) {
+	res, err := y.cmd.Run(ctx, CommandOpts{
+		Command: "rpm",
+		Args:    []string{"-q", "--qf", "%{VERSION}-%{RELEASE}", pkg},
+	})
+	if err != nil || res == nil {
+		return "", nil // not installed
+	}
+	return strings.TrimSpace(res.Stdout), nil
 }

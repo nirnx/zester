@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // BrewProvider implements PackageExec for macOS systems using Homebrew.
@@ -62,4 +63,21 @@ func (b *BrewProvider) Refresh(ctx context.Context) error {
 		return fmt.Errorf("brew update: %w", err)
 	}
 	return nil
+}
+
+func (b *BrewProvider) InstalledVersion(ctx context.Context, pkg string) (string, error) {
+	// `brew list --versions <pkg>` prints "pkg 1.2.3 [older...]"; the first
+	// version listed is the active one. Non-zero exit = not installed.
+	res, err := b.cmd.Run(ctx, CommandOpts{
+		Command: "brew",
+		Args:    []string{"list", "--versions", pkg},
+	})
+	if err != nil || res == nil {
+		return "", nil
+	}
+	fields := strings.Fields(res.Stdout)
+	if len(fields) < 2 {
+		return "", nil
+	}
+	return fields[1], nil
 }

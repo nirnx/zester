@@ -17,7 +17,14 @@ type PackageExec interface {
 	Name() string
 
 	// IsInstalled reports whether a package is currently installed.
+	// "Installed" means fully installed: a Debian package in 'rc' state
+	// (removed, conffiles remain) is NOT installed.
 	IsInstalled(ctx context.Context, pkg string) (bool, error)
+
+	// InstalledVersion returns the installed version of a package, or ""
+	// (with nil error) when the package is not installed. Backs
+	// version-pinned convergence checks (pkg.installed with version:).
+	InstalledVersion(ctx context.Context, pkg string) (string, error)
 
 	// Install installs a package, optionally at a specific version.
 	// An empty version string installs the latest available version.
@@ -61,6 +68,15 @@ type FileExec interface {
 
 	// Readlink returns the destination of a symbolic link.
 	Readlink(ctx context.Context, path string) (string, error)
+
+	// Owner returns the numeric owner and group of a file — the read-side
+	// counterpart of Chown, backing ownership convergence checks.
+	Owner(ctx context.Context, path string) (uid, gid int, err error)
+
+	// Walk walks the file tree rooted at root, calling fn for each entry
+	// (fs.WalkDir semantics). Lets modules that manage whole trees
+	// (file.recurse) stay on the injected provider instead of the real FS.
+	Walk(ctx context.Context, root string, fn fs.WalkDirFunc) error
 }
 
 // CommandOpts configures a command execution.

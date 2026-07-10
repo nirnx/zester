@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ type FakeFileExec struct {
 	mu       sync.Mutex
 	files    map[string]*fakeFile
 	symlinks map[string]string
+	readErrs map[string]error
 
 	// RemoveAllErr, if set, is returned by RemoveAll.
 	RemoveAllErr error
@@ -31,15 +33,19 @@ func NewFakeFileExec() *FakeFileExec {
 	return &FakeFileExec{
 		files:    make(map[string]*fakeFile),
 		symlinks: make(map[string]string),
+		readErrs: make(map[string]error),
 	}
 }
 
 func (f *FakeFileExec) ReadFile(_ context.Context, path string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.readErrs[path]; ok {
+		return nil, err
+	}
 	ff, ok := f.files[path]
 	if !ok {
-		return nil, fmt.Errorf("file not found: %s", path)
+		return nil, fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
 	cp := make([]byte, len(ff.data))
 	copy(cp, ff.data)
@@ -60,7 +66,7 @@ func (f *FakeFileExec) Stat(_ context.Context, path string) (fs.FileInfo, error)
 	defer f.mu.Unlock()
 	ff, ok := f.files[path]
 	if !ok {
-		return nil, fmt.Errorf("file not found: %s", path)
+		return nil, fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
 	return &fakeFileInfo{name: path, size: int64(len(ff.data)), mode: ff.mode}, nil
 }
@@ -101,7 +107,7 @@ func (f *FakeFileExec) Chown(_ context.Context, path string, uid, gid int) error
 	defer f.mu.Unlock()
 	ff, ok := f.files[path]
 	if !ok {
-		return fmt.Errorf("file not found: %s", path)
+		return fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
 	ff.uid = uid
 	ff.gid = gid
@@ -113,7 +119,7 @@ func (f *FakeFileExec) Chmod(_ context.Context, path string, mode fs.FileMode) e
 	defer f.mu.Unlock()
 	ff, ok := f.files[path]
 	if !ok {
-		return fmt.Errorf("file not found: %s", path)
+		return fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
 	ff.mode = mode
 	return nil
@@ -131,7 +137,7 @@ func (f *FakeFileExec) Readlink(_ context.Context, path string) (string, error) 
 	defer f.mu.Unlock()
 	target, ok := f.symlinks[path]
 	if !ok {
-		return "", fmt.Errorf("readlink %s: %w", path, fmt.Errorf("no such file or directory"))
+		return "", fmt.Errorf("readlink %s: %w", path, fs.ErrNotExist)
 	}
 	return target, nil
 }
@@ -179,3 +185,72 @@ func (fi *fakeFileInfo) Mode() fs.FileMode  { return fi.mode }
 func (fi *fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (fi *fakeFileInfo) IsDir() bool        { return fi.mode.IsDir() }
 func (fi *fakeFileInfo) Sys() any           { return nil }
+
+// SetReadError injects an error for ReadFile on the given path (e.g. a
+// permission failure) — distinct from the file simply not existing, which
+// wraps fs.ErrNotExist. Pass nil to clear.
+func (f *FakeFileExec) SetReadError(path string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err == nil {
+		delete(f.readErrs, path)
+		return
+	}
+	f.readErrs[path] = err
+}
+
+// SetOwner presets a file's ownership (test setup).
+func (f *FakeFileExec) SetOwner(path string, uid, gid int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if ff, ok := f.files[path]; ok {
+		ff.uid = uid
+		ff.gid = gid
+	}
+}
+
+// Owner returns the tracked ownership of a file.
+func (f *FakeFileExec) Owner(_ context.Context, path string) (int, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ff, ok := f.files[path]
+	if !ok {
+		return 0, 0, fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
+	}
+	return ff.uid, ff.gid, nil
+}
+
+// Walk walks the fake tree rooted at root in sorted path order (fs.WalkDir
+// semantics: fn is called for root first if present, then each descendant).
+func (f *FakeFileExec) Walk(ctx context.Context, root string, fn fs.WalkDirFunc) error {
+	f.mu.Lock()
+	var paths []string
+	for p := range f.files {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			paths = append(paths, p)
+		}
+	}
+	infos := make(map[string]*fakeFileInfo, len(paths))
+	for _, p := range paths {
+		ff := f.files[p]
+		infos[p] = &fakeFileInfo{name: p, size: int64(len(ff.data)), mode: ff.mode}
+	}
+	f.mu.Unlock()
+
+	if len(paths) == 0 {
+		return fn(root, nil, fmt.Errorf("walk %s: %w", root, fs.ErrNotExist))
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(p, fs.FileInfoToDirEntry(infos[p]), nil); err != nil {
+			if err == fs.SkipDir || err == fs.SkipAll { //nolint:errorlint // sentinel identity per fs docs
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
+}

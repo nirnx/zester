@@ -94,3 +94,11 @@ func (f *FakePackageExec) RefreshCount() int {
 	defer f.mu.Unlock()
 	return f.refreshed
 }
+
+// InstalledVersion returns the version tracked by PreInstall/Install, ""
+// when the package is not installed (matching the real providers).
+func (f *FakePackageExec) InstalledVersion(_ context.Context, pkg string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.installed[pkg], nil
+}

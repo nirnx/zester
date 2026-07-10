@@ -10,8 +10,10 @@ import (
 // FakeUserExec is an in-memory fake for exec.UserExec.
 // It stores users in a map and records operations for test assertions.
 type FakeUserExec struct {
-	mu    sync.Mutex
-	users map[string]*exec.UserInfo
+	mu            sync.Mutex
+	users         map[string]*exec.UserInfo
+	hashes        map[string]string // name -> shadow password hash
+	primaryGroups map[string]string // name -> name-based primary group
 
 	// Error injection fields — when set, the corresponding method returns the error.
 	LookupErr error
@@ -23,7 +25,9 @@ type FakeUserExec struct {
 // NewFakeUserExec creates a FakeUserExec with an empty user store.
 func NewFakeUserExec() *FakeUserExec {
 	return &FakeUserExec{
-		users: make(map[string]*exec.UserInfo),
+		users:         make(map[string]*exec.UserInfo),
+		hashes:        make(map[string]string),
+		primaryGroups: make(map[string]string),
 	}
 }
 
@@ -57,6 +61,12 @@ func (f *FakeUserExec) Create(_ context.Context, opts exec.UserCreateOpts) error
 		Shell:    opts.Shell,
 		FullName: opts.FullName,
 	}
+	if opts.Password != "" {
+		f.hashes[opts.Name] = opts.Password
+	}
+	if opts.PrimaryGroup != "" {
+		f.primaryGroups[opts.Name] = opts.PrimaryGroup
+	}
 	return nil
 }
 
@@ -87,6 +97,12 @@ func (f *FakeUserExec) Modify(_ context.Context, name string, opts exec.UserModi
 	}
 	if opts.FullName != nil {
 		u.FullName = *opts.FullName
+	}
+	if opts.Password != nil {
+		f.hashes[name] = *opts.Password
+	}
+	if opts.PrimaryGroup != nil {
+		f.primaryGroups[name] = *opts.PrimaryGroup
 	}
 	if opts.Password != nil {
 		// Password is not stored in UserInfo, but we accept it without error.
@@ -124,4 +140,27 @@ func (f *FakeUserExec) GetUser(name string) (*exec.UserInfo, bool) {
 	cp := *u
 	cp.Groups = append([]string(nil), u.Groups...)
 	return &cp, true
+}
+
+// SetPasswordHash presets a user's shadow hash (test setup).
+func (f *FakeUserExec) SetPasswordHash(name, hash string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hashes[name] = hash
+}
+
+// PasswordHash returns the tracked shadow hash — preset via SetPasswordHash
+// or recorded from Create/Modify Password fields.
+func (f *FakeUserExec) PasswordHash(_ context.Context, name string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hashes[name], nil
+}
+
+// PrimaryGroupOf returns the name-based primary group recorded from a
+// Modify with PrimaryGroup set (test assertions).
+func (f *FakeUserExec) PrimaryGroupOf(name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.primaryGroups[name]
 }

@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -295,3 +296,144 @@ func TestPkgLatestNoProvider(t *testing.T) {
 }
 
 var _ state.State = (*PkgLatest)(nil)
+
+// staleIndexCmd simulates the field bug's precondition: the package
+// manager's on-disk index only reveals the newer version AFTER a cache
+// refresh has run. It shares the FakePackageExec so RefreshCount is the
+// "index freshness" signal.
+type staleIndexCmd struct {
+	pkg *exectest.FakePackageExec
+}
+
+func (s *staleIndexCmd) Run(context.Context, exec.CommandOpts) (*exec.CommandResult, error) {
+	if s.pkg.RefreshCount() > 0 {
+		// Fresh index: the new version is visible.
+		return &exec.CommandResult{Stdout: "Inst nginx [1.0] (1.1 Repo)", ExitCode: 0}, nil
+	}
+	// Stale index: apt believes the installed version is current.
+	return &exec.CommandResult{Stdout: "nginx is already the newest version (1.0).", ExitCode: 0}, nil
+}
+
+// TestPkgLatestCheckRefreshesBeforeProbe pins the fix for the fleet-wide
+// silent no-op: Check must refresh the cache BEFORE the upgradability probe,
+// or a release published after the box's last refresh is invisible — Check
+// answers "already latest", Apply (previously the only refresh site) never
+// runs, and the state is stuck stale forever.
+func TestPkgLatestCheckRefreshesBeforeProbe(t *testing.T) {
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "")
+	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
+	mctx.Command = &staleIndexCmd{pkg: fakePkg}
+	builder := NewPkgLatestBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("Check answered from the stale index — refresh must run before the upgradability probe")
+	}
+	if fakePkg.RefreshCount() != 1 {
+		t.Errorf("Check refreshes exactly once, got %d", fakePkg.RefreshCount())
+	}
+}
+
+// TestPkgLatestCheckNoRefreshStaysStale: refresh=false keeps the old
+// behavior (and proves the flip test above isn't vacuous).
+func TestPkgLatestCheckNoRefreshStaysStale(t *testing.T) {
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "")
+	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
+	mctx.Command = &staleIndexCmd{pkg: fakePkg}
+	builder := NewPkgLatestBuilder(mctx)
+	s, err := builder("nginx", map[string]any{"refresh": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Error("refresh=false must answer from the existing index")
+	}
+	if fakePkg.RefreshCount() != 0 {
+		t.Errorf("refresh=false must not refresh, got %d", fakePkg.RefreshCount())
+	}
+}
+
+// TestPkgLatestCheckRefreshErrorProceeds: a failed refresh (rotted
+// third-party repo — apt-get update exits non-zero while still updating the
+// reachable repos) must not fail Check; it answers from the best-available
+// index.
+func TestPkgLatestCheckRefreshErrorProceeds(t *testing.T) {
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "")
+	fakePkg.RefreshErr = fmt.Errorf("apt-get update: repo.dead.example 404")
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("apt-get", &exec.CommandResult{
+		Stdout:   "Inst nginx [1.0] (1.1 Repo)",
+		ExitCode: 0,
+	}, nil)
+	mctx := testPkgLatestMctx(fakePkg, fakeCmd, "debian")
+	builder := NewPkgLatestBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatalf("refresh failure must not fail Check: %v", err)
+	}
+	if !cr.NeedsChange {
+		t.Error("Check must still answer from the existing index after a failed refresh")
+	}
+}
+
+// TestPkgLatestApplyRefreshErrorProceeds pins the Apply-side behavior change:
+// a failed refresh warns and proceeds to the install (whose own error, if
+// any, is the meaningful one) instead of hard-failing the state.
+func TestPkgLatestApplyRefreshErrorProceeds(t *testing.T) {
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.RefreshErr = fmt.Errorf("apt-get update: repo.dead.example 404")
+	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
+	builder := NewPkgLatestBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatalf("refresh failure must not fail Apply: %v", err)
+	}
+	if !ar.Changed || !fakePkg.IsInstalledSync("nginx") {
+		t.Error("Apply must proceed to install after a failed refresh")
+	}
+}
+
+// TestPkgLatestPhasesRefreshIndependently: Check and Apply are self-contained
+// full flows — running both refreshes twice, with no cross-phase dedup (a
+// watch-forced Apply bypasses Check entirely and must refresh on its own).
+func TestPkgLatestPhasesRefreshIndependently(t *testing.T) {
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "")
+	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
+	mctx.Command = &staleIndexCmd{pkg: fakePkg}
+	builder := NewPkgLatestBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fakePkg.RefreshCount(); got != 2 {
+		t.Errorf("Check and Apply each refresh independently: want 2, got %d", got)
+	}
+}

@@ -136,6 +136,9 @@ func (p *UseraddProvider) Modify(ctx context.Context, name string, opts UserModi
 	if opts.Groups != nil {
 		args = append(args, "-G", strings.Join(*opts.Groups, ","))
 	}
+	if opts.PrimaryGroup != nil {
+		args = append(args, "-g", *opts.PrimaryGroup) // usermod -g accepts a name
+	}
 	if opts.Home != nil {
 		args = append(args, "-d", *opts.Home)
 	}
@@ -180,4 +183,28 @@ func (p *UseraddProvider) Delete(ctx context.Context, name string, removeHome bo
 		return fmt.Errorf("exec: userdel %s: %w", name, err)
 	}
 	return nil
+}
+
+// PasswordHash reads the account's shadow hash via `getent shadow` (works
+// with local files and NSS sources; requires root, which the peel is). A
+// missing entry, a locked/empty field, or an unreadable shadow database all
+// return "" — callers treat that as "cannot verify", never as an error.
+func (p *UseraddProvider) PasswordHash(ctx context.Context, name string) (string, error) {
+	res, err := p.cmd.Run(ctx, CommandOpts{
+		Command: "getent",
+		Args:    []string{"shadow", name},
+	})
+	if err != nil || res == nil {
+		return "", nil
+	}
+	fields := strings.Split(strings.TrimSpace(res.Stdout), ":")
+	if len(fields) < 2 {
+		return "", nil
+	}
+	hash := fields[1]
+	// Locked/disabled placeholders are "no password", not a hash.
+	if hash == "" || hash == "!" || hash == "*" || hash == "!!" {
+		return "", nil
+	}
+	return hash, nil
 }

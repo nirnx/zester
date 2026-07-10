@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // AptProvider implements PackageExec for Debian/Ubuntu systems using apt-get.
@@ -33,14 +34,34 @@ var dpkgConfArgs = []string{
 }
 
 func (a *AptProvider) IsInstalled(ctx context.Context, pkg string) (bool, error) {
-	_, err := a.cmd.Run(ctx, CommandOpts{
-		Command: "dpkg",
-		Args:    []string{"-s", pkg},
+	// Exit-code probing (`dpkg -s`) counts packages in 'rc' state (removed,
+	// conffiles remain) as installed — dpkg -s exits 0 for them — so a
+	// previously-removed conffile-bearing package could never be reinstalled
+	// by pkg.installed, and pkg.removed looped "changed" forever. Ask for
+	// the status explicitly: only a fully installed package counts.
+	res, err := a.cmd.Run(ctx, CommandOpts{
+		Command: "dpkg-query",
+		Args:    []string{"-W", "-f=${db:Status-Status}", pkg},
 	})
-	if err != nil {
-		return false, nil
+	if err != nil || res == nil {
+		return false, nil // no dpkg record at all
 	}
-	return true, nil
+	return strings.TrimSpace(res.Stdout) == "installed", nil
+}
+
+func (a *AptProvider) InstalledVersion(ctx context.Context, pkg string) (string, error) {
+	res, err := a.cmd.Run(ctx, CommandOpts{
+		Command: "dpkg-query",
+		Args:    []string{"-W", "-f=${db:Status-Status} ${Version}", pkg},
+	})
+	if err != nil || res == nil {
+		return "", nil
+	}
+	fields := strings.Fields(res.Stdout)
+	if len(fields) != 2 || fields[0] != "installed" {
+		return "", nil
+	}
+	return fields[1], nil
 }
 
 func (a *AptProvider) Install(ctx context.Context, pkg string, version string) error {

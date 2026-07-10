@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -21,8 +22,13 @@ type PkgLatest struct {
 	// Package is the name of the package to keep up to date.
 	Package string
 
-	// Refresh forces a package cache refresh before applying. Defaults to true
-	// (matching Salt's pkg.latest semantics).
+	// Refresh runs a package cache refresh at the start of BOTH Check and
+	// Apply. Defaults to true (matching Salt's pkg.latest semantics, which
+	// refresh before deciding). Each phase refreshes independently — no
+	// cross-phase state — so a watch-forced Apply that bypasses Check still
+	// acts on a fresh index, and a Check-only dry run answers from a fresh
+	// index too. Refreshing mutates only the manager's metadata cache, never
+	// the managed system state, so it is legitimate in Check.
 	Refresh bool
 
 	// family is the detected OS family ("debian", "redhat", "darwin", "").
@@ -36,6 +42,9 @@ type PkgLatest struct {
 
 	// cmd probes the package manager for upgradability. May be nil.
 	cmd exec.CommandExec
+
+	// log reports non-fatal conditions (refresh failures). Never nil.
+	log *slog.Logger
 }
 
 // NewPkgLatestBuilder returns a state.Builder that creates PkgLatest states
@@ -45,14 +54,17 @@ func NewPkgLatestBuilder(mctx *exec.ModuleContext) state.Builder {
 		if mctx.Package == nil {
 			return nil, fmt.Errorf("pkg.latest: no package provider available")
 		}
-		return newPkgLatest(id, config, mctx.Package, mctx.Command, mctx.Facts)
+		return newPkgLatest(id, config, mctx.Package, mctx.Command, mctx.Facts, mctx.Logger)
 	}
 }
 
 func newPkgLatest(id string, config map[string]any, pkg exec.PackageExec,
-	cmd exec.CommandExec, facts map[string]any) (state.State, error) {
+	cmd exec.CommandExec, facts map[string]any, log *slog.Logger) (state.State, error) {
 
-	p := &PkgLatest{id: id, pkg: pkg, cmd: cmd}
+	if log == nil {
+		log = slog.Default()
+	}
+	p := &PkgLatest{id: id, pkg: pkg, cmd: cmd, log: log}
 
 	p.Package, _ = config["name"].(string)
 	if p.Package == "" {
@@ -75,7 +87,30 @@ func newPkgLatest(id string, config map[string]any, pkg exec.PackageExec,
 func (p *PkgLatest) Name() string           { return "pkg.latest:" + p.id }
 func (p *PkgLatest) Reqs() state.Requisites { return p.reqs }
 
+// refresh runs the package-cache refresh when enabled, warning (never
+// failing) on error: apt-get update exits non-zero when ANY configured repo
+// is unreachable/rotted, yet still updates the reachable ones — a hard
+// failure here would break every pkg.latest on hosts with one dead
+// third-party repo, a worse outcome than answering from a stale (or
+// best-effort refreshed) index. Called at the start of BOTH Check and Apply;
+// see the Refresh field doc for why the phases refresh independently.
+func (p *PkgLatest) refresh(ctx context.Context) {
+	if !p.Refresh {
+		return
+	}
+	if err := p.pkg.Refresh(ctx); err != nil {
+		p.log.Warn("pkg.latest: cache refresh failed; proceeding with existing index",
+			"package", p.Package, "manager", p.pkg.Name(), "error", err)
+	}
+}
+
 func (p *PkgLatest) Check(ctx context.Context) (state.CheckResult, error) {
+	// Refresh BEFORE deciding: the upgradability probe reads the on-disk
+	// index, and a stale one short-circuits "already latest" — which would
+	// skip Apply and with it any chance of ever refreshing (the bug that
+	// made a fleet-wide pkg.latest a silent no-op after a repo publish).
+	p.refresh(ctx)
+
 	installed, err := p.pkg.IsInstalled(ctx, p.Package)
 	if err != nil {
 		return state.CheckResult{}, fmt.Errorf("pkg.latest: check %s: %w", p.Package, err)
@@ -163,11 +198,7 @@ func (p *PkgLatest) upgradable(ctx context.Context) (upgradable bool, determined
 }
 
 func (p *PkgLatest) Apply(ctx context.Context) (state.ApplyResult, error) {
-	if p.Refresh {
-		if err := p.pkg.Refresh(ctx); err != nil {
-			return state.ApplyResult{}, fmt.Errorf("pkg.latest: refresh: %w", err)
-		}
-	}
+	p.refresh(ctx)
 
 	// An empty version installs/upgrades to the latest available candidate.
 	if err := p.pkg.Install(ctx, p.Package, ""); err != nil {

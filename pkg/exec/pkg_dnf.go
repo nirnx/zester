@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // DnfProvider implements PackageExec for Fedora/RHEL 8+ systems using dnf.
@@ -62,4 +63,15 @@ func (d *DnfProvider) Refresh(ctx context.Context) error {
 		return fmt.Errorf("dnf makecache: %w", err)
 	}
 	return nil
+}
+
+func (d *DnfProvider) InstalledVersion(ctx context.Context, pkg string) (string, error) {
+	res, err := d.cmd.Run(ctx, CommandOpts{
+		Command: "rpm",
+		Args:    []string{"-q", "--qf", "%{VERSION}-%{RELEASE}", pkg},
+	})
+	if err != nil || res == nil {
+		return "", nil // not installed
+	}
+	return strings.TrimSpace(res.Stdout), nil
 }

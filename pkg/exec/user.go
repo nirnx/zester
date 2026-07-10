@@ -38,6 +38,9 @@ type UserModifyOpts struct {
 	Shell    *string
 	Password *string
 	FullName *string
+	// PrimaryGroup sets the primary group BY NAME (usermod -g <name>);
+	// use GID for numeric ids. Mirrors UserCreateOpts.PrimaryGroup.
+	PrimaryGroup *string
 }
 
 // UserExec is the interface for user account management operations.
@@ -54,4 +57,10 @@ type UserExec interface {
 	// Delete deletes a user account. If removeHome is true, the home
 	// directory is also removed.
 	Delete(ctx context.Context, name string, removeHome bool) error
+
+	// PasswordHash returns the account's shadow password hash ("" when the
+	// account has none or shadow data is unavailable) — the read-side
+	// counterpart of Create/Modify's Password, backing password-drift
+	// convergence checks.
+	PasswordHash(ctx context.Context, name string) (string, error)
 }

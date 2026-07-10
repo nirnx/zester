@@ -114,7 +114,9 @@ func (s *SvcRunning) Reqs() state.Requisites { return s.reqs }
 
 ### Check(ctx)
 
-Returns whether the system already matches desired state. Must not modify the system.
+Returns whether the system already matches desired state. Must not modify the **managed** state — but MAY run read-only-in-spirit prep actions needed for an accurate answer (e.g. `pkg.latest` refreshes the package index before probing upgradability: that mutates the manager's metadata cache, never the configuration under management).
+
+**Check and Apply are independent, self-contained full flows — never share state between them.** If both phases need the same prep (like a cache refresh), each runs it itself; idempotent prep repeating is fine, cross-phase "already done" flags are not (the runner's call patterns vary — watch-forced applies bypass Check entirely). Don't add provider-level memos to dedupe repeated idempotent work either.
 
 ```go
 func (s *SvcRunning) Check(ctx context.Context) (state.CheckResult, error) {
@@ -308,4 +310,4 @@ restart-nginx:
 - [ ] Wrap errors with `fmt.Errorf("module.function: op: %w", err)`
 - [ ] Register in `cmd/zester-peel/main.go`
 - [ ] Write tests covering: name, requisites, check, apply, revert, errors, missing provider
-- [ ] Add a `docs/modules/<module-name>.md` reference page with a parameter table and register it in the `mkdocs.yml` nav
+- [ ] Add a reference page under `website/content/docs/` (Fumadocs) with a parameter table and register it in the relevant `meta.json` nav

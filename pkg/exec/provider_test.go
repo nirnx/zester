@@ -19,26 +19,49 @@ func TestAptProviderName(t *testing.T) {
 }
 
 func TestAptProviderIsInstalled(t *testing.T) {
-	cmd := exectest.NewFakeCommandExec()
-	p := exec.NewAptProvider(cmd)
+	// The probe is STATUS-aware: only a fully installed package counts.
+	// `dpkg -s`-style exit-code probing counted 'rc' state (removed,
+	// conffiles remain) as installed — dpkg exits 0 for those — which made
+	// pkg.installed unable to ever reinstall such a package.
+	for name, tc := range map[string]struct {
+		stdout string
+		want   bool
+	}{
+		"installed": {"installed", true},
+		"rc state":  {"config-files", false},
+		"half":      {"half-configured", false},
+	} {
+		cmd := exectest.NewFakeCommandExec()
+		cmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: tc.stdout, ExitCode: 0}, nil)
+		p := exec.NewAptProvider(cmd)
+		installed, err := p.IsInstalled(context.Background(), "nginx")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if installed != tc.want {
+			t.Errorf("%s: installed = %v, want %v", name, installed, tc.want)
+		}
+	}
+}
 
-	installed, err := p.IsInstalled(context.Background(), "nginx")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !installed {
-		t.Error("expected installed (dpkg -s succeeds by default)")
-	}
-
-	calls := cmd.Calls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(calls))
-	}
-	if calls[0].Command != "dpkg" {
-		t.Errorf("command: got %q, want %q", calls[0].Command, "dpkg")
-	}
-	if len(calls[0].Args) != 2 || calls[0].Args[0] != "-s" || calls[0].Args[1] != "nginx" {
-		t.Errorf("args: got %v, want [-s nginx]", calls[0].Args)
+func TestAptProviderInstalledVersion(t *testing.T) {
+	for name, tc := range map[string]struct {
+		stdout string
+		want   string
+	}{
+		"installed": {"installed 1.24.0-1", "1.24.0-1"},
+		"rc state":  {"config-files 1.20.0-1", ""},
+	} {
+		cmd := exectest.NewFakeCommandExec()
+		cmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: tc.stdout, ExitCode: 0}, nil)
+		p := exec.NewAptProvider(cmd)
+		v, err := p.InstalledVersion(context.Background(), "nginx")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != tc.want {
+			t.Errorf("%s: version = %q, want %q", name, v, tc.want)
+		}
 	}
 }
 

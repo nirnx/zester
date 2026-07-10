@@ -2,8 +2,11 @@ package exec
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"syscall"
 )
 
 // OSFileExec implements FileExec using the os package.
@@ -47,4 +50,28 @@ func (e *OSFileExec) Symlink(_ context.Context, target, linkPath string) error {
 
 func (e *OSFileExec) Readlink(_ context.Context, path string) (string, error) {
 	return os.Readlink(path)
+}
+
+// Owner returns the numeric owner and group of path via syscall stat.
+func (e *OSFileExec) Owner(_ context.Context, path string) (int, int, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, fmt.Errorf("exec: owner %s: no syscall stat available", path)
+	}
+	return int(st.Uid), int(st.Gid), nil
+}
+
+// Walk walks the real filesystem tree rooted at root (fs.WalkDir semantics),
+// honoring ctx cancellation between entries.
+func (e *OSFileExec) Walk(ctx context.Context, root string, fn fs.WalkDirFunc) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		return fn(path, d, err)
+	})
 }

@@ -4,6 +4,25 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Fixed
+- **`pkg.latest` now refreshes the package cache BEFORE checking
+  upgradability** (Salt parity). Refresh (default on) previously ran only in
+  Apply, but Check consulted the stale on-disk index and short-circuited
+  "already at latest" — so Apply, and with it the refresh, never executed:
+  the state was structurally blind to any release published after the box's
+  last cache refresh (field symptom: the first fleet-wide
+  `pkg.latest zester-peel` after the 0.4.1 repo publish was a silent
+  `changed: 0` no-op on all apt hosts). Check and Apply now each run their
+  own refresh independently — no cross-phase state, so watch-forced applies
+  that bypass Check still act on a fresh index. Behavior notes: a FAILED
+  refresh (e.g. one rotted third-party repo makes `apt-get update` exit
+  non-zero while still updating the reachable repos) now warns and proceeds
+  with the best-available index in BOTH phases instead of failing the state;
+  and `--test` dry runs now refresh the index too (metadata-only,
+  Salt-consistent).
+
 ## [0.4.1] - 2026-07-09
 
 ### Fixed
