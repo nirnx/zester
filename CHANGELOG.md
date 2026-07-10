@@ -4,7 +4,7 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
-## [Unreleased]
+## [0.4.2] - 2026-07-10
 
 **Fleet-wide state-module convergence audit.** After the `pkg.latest`
 stale-index bug shipped in the field, every state module (44 states, 36
