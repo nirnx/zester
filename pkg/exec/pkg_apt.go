@@ -39,29 +39,47 @@ func (a *AptProvider) IsInstalled(ctx context.Context, pkg string) (bool, error)
 	// previously-removed conffile-bearing package could never be reinstalled
 	// by pkg.installed, and pkg.removed looped "changed" forever. Ask for
 	// the status explicitly: only a fully installed package counts.
+	// The \n separator matters for multi-arch: two installed instances would
+	// otherwise print "installedinstalled" and match nothing.
 	res, err := a.cmd.Run(ctx, CommandOpts{
 		Command: "dpkg-query",
-		Args:    []string{"-W", "-f=${db:Status-Status}", pkg},
+		Args:    []string{"-W", "-f=${db:Status-Status}\n", pkg},
 	})
-	if err != nil || res == nil {
-		return false, nil // no dpkg record at all
+	if res == nil {
+		// The probe never ran (spawn failure, context death) — a REAL
+		// error, not "package absent"; reporting absent would make Apply
+		// run installs on broken hosts.
+		return false, fmt.Errorf("apt: query %s: %w", pkg, err)
 	}
-	return strings.TrimSpace(res.Stdout) == "installed", nil
+	if err != nil {
+		return false, nil // ran, non-zero exit: no dpkg record at all
+	}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		if strings.TrimSpace(line) == "installed" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (a *AptProvider) InstalledVersion(ctx context.Context, pkg string) (string, error) {
 	res, err := a.cmd.Run(ctx, CommandOpts{
 		Command: "dpkg-query",
-		Args:    []string{"-W", "-f=${db:Status-Status} ${Version}", pkg},
+		Args:    []string{"-W", "-f=${db:Status-Status} ${Version}\n", pkg},
 	})
-	if err != nil || res == nil {
-		return "", nil
+	if res == nil {
+		return "", fmt.Errorf("apt: query %s: %w", pkg, err)
 	}
-	fields := strings.Fields(res.Stdout)
-	if len(fields) != 2 || fields[0] != "installed" {
-		return "", nil
+	if err != nil {
+		return "", nil // no dpkg record
 	}
-	return fields[1], nil
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "installed" {
+			return fields[1], nil
+		}
+	}
+	return "", nil
 }
 
 func (a *AptProvider) Install(ctx context.Context, pkg string, version string) error {

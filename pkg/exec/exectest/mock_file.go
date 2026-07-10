@@ -57,6 +57,14 @@ func (f *FakeFileExec) WriteFile(_ context.Context, path string, data []byte, pe
 	defer f.mu.Unlock()
 	cp := make([]byte, len(data))
 	copy(cp, data)
+	// os.WriteFile semantics: perm applies only at CREATION; overwriting an
+	// existing file keeps its mode (and ownership). The fake previously set
+	// the mode on every write, which masked a real never-converges bug
+	// (file.managed mode drift on pre-existing files).
+	if existing, ok := f.files[path]; ok {
+		existing.data = cp
+		return nil
+	}
 	f.files[path] = &fakeFile{data: cp, mode: perm}
 	return nil
 }

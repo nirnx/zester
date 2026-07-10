@@ -40,6 +40,30 @@ func (y *YumProvider) Install(ctx context.Context, pkg string, version string) e
 	if err != nil {
 		return fmt.Errorf("yum install %s: %w", target, err)
 	}
+	if version != "" {
+		return y.installPinned(ctx, pkg, version, target)
+	}
+	return nil
+}
+
+// installPinned handles yum's downgrade blindness: `yum install -y pkg-<old>`
+// on a host running a NEWER version prints "Nothing to do" and exits 0 — a
+// silent no-op that would make a version-pinned state perma-churn (Check
+// keeps reporting drift, Apply keeps "succeeding"). After the install
+// attempt, verify the pin landed; if not, it is a downgrade — run
+// `yum downgrade` explicitly. (dnf converges explicit NEVR downgrades on
+// its own, so DnfProvider needs no equivalent.)
+func (y *YumProvider) installPinned(ctx context.Context, pkg, version, target string) error {
+	got, err := y.InstalledVersion(ctx, pkg)
+	if err == nil && got == version {
+		return nil
+	}
+	if _, err := y.cmd.Run(ctx, CommandOpts{
+		Command: "yum",
+		Args:    []string{"downgrade", "-y", target},
+	}); err != nil {
+		return fmt.Errorf("yum downgrade %s: %w", target, err)
+	}
 	return nil
 }
 

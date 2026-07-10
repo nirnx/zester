@@ -134,6 +134,22 @@ func DetectProviders(facts map[string]any, logger *slog.Logger) *ProviderSet {
 		logger.Info("group provider detected", "provider", "groupadd")
 	}
 
+	// Cron/sysctl/mount providers. These constructors existed but were
+	// never wired here — cron.present, sysctl.present, and mount.mounted
+	// could not run on a real peel (builder: "no X provider available").
+	if commandExists("crontab") {
+		ps.Cron = NewCrontabProvider(cmdExec)
+		logger.Info("cron provider detected", "provider", "crontab")
+	}
+	if commandExists("sysctl") {
+		ps.Sysctl = NewProcfsProvider(cmdExec, fileExec)
+		logger.Info("sysctl provider detected", "provider", "procfs")
+	}
+	if commandExists("mount") {
+		ps.Mount = NewFstabProvider(cmdExec, fileExec)
+		logger.Info("mount provider detected", "provider", "fstab")
+	}
+
 	return ps
 }
 
