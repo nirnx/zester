@@ -364,26 +364,26 @@ func (r *PkgrepoManaged) writeRepoFile(ctx context.Context) error {
 	return nil
 }
 
-// importAptKey fetches an apt signing key to the persistent keyring path
-// (Check's convergence marker — a /tmp download would vanish on reboot) and
-// imports it into the apt trust store.
+// importAptKey fetches an apt signing key with curl writing DIRECTLY to the
+// persistent keyring path (Check's convergence marker — a /tmp download would
+// vanish on reboot) and imports it into the apt trust store. `curl -o` is
+// deliberate: routing the key bytes through captured stdout corrupts binary
+// (non-armored) .gpg keys — CommandResult.Stdout is TrimSpace'd, so a key
+// whose final byte happens to be whitespace-class loses it and gpg rejects
+// the mangled key.
 func (r *PkgrepoManaged) importAptKey(ctx context.Context) error {
-	res, err := r.cmd.Run(ctx, exec.CommandOpts{
-		Command: "curl",
-		Args:    []string{"-fsSL", r.KeyURL},
-	})
-	if err != nil || res == nil {
-		return fmt.Errorf("pkgrepo.managed: fetch key %s: %w", r.KeyURL, err)
-	}
-
 	keyfile := r.aptKeyringPath()
 	if dir := path.Dir(keyfile); dir != "" && dir != "." {
 		if err := r.file.MkdirAll(ctx, dir, 0755); err != nil {
 			return fmt.Errorf("pkgrepo.managed: mkdir %s: %w", dir, err)
 		}
 	}
-	if err := r.file.WriteFile(ctx, keyfile, []byte(res.Stdout), 0644); err != nil {
-		return fmt.Errorf("pkgrepo.managed: write keyring %s: %w", keyfile, err)
+
+	if _, err := r.cmd.Run(ctx, exec.CommandOpts{
+		Command: "curl",
+		Args:    []string{"-fsSL", "-o", keyfile, r.KeyURL},
+	}); err != nil {
+		return fmt.Errorf("pkgrepo.managed: fetch key %s: %w", r.KeyURL, err)
 	}
 
 	if _, err := r.cmd.Run(ctx, exec.CommandOpts{
