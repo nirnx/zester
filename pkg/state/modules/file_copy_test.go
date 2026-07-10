@@ -2,11 +2,14 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 )
 
 func testFileCopyMctx() *exec.ModuleContext {
@@ -231,5 +234,118 @@ func TestFileCopyRevertRemovesFreshCopy(t *testing.T) {
 	}
 	if _, err := os.Stat(dst); err == nil {
 		t.Error("expected destination removed on revert of fresh copy")
+	}
+}
+
+func TestFileCopyRevertFreshInstanceNoOp(t *testing.T) {
+	ctx := context.Background()
+	src := writeTempFile(t, "src.txt", "new\n")
+	dst := writeTempFile(t, "dst.txt", "precious\n")
+
+	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+		"source": src, "force": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Revert on a fresh instance (no Apply recorded) must be a clean no-op:
+	// never delete a pre-existing destination Apply never wrote.
+	rr, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if rr.Changed {
+		t.Error("fresh-instance revert must not report a change")
+	}
+	if !strings.Contains(rr.Diff, "nothing to revert") {
+		t.Errorf("diff: got %q, want nothing-to-revert notice", rr.Diff)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("destination destroyed by fresh-instance revert: %v", err)
+	}
+	if string(got) != "precious\n" {
+		t.Errorf("content after no-op revert: got %q", string(got))
+	}
+}
+
+func TestFileCopyRevertFreshInstanceMissingDest(t *testing.T) {
+	ctx := context.Background()
+	src := writeTempFile(t, "src.txt", "new\n")
+	dst := filepath.Join(t.TempDir(), "missing.txt")
+
+	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{"source": src})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Destination absent + no Apply recorded: clean no-op, not a hard error.
+	rr, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatalf("Revert on missing destination: %v", err)
+	}
+	if rr.Changed {
+		t.Error("expected no change reverting a fresh instance with a missing destination")
+	}
+}
+
+func TestFileCopyRevertCreatedToleratesMissing(t *testing.T) {
+	ctx := context.Background()
+	src := writeTempFile(t, "src.txt", "data\n")
+	dst := filepath.Join(t.TempDir(), "dst.txt")
+
+	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{"source": src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// The created destination vanished externally; revert must tolerate it.
+	if err := os.Remove(dst); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatalf("Revert must tolerate an already-missing created destination: %v", err)
+	}
+}
+
+func TestFileCopyCheckReadErrorFails(t *testing.T) {
+	ctx := context.Background()
+	fake := exectest.NewFakeFileExec()
+	fake.PreCreate("/src", []byte("data"), 0644)
+	fake.PreCreate("/dst", []byte("old"), 0644)
+	fake.SetReadError("/dst", errors.New("permission denied"))
+
+	s, err := newFileCopy("/dst", map[string]any{"source": "/src", "force": true}, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("expected Check to fail on a non-not-exist read error, not report the destination as absent")
+	}
+}
+
+func TestFileCopyApplyReadErrorFails(t *testing.T) {
+	ctx := context.Background()
+	fake := exectest.NewFakeFileExec()
+	fake.PreCreate("/src", []byte("data"), 0644)
+	fake.PreCreate("/dst", []byte("old"), 0644)
+	fake.SetReadError("/dst", errors.New("permission denied"))
+
+	s, err := newFileCopy("/dst", map[string]any{"source": "/src", "force": true}, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Apply(ctx); err == nil {
+		t.Fatal("expected Apply to fail when the prior destination content cannot be captured")
+	}
+	got, ok := fake.GetFile("/dst")
+	if !ok || string(got) != "old" {
+		t.Errorf("destination overwritten despite read error: got %q", string(got))
 	}
 }

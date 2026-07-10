@@ -2,15 +2,19 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
-	"os/user"
 	"path/filepath"
 	"strconv"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/state"
 )
+
+// errRecurseDestMissing is an internal walk sentinel: the clean-mode dest
+// walk found no destination directory at all (nothing extra to detect).
+var errRecurseDestMissing = errors.New("file.recurse: dest missing")
 
 // FileRecurse implements the file.recurse state.
 // It recursively copies a source directory to a destination directory.
@@ -111,20 +115,51 @@ func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
 		return state.CheckResult{}, err
 	}
 
+	dirMode, err := r.desiredDirMode()
+	if err != nil {
+		return state.CheckResult{}, err
+	}
+
+	// Resolve declared ownership up front; the facet fires only when
+	// user/group is declared (Apply chowns files only, so Check compares
+	// files only — dir ownership is never enforced).
+	wantUID, wantGID := -1, -1
+	if r.User != "" || r.Group != "" {
+		wantUID, wantGID, err = r.resolveOwnership()
+		if err != nil {
+			return state.CheckResult{}, err
+		}
+	}
+
+	// Managed dest paths, for clean-mode extra detection.
+	managed := make(map[string]struct{})
+
 	var diffCount int
-	err = filepath.WalkDir(r.Source, func(srcPath string, d fs.DirEntry, walkErr error) error {
+	err = r.file.Walk(ctx, r.Source, func(srcPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		rel, err := filepath.Rel(r.Source, srcPath)
-		if err != nil {
-			return err
+		rel, relErr := filepath.Rel(r.Source, srcPath)
+		if relErr != nil {
+			return relErr
 		}
 		destPath := filepath.Join(r.Dest, rel)
+		managed[destPath] = struct{}{}
 
 		if d.IsDir() {
 			info, statErr := r.file.Stat(ctx, destPath)
-			if statErr != nil || !info.IsDir() {
+			if statErr != nil {
+				if !errors.Is(statErr, fs.ErrNotExist) {
+					return statErr
+				}
+				diffCount++
+				return nil
+			}
+			if !info.IsDir() {
+				diffCount++
+				return nil
+			}
+			if info.Mode().Perm() != dirMode {
 				diffCount++
 			}
 			return nil
@@ -133,6 +168,9 @@ func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
 		// Compare file.
 		destData, readErr := r.file.ReadFile(ctx, destPath)
 		if readErr != nil {
+			if !errors.Is(readErr, fs.ErrNotExist) {
+				return readErr
+			}
 			diffCount++
 			return nil
 		}
@@ -149,17 +187,57 @@ func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
 
 		info, statErr := r.file.Stat(ctx, destPath)
 		if statErr != nil {
+			if !errors.Is(statErr, fs.ErrNotExist) {
+				return statErr
+			}
 			diffCount++
 			return nil
 		}
 		if info.Mode().Perm() != fileMode {
 			diffCount++
+			return nil
+		}
+
+		if wantUID != -1 || wantGID != -1 {
+			uid, gid, ownErr := r.file.Owner(ctx, destPath)
+			if ownErr != nil {
+				return ownErr
+			}
+			if (wantUID != -1 && uid != wantUID) || (wantGID != -1 && gid != wantGID) {
+				diffCount++
+			}
 		}
 
 		return nil
 	})
 	if err != nil {
 		return state.CheckResult{}, fmt.Errorf("file.recurse: walk source %s: %w", r.Source, err)
+	}
+
+	// Clean: extra (non-managed) files in dest count as drift — they are
+	// what Apply's cleanDestination would remove. Extra directories are
+	// skipped, matching cleanDestination, which never removes directories.
+	if r.Clean {
+		err = r.file.Walk(ctx, r.Dest, func(destPath string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				// A missing dest is not "extras": the source walk already
+				// counted every missing entry.
+				if destPath == r.Dest && errors.Is(walkErr, fs.ErrNotExist) {
+					return errRecurseDestMissing
+				}
+				return walkErr
+			}
+			if destPath == r.Dest || d.IsDir() {
+				return nil
+			}
+			if _, ok := managed[destPath]; !ok {
+				diffCount++
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, errRecurseDestMissing) {
+			return state.CheckResult{}, fmt.Errorf("file.recurse: walk dest %s: %w", r.Dest, err)
+		}
 	}
 
 	if diffCount > 0 {
@@ -207,7 +285,7 @@ func (r *FileRecurse) Apply(ctx context.Context) (state.ApplyResult, error) {
 	var copiedFiles, copiedDirs int
 	r.createdFiles = r.createdFiles[:0]
 
-	err = filepath.WalkDir(r.Source, func(srcPath string, d fs.DirEntry, walkErr error) error {
+	err = r.file.Walk(ctx, r.Source, func(srcPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -234,8 +312,13 @@ func (r *FileRecurse) Apply(ctx context.Context) (state.ApplyResult, error) {
 			return fmt.Errorf("read %s: %w", srcPath, readErr)
 		}
 
-		// Track whether this is a new file for revert.
+		// Track whether this is a new file for revert. Only a genuine
+		// not-exist marks it as created; any other stat error fails the
+		// apply (a pre-existing file must never be memoized as created).
 		if _, statErr := r.file.Stat(ctx, destPath); statErr != nil {
+			if !errors.Is(statErr, fs.ErrNotExist) {
+				return fmt.Errorf("stat %s: %w", destPath, statErr)
+			}
 			r.createdFiles = append(r.createdFiles, destPath)
 		}
 
@@ -285,7 +368,7 @@ func (r *FileRecurse) Apply(ctx context.Context) (state.ApplyResult, error) {
 // cleanDestination removes files in dest not present in the source file set.
 func (r *FileRecurse) cleanDestination(ctx context.Context, sourceFiles map[string]struct{}) (int, error) {
 	var removed int
-	err := filepath.WalkDir(r.Dest, func(destPath string, d fs.DirEntry, walkErr error) error {
+	err := r.file.Walk(ctx, r.Dest, func(destPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -331,24 +414,5 @@ func (r *FileRecurse) Revert(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (r *FileRecurse) resolveOwnership() (uid, gid int, err error) {
-	uid = -1
-	gid = -1
-
-	if r.User != "" {
-		u, lookupErr := user.Lookup(r.User)
-		if lookupErr != nil {
-			return -1, -1, fmt.Errorf("file.recurse: lookup user %q: %w", r.User, lookupErr)
-		}
-		uid, _ = strconv.Atoi(u.Uid)
-	}
-
-	if r.Group != "" {
-		g, lookupErr := user.LookupGroup(r.Group)
-		if lookupErr != nil {
-			return -1, -1, fmt.Errorf("file.recurse: lookup group %q: %w", r.Group, lookupErr)
-		}
-		gid, _ = strconv.Atoi(g.Gid)
-	}
-
-	return uid, gid, nil
+	return resolveOwnerIDs("file.recurse", r.User, r.Group)
 }
