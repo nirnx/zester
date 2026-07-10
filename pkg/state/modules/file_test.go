@@ -807,6 +807,235 @@ func TestFileManagedCheckReadErrorFails(t *testing.T) {
 	}
 }
 
+// TestFileManagedModeConvergencePreExisting pins the round-2 fix: os.WriteFile
+// applies perm at creation only, so Apply must Chmod pre-existing files or the
+// mode facet churns forever (Check → Apply → Check must converge).
+func TestFileManagedModeConvergencePreExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.conf")
+	if err := os.WriteFile(path, []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+		"path":    path,
+		"content": "content",
+		"mode":    "0644",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+
+	cr, err := s.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange for mode drift on pre-existing file")
+	}
+
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0644 {
+		t.Errorf("mode after apply: got %04o, want 0644 (mode not enforced)", info.Mode().Perm())
+	}
+
+	cr, err = s.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check after apply: %v", err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("mode facet did not converge (Check→Apply→Check), diff: %s", cr.Diff)
+	}
+}
+
+// TestFileManagedModeConvergenceDefaultMode is the exact churn scenario from
+// the finding: no explicit mode declared, the built-in 0644 default fires on a
+// pre-existing 0600 file — Apply must actually enforce it.
+func TestFileManagedModeConvergenceDefaultMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "default-mode.conf")
+	if err := os.WriteFile(path, []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+		"path":    path,
+		"content": "content",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+
+	cr, err := s.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange (default 0644 vs 0600)")
+	}
+
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0644 {
+		t.Errorf("mode after apply: got %04o, want 0644", info.Mode().Perm())
+	}
+
+	cr, err = s.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check after apply: %v", err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("default-mode facet did not converge, diff: %s", cr.Diff)
+	}
+}
+
+// TestFileManagedRevertRestoresPriorMode pins that Revert restores the
+// CAPTURED prior mode, not the desired mode Apply set.
+func TestFileManagedRevertRestoresPriorMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "revert-mode.conf")
+	if err := os.WriteFile(path, []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+		"path":    path,
+		"content": "modified",
+		"mode":    "0644",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0644 {
+		t.Fatalf("mode after apply: got %04o, want 0644", info.Mode().Perm())
+	}
+
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "original" {
+		t.Errorf("content after revert: got %q, want %q", string(data), "original")
+	}
+	info, err = os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("mode after revert: got %04o, want captured prior 0600", info.Mode().Perm())
+	}
+}
+
+// TestFileManagedReApplyKeepsFirstBackup pins first-capture-wins: a re-Apply
+// on the same instance (retry:, watch-forced runs) must not clobber the
+// original backup with already-applied content.
+func TestFileManagedReApplyKeepsFirstBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "retry.conf")
+	if err := os.WriteFile(path, []byte("A"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+		"path":    path,
+		"content": "B",
+		"mode":    "0644",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply #1: %v", err)
+	}
+	// Re-apply on the same instance: the file now holds "B" — the backup
+	// memo must keep the first capture ("A", 0640).
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply #2: %v", err)
+	}
+
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "A" {
+		t.Errorf("content after revert: got %q, want original %q (backup clobbered by re-apply)", string(data), "A")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0640 {
+		t.Errorf("mode after revert: got %04o, want original 0640", info.Mode().Perm())
+	}
+}
+
+// TestFileManagedCreatedPrecedenceOverBackup pins that wasCreated outranks a
+// later backup capture: a file this instance CREATED must be REMOVED by
+// Revert even after a re-Apply saw it existing.
+func TestFileManagedCreatedPrecedenceOverBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "created.conf")
+
+	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+		"path":    path,
+		"content": "B",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply #1: %v", err)
+	}
+	// Re-apply: the file now exists, but it never PRE-existed — Revert must
+	// still remove it, not rewrite the already-applied content back.
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply #2: %v", err)
+	}
+
+	rr, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if !rr.Changed {
+		t.Error("expected Changed on revert of created file")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("created file must be removed by revert, not rewritten")
+	}
+}
+
 func TestFileManagedApplyReadErrorFails(t *testing.T) {
 	fake := exectest.NewFakeFileExec()
 	path := "/etc/locked.conf"

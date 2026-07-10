@@ -312,6 +312,76 @@ func TestFileCopyRevertCreatedToleratesMissing(t *testing.T) {
 	}
 }
 
+// TestFileCopyReApplyKeepsFirstBackup pins first-capture-wins: a re-Apply on
+// the same instance (retry:, watch-forced runs) must not clobber the original
+// destination backup with the copy's own content.
+func TestFileCopyReApplyKeepsFirstBackup(t *testing.T) {
+	ctx := context.Background()
+	src := writeTempFile(t, "src.txt", "new\n")
+	dst := writeTempFile(t, "dst.txt", "old\n")
+
+	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+		"source": src, "force": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply #1: %v", err)
+	}
+	// Re-apply on the same instance: dst now holds the source content — the
+	// backup memo must keep the first capture ("old\n").
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply #2: %v", err)
+	}
+
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	got, _ := os.ReadFile(dst)
+	if string(got) != "old\n" {
+		t.Errorf("content after revert: got %q, want original %q (backup clobbered by re-apply)", string(got), "old\n")
+	}
+}
+
+// TestFileCopyCreatedPrecedenceOverBackup pins that wasCreated outranks a
+// later backup capture: a destination this instance CREATED must be REMOVED
+// by Revert even after a forced re-Apply saw it existing — never rewritten
+// with the copy's own content.
+func TestFileCopyCreatedPrecedenceOverBackup(t *testing.T) {
+	ctx := context.Background()
+	src := writeTempFile(t, "src.txt", "data\n")
+	dst := filepath.Join(t.TempDir(), "dst.txt")
+
+	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+		"source": src, "force": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply #1: %v", err)
+	}
+	// Re-apply (force path: dest exists and matches source): the destination
+	// never PRE-existed, so Revert must still remove it.
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatalf("Apply #2: %v", err)
+	}
+
+	rr, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if !rr.Changed {
+		t.Error("expected Changed on revert of created destination")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Error("created destination must be removed by revert, not rewritten with source content")
+	}
+}
+
 func TestFileCopyCheckReadErrorFails(t *testing.T) {
 	ctx := context.Background()
 	fake := exectest.NewFakeFileExec()

@@ -177,9 +177,16 @@ func (f *FileCopy) Apply(ctx context.Context) (state.ApplyResult, error) {
 	}
 
 	// Record revert memos only after the write actually changed the system.
+	// First capture wins: a re-Apply on the same instance (retry:, watch-
+	// forced runs) must not clobber the original backup with the copy's own
+	// content — and a destination this instance CREATED stays wasCreated, or
+	// Revert would rewrite source content into a file that never pre-existed
+	// instead of removing it.
 	if preExisted {
-		f.backup = priorContent
-		f.backupSet = true
+		if !f.backupSet && !f.wasCreated {
+			f.backup = priorContent
+			f.backupSet = true
+		}
 	} else {
 		f.wasCreated = true
 	}

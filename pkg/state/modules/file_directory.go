@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strconv"
@@ -75,6 +76,12 @@ func (d *FileDirectory) desiredMode() (fs.FileMode, error) {
 func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
 	info, err := d.file.Stat(ctx, d.Path)
 	if err != nil {
+		// Only a genuine not-exist means "directory absent"; any other stat
+		// error (permissions, I/O) fails the check rather than reporting
+		// phantom drift and letting Apply proceed blind.
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("file.directory: stat %s: %w", d.Path, err)
+		}
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("directory %s does not exist", d.Path),
@@ -117,14 +124,26 @@ func (d *FileDirectory) Apply(ctx context.Context) (state.ApplyResult, error) {
 		return state.ApplyResult{}, err
 	}
 
-	// Check if directory already exists.
-	_, statErr := d.file.Stat(ctx, d.Path)
-	if statErr != nil {
-		d.wasCreated = true
+	// Probe existence for the revert memo. Only a genuine not-exist can mark
+	// the directory as created; any other stat error fails the apply — a
+	// pre-existing tree must never be memoized as created (a same-instance
+	// Revert would RemoveAll it).
+	preExisted := false
+	if _, statErr := d.file.Stat(ctx, d.Path); statErr != nil {
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			return state.ApplyResult{}, fmt.Errorf("file.directory: stat %s: %w", d.Path, statErr)
+		}
+	} else {
+		preExisted = true
 	}
 
 	if err := d.file.MkdirAll(ctx, d.Path, mode); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("file.directory: mkdir %s: %w", d.Path, err)
+	}
+
+	// Record the revert memo only after the directory was actually created.
+	if !preExisted {
+		d.wasCreated = true
 	}
 
 	if err := d.file.Chmod(ctx, d.Path, mode); err != nil {

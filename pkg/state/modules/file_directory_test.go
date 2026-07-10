@@ -322,6 +322,136 @@ func TestFileDirectoryCheckIsFile(t *testing.T) {
 // Verify the State interface is fully satisfied at compile time.
 var _ state.State = (*FileDirectory)(nil)
 
+// lockedParentDir builds <tmp>/locked/<name> with content inside, then makes
+// the parent unreadable so Stat on the child fails with EACCES (a genuine
+// non-not-exist error). Returns the child path.
+func lockedParentDir(t *testing.T) string {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission errors cannot be simulated")
+	}
+	tmp := t.TempDir()
+	parent := filepath.Join(tmp, "locked")
+	target := filepath.Join(parent, "dir")
+	if err := os.MkdirAll(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "data.txt"), []byte("precious"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0755) })
+	return target
+}
+
+// TestFileDirectoryCheckStatErrorFails pins that a non-not-exist stat error
+// (EACCES) fails the check phase instead of reporting phantom "does not
+// exist" drift.
+func TestFileDirectoryCheckStatErrorFails(t *testing.T) {
+	target := lockedParentDir(t)
+
+	s, err := NewFileDirectoryBuilder(testFileDirMctx())(target, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Check(context.Background()); err == nil {
+		t.Error("expected Check to fail on a non-not-exist stat error, not report the directory as absent")
+	}
+}
+
+// TestFileDirectoryApplyStatErrorDoesNotPoisonRevert pins that Apply fails on
+// a non-not-exist stat error WITHOUT arming wasCreated — a poisoned memo
+// would make a same-instance Revert RemoveAll a pre-existing tree.
+func TestFileDirectoryApplyStatErrorDoesNotPoisonRevert(t *testing.T) {
+	target := lockedParentDir(t)
+
+	s, err := NewFileDirectoryBuilder(testFileDirMctx())(target, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if _, err := s.Apply(ctx); err == nil {
+		t.Fatal("expected Apply to fail on a non-not-exist stat error")
+	}
+
+	// Restore access; the same-instance Revert must be a clean no-op that
+	// leaves the pre-existing tree intact.
+	if err := os.Chmod(filepath.Dir(target), 0755); err != nil {
+		t.Fatal(err)
+	}
+	rr, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if rr.Changed {
+		t.Error("revert after a failed apply must be a no-op (wasCreated poisoned)")
+	}
+	if _, err := os.Stat(filepath.Join(target, "data.txt")); err != nil {
+		t.Errorf("pre-existing tree destroyed by revert: %v", err)
+	}
+}
+
+// TestFileDirectoryConvergence walks Check → Apply → Check for both facets
+// this module enforces: creation and mode.
+func TestFileDirectoryConvergence(t *testing.T) {
+	ctx := context.Background()
+
+	// Facet: creation.
+	created := filepath.Join(t.TempDir(), "newdir")
+	s, err := NewFileDirectoryBuilder(testFileDirMctx())(created, map[string]any{"mode": "0750"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange for missing directory")
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("creation facet did not converge, diff: %s", cr.Diff)
+	}
+
+	// Facet: mode on a pre-existing directory.
+	existing := filepath.Join(t.TempDir(), "modedir")
+	if err := os.Mkdir(existing, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err = NewFileDirectoryBuilder(testFileDirMctx())(existing, map[string]any{"mode": "0755"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange for mode drift")
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("mode facet did not converge, diff: %s", cr.Diff)
+	}
+}
+
 func TestFileDirectoryCheckOwnershipDrift(t *testing.T) {
 	userName, uid, groupName, gid := testCurrentUserGroup(t)
 
