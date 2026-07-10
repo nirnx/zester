@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -116,6 +117,157 @@ func TestPkgInstalledCheckNotInstalled(t *testing.T) {
 	}
 	if !cr.NeedsChange {
 		t.Error("expected NeedsChange for missing package")
+	}
+}
+
+func TestPkgInstalledCheckVersionMismatch(t *testing.T) {
+	// A declared version pin is part of the desired state: an installed
+	// package at any OTHER version needs a change (upgrade AND downgrade
+	// directions — the comparison is symmetric).
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "1.20.1-1")
+	mctx := testPkgMctx(fakePkg)
+	builder := NewPkgInstalledBuilder(mctx)
+
+	s, err := builder("nginx", map[string]any{"version": "1.24.0-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange when the installed version differs from the declared pin")
+	}
+	if !strings.Contains(cr.Diff, `got "1.20.1-1"`) || !strings.Contains(cr.Diff, `want "1.24.0-1"`) {
+		t.Errorf("diff should carry got/want versions, got %q", cr.Diff)
+	}
+}
+
+func TestPkgInstalledCheckVersionMatch(t *testing.T) {
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "1.24.0-1")
+	mctx := testPkgMctx(fakePkg)
+	builder := NewPkgInstalledBuilder(mctx)
+
+	s, err := builder("nginx", map[string]any{"version": "1.24.0-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when the installed version matches the pin, diff %q", cr.Diff)
+	}
+}
+
+func TestPkgInstalledCheckNoVersionDeclaredIgnoresInstalledVersion(t *testing.T) {
+	// Undeclared facet must never churn: without a version pin, any
+	// installed version satisfies the state.
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "1.20.1-1")
+	mctx := testPkgMctx(fakePkg)
+	builder := NewPkgInstalledBuilder(mctx)
+
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change without a declared version pin, diff %q", cr.Diff)
+	}
+}
+
+func TestPkgInstalledCheckVersionDeclaredButAbsent(t *testing.T) {
+	// The absent => install path is unchanged by the pin comparison.
+	fakePkg := exectest.NewFakePackageExec("apt")
+	mctx := testPkgMctx(fakePkg)
+	builder := NewPkgInstalledBuilder(mctx)
+
+	s, err := builder("nginx", map[string]any{"version": "1.24.0-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange for a missing package")
+	}
+	if !strings.Contains(cr.Diff, "needs to be installed") {
+		t.Errorf("expected the install diff for an absent package, got %q", cr.Diff)
+	}
+}
+
+func TestPkgInstalledVersionPinConvergesAfterApply(t *testing.T) {
+	// Check(drift) -> Apply(pin) -> Check must converge.
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakePkg.PreInstall("nginx", "1.20.1-1")
+	mctx := testPkgMctx(fakePkg)
+	builder := NewPkgInstalledBuilder(mctx)
+
+	s, err := builder("nginx", map[string]any{"version": "1.24.0-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("precondition: drifted version should need a change")
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected convergence after Apply installed the pinned version, diff %q", cr.Diff)
+	}
+}
+
+func TestPkgInstalledCheckDebianRcStateNeedsInstall(t *testing.T) {
+	// A dpkg 'rc' package (removed, conffiles remain) reports
+	// "config-files" for ${db:Status-Status}; the status-aware provider
+	// probe must count it as NOT installed so pkg.installed reinstalls it
+	// instead of reporting "already installed" forever.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: "config-files", ExitCode: 0}, nil)
+	mctx := &exec.ModuleContext{
+		ProviderSet: exec.ProviderSet{
+			Package: exec.NewAptProvider(fakeCmd),
+			Command: fakeCmd,
+		},
+	}
+	builder := NewPkgInstalledBuilder(mctx)
+
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange for a package in dpkg rc state")
 	}
 }
 

@@ -7,6 +7,33 @@ All notable changes to Zester are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **`pkg.installed` honors a declared `version:` pin in Check.** Check only
+  asked "is it installed?", so a version-pinned state was satisfied by ANY
+  installed version and the pinned install never ran — version drift (both
+  upgrade and downgrade directions) was silently reported as compliant
+  forever. Check now compares the provider's installed version against the
+  pin and reports a got/want diff on mismatch. Undeclared `version:` is
+  unchanged: any installed version satisfies the state.
+- **Debian `rc`-state packages (removed, conffiles remain) no longer count
+  as installed.** The apt installed-probe now requires dpkg status
+  `installed` (`dpkg-query -W -f='${db:Status-Status}'`) instead of trusting
+  the `dpkg -s` exit code, fixing two convergence bugs: `pkg.installed`
+  could never reinstall a previously-removed conffile-bearing package
+  ("already installed" forever), and `pkg.removed` re-applied forever after
+  its own successful removal (spurious `Changed` every highstate, firing any
+  `watch`/`onchanges` dependents each run).
+- **`pkgrepo.managed` verifies the declared signing key on Debian.** The
+  key fetched from `key_url` is now stored persistently at
+  `/etc/apt/keyrings/zester-<name>.gpg` (was a `/tmp` download) before
+  `apt-key add`, and Check reports changes needed when that keyring file is
+  missing — previously the key dimension was invisible to Check (the `.list`
+  bytes don't contain the key URL), so a never-imported or deleted key left
+  `apt-get update` failing NO_PUBKEY while the state reported converged.
+  Presence-only: a key rotated in place at the same URL is still not
+  detected. Revert now also removes the keyring artifact. Non-not-exist
+  read errors on the repo file or keyring now fail Check instead of being
+  treated as "missing".
+
 - **`pkg.latest` now refreshes the package cache BEFORE checking
   upgradability** (Salt parity). Refresh (default on) previously ran only in
   Apply, but Check consulted the stale on-disk index and short-circuited
@@ -22,6 +49,12 @@ All notable changes to Zester are documented here. The format follows
   with the best-available index in BOTH phases instead of failing the state;
   and `--test` dry runs now refresh the index too (metadata-only,
   Salt-consistent).
+
+### Changed
+- **`pkg.removed` Revert is now an explicit clean no-op** (`Changed: false`).
+  It previously reinstalled the package at the repo's latest candidate,
+  driven by a never-populated "saved version" memo — a guess, not the
+  inverse of Apply. Reinstall explicitly with `pkg.installed` instead.
 
 ## [0.4.1] - 2026-07-09
 

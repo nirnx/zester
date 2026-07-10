@@ -19,9 +19,6 @@ type PkgRemoved struct {
 
 	// pkg is the injected package execution provider.
 	pkg exec.PackageExec
-
-	// savedVersion stores the version for reinstall on revert.
-	savedVersion string
 }
 
 // NewPkgRemovedBuilder returns a state.Builder that creates PkgRemoved
@@ -85,13 +82,14 @@ func (p *PkgRemoved) Apply(ctx context.Context) (state.ApplyResult, error) {
 	}, nil
 }
 
+// Revert is an explicit clean no-op: no phase records the version that was
+// removed, and it cannot be re-derived after the package is gone, so a
+// reinstall here would guess (install whatever the repo's latest candidate
+// happens to be — not the inverse of Apply). Reinstall explicitly with
+// pkg.installed instead.
 func (p *PkgRemoved) Revert(ctx context.Context) (state.ApplyResult, error) {
-	if err := p.pkg.Install(ctx, p.Package, p.savedVersion); err != nil {
-		return state.ApplyResult{}, fmt.Errorf("pkg.removed: reinstall %s: %w", p.Package, err)
-	}
-
 	return state.ApplyResult{
-		Changed: true,
-		Diff:    fmt.Sprintf("reinstalled %s via %s", p.Package, p.pkg.Name()),
+		Changed: false,
+		Diff:    fmt.Sprintf("nothing to revert: removed version of %s was not recorded; reinstall explicitly with pkg.installed", p.Package),
 	}, nil
 }
