@@ -161,7 +161,32 @@ func TestPkgrepoManagedApplyAptIdempotent(t *testing.T) {
 	}
 }
 
+// curlToDiskCmd wraps FakeCommandExec and simulates curl's `-o <path>` side
+// effect by materializing the download target in the FakeFileExec — the same
+// world view production has, where curl and OSFileExec share the real FS.
+type curlToDiskCmd struct {
+	*exectest.FakeCommandExec
+	file *exectest.FakeFileExec
+	body []byte
+}
+
+func (c *curlToDiskCmd) Run(ctx context.Context, opts exec.CommandOpts) (*exec.CommandResult, error) {
+	res, err := c.FakeCommandExec.Run(ctx, opts)
+	if err == nil && opts.Command == "curl" {
+		for i, a := range opts.Args {
+			if a == "-o" && i+1 < len(opts.Args) {
+				c.file.PreCreate(opts.Args[i+1], c.body, 0644)
+			}
+		}
+	}
+	return res, err
+}
+
 func TestPkgrepoManagedApplyAptWithKey(t *testing.T) {
+	// The key download must go DIRECTLY to disk (`curl -o <keyring>`), never
+	// through captured stdout: CommandResult.Stdout is TrimSpace'd, which
+	// corrupts binary (non-armored) .gpg keys whose final byte is
+	// whitespace-class.
 	fakeFile := exectest.NewFakeFileExec()
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
@@ -176,20 +201,34 @@ func TestPkgrepoManagedApplyAptWithKey(t *testing.T) {
 	if _, err := s.Apply(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var sawCurl, sawAptKey bool
+
+	const keyring = "/etc/apt/keyrings/zester-docker.gpg"
+	var curlArgs, aptKeyArgs []string
 	for _, c := range fakeCmd.Calls() {
 		switch c.Command {
 		case "curl":
-			sawCurl = true
+			curlArgs = c.Args
 		case "apt-key":
-			sawAptKey = true
+			aptKeyArgs = c.Args
 		}
 	}
-	if !sawCurl {
-		t.Error("expected curl to fetch the signing key")
+	want := []string{"-fsSL", "-o", keyring, "https://example.com/gpg"}
+	if len(curlArgs) != len(want) {
+		t.Fatalf("curl args: got %v, want %v", curlArgs, want)
 	}
-	if !sawAptKey {
-		t.Error("expected apt-key to import the signing key")
+	for i := range want {
+		if curlArgs[i] != want[i] {
+			t.Fatalf("curl args: got %v, want %v", curlArgs, want)
+		}
+	}
+	if len(aptKeyArgs) != 2 || aptKeyArgs[0] != "add" || aptKeyArgs[1] != keyring {
+		t.Errorf("apt-key args: got %v, want [add %s]", aptKeyArgs, keyring)
+	}
+	// The key bytes must NOT be routed through FileExec (the stdout
+	// round-trip regression): only the .list file is written via the
+	// provider.
+	if fakeFile.Exists(keyring) {
+		t.Error("keyring must be written by curl -o, not via FileExec.WriteFile")
 	}
 }
 
@@ -280,10 +319,20 @@ func TestPkgrepoManagedCheckListReadErrorFailsPhase(t *testing.T) {
 }
 
 func TestPkgrepoManagedApplyWritesKeyringAndConverges(t *testing.T) {
+	// Check probes the keyring path for presence; Apply produces exactly
+	// that path via `curl -o` — Check -> Apply -> Check must converge. The
+	// simulated download body deliberately ends in a whitespace-class byte
+	// (0x0A): written direct-to-disk it survives verbatim, where the old
+	// stdout round-trip would have TrimSpace'd it off.
 	fakeFile := exectest.NewFakeFileExec()
-	fakeCmd := exectest.NewFakeCommandExec()
-	fakeCmd.SetResult("curl", &exec.CommandResult{Stdout: "KEYDATA", ExitCode: 0}, nil)
-	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
+	binaryKey := []byte{0x99, 0x01, 0x0D, 0x04, 0x0A}
+	fakeCmd := &curlToDiskCmd{
+		FakeCommandExec: exectest.NewFakeCommandExec(),
+		file:            fakeFile,
+		body:            binaryKey,
+	}
+	mctx := testPkgrepoMctx(fakeFile, fakeCmd.FakeCommandExec, "debian", "apt")
+	mctx.Command = fakeCmd
 	builder := NewPkgrepoManagedBuilder(mctx)
 	s, err := builder("docker", map[string]any{
 		"baseurl": "deb https://example.com stable main",
@@ -292,30 +341,44 @@ func TestPkgrepoManagedApplyWritesKeyringAndConverges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange before the key is imported")
+	}
+
 	if _, err := s.Apply(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	data, ok := fakeFile.GetFile("/etc/apt/keyrings/zester-docker.gpg")
 	if !ok {
-		t.Fatal("expected Apply to persist the fetched key to the keyring path")
+		t.Fatal("expected the fetched key at the keyring path Check probes")
 	}
-	if string(data) != "KEYDATA" {
-		t.Errorf("keyring content: got %q, want %q", string(data), "KEYDATA")
+	if string(data) != string(binaryKey) {
+		t.Errorf("keyring bytes mangled: got %v, want %v", data, binaryKey)
 	}
-	cr, err := s.Check(context.Background())
+
+	cr, err = s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cr.NeedsChange {
-		t.Errorf("expected Apply -> Check convergence with a declared key_url, diff %q", cr.Diff)
+		t.Errorf("expected Check -> Apply -> Check convergence with a declared key_url, diff %q", cr.Diff)
 	}
 }
 
 func TestPkgrepoManagedRevertRemovesKeyring(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
-	fakeCmd := exectest.NewFakeCommandExec()
-	fakeCmd.SetResult("curl", &exec.CommandResult{Stdout: "KEYDATA", ExitCode: 0}, nil)
-	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
+	fakeCmd := &curlToDiskCmd{
+		FakeCommandExec: exectest.NewFakeCommandExec(),
+		file:            fakeFile,
+		body:            []byte("KEYDATA"),
+	}
+	mctx := testPkgrepoMctx(fakeFile, fakeCmd.FakeCommandExec, "debian", "apt")
+	mctx.Command = fakeCmd
 	builder := NewPkgrepoManagedBuilder(mctx)
 	s, err := builder("docker", map[string]any{
 		"baseurl": "deb https://example.com stable main",
@@ -326,6 +389,9 @@ func TestPkgrepoManagedRevertRemovesKeyring(t *testing.T) {
 	}
 	if _, err := s.Apply(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if !fakeFile.Exists("/etc/apt/keyrings/zester-docker.gpg") {
+		t.Fatal("precondition: keyring should exist after apply")
 	}
 	if _, err := s.Revert(context.Background()); err != nil {
 		t.Fatal(err)

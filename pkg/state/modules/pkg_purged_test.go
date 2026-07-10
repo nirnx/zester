@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -77,11 +78,143 @@ func TestPkgPurgedRequisites(t *testing.T) {
 	}
 }
 
-func TestPkgPurgedCheckNotInstalled(t *testing.T) {
-	fakePkg := exectest.NewFakePackageExec("apt")
-	mctx := testPkgPurgedMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
+// Check's probe is dpkg-status-aware and deliberately does NOT go through
+// PackageExec.IsInstalled: that provider probe answers "fully installed?"
+// (rc = not installed) for pkg.installed/pkg.removed, while pkg.purged's
+// entire value-add is clearing residual 'rc' state (removed, conffiles
+// remain). Converged means: no dpkg record at all.
+func TestPkgPurgedCheckDebianStatuses(t *testing.T) {
+	for name, tc := range map[string]struct {
+		stdout string
+		exit   int
+		err    error
+		needs  bool
+	}{
+		"installed needs purge":          {"installed\n", 0, nil, true},
+		"rc residual config needs purge": {"config-files\n", 0, nil, true},
+		"half-installed needs purge":     {"half-installed\n", 0, nil, true},
+		"no dpkg record converged":       {"", 1, errors.New("exit status 1"), false},
+		"not-installed status converged": {"not-installed\n", 0, nil, false},
+		"multiarch one rc needs purge":   {"not-installed\nconfig-files\n", 0, nil, true},
+		"multiarch installed":            {"installed\ninstalled\n", 0, nil, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fakeCmd := exectest.NewFakeCommandExec()
+			fakeCmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: tc.stdout, ExitCode: tc.exit}, tc.err)
+			mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), fakeCmd, "debian")
+			builder := NewPkgPurgedBuilder(mctx)
+			s, err := builder("nginx", map[string]any{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cr, err := s.Check(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cr.NeedsChange != tc.needs {
+				t.Errorf("NeedsChange = %v, want %v (diff %q)", cr.NeedsChange, tc.needs, cr.Diff)
+			}
+		})
+	}
+}
+
+func TestPkgPurgedCheckProbeSpawnFailureErrors(t *testing.T) {
+	// A probe that never ran (nil result: spawn failure, context death) is a
+	// real error — reporting "converged" would silently skip the purge.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("dpkg-query", nil, errors.New("fork failed"))
+	mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), fakeCmd, "debian")
 	builder := NewPkgPurgedBuilder(mctx)
 	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(context.Background()); err == nil {
+		t.Error("expected Check to fail when the probe never ran")
+	}
+}
+
+func TestPkgPurgedCheckRedhat(t *testing.T) {
+	for name, tc := range map[string]struct {
+		res   *exec.CommandResult
+		err   error
+		needs bool
+	}{
+		"installed needs purge": {&exec.CommandResult{ExitCode: 0}, nil, true},
+		"absent converged":      {&exec.CommandResult{ExitCode: 1}, errors.New("exit status 1"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fakeCmd := exectest.NewFakeCommandExec()
+			fakeCmd.SetResult("rpm", tc.res, tc.err)
+			mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("dnf"), fakeCmd, "redhat")
+			builder := NewPkgPurgedBuilder(mctx)
+			s, err := builder("httpd", map[string]any{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cr, err := s.Check(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cr.NeedsChange != tc.needs {
+				t.Errorf("NeedsChange = %v, want %v", cr.NeedsChange, tc.needs)
+			}
+		})
+	}
+}
+
+func TestPkgPurgedRcStateConvergence(t *testing.T) {
+	// THE regression walk: a removed-but-not-purged package ('rc' state)
+	// must be seen as needs-purge, and after Apply purges the record the
+	// second Check must report converged.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: "config-files\n", ExitCode: 0}, nil)
+	mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), fakeCmd, "debian")
+	builder := NewPkgPurgedBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange for a package in dpkg 'rc' state (conffiles linger)")
+	}
+
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var purged bool
+	for _, c := range fakeCmd.Calls() {
+		if c.Command == "apt-get" && len(c.Args) > 0 && c.Args[0] == "purge" {
+			purged = true
+		}
+	}
+	if !purged {
+		t.Fatal("expected Apply to run apt-get purge")
+	}
+
+	// After the purge dpkg has no record for the package.
+	fakeCmd.SetResult("dpkg-query", &exec.CommandResult{ExitCode: 1}, errors.New("exit status 1"))
+	cr, err = s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected Check -> Apply -> Check convergence, diff %q", cr.Diff)
+	}
+}
+
+func TestPkgPurgedDarwinProviderFallback(t *testing.T) {
+	// Unknown-to-dpkg/rpm families fall back to the PackageExec probe (no
+	// residual-config concept there), mirroring Apply's provider fallback.
+	fakePkg := exectest.NewFakePackageExec("brew")
+	mctx := testPkgPurgedMctx(fakePkg, exectest.NewFakeCommandExec(), "darwin")
+	builder := NewPkgPurgedBuilder(mctx)
+	s, err := builder("wget", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,25 +223,16 @@ func TestPkgPurgedCheckNotInstalled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cr.NeedsChange {
-		t.Error("expected no change when package is not installed")
+		t.Error("expected converged when the provider reports not installed")
 	}
-}
 
-func TestPkgPurgedCheckInstalled(t *testing.T) {
-	fakePkg := exectest.NewFakePackageExec("apt")
-	fakePkg.PreInstall("nginx", "")
-	mctx := testPkgPurgedMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgPurgedBuilder(mctx)
-	s, err := builder("nginx", map[string]any{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cr, err := s.Check(context.Background())
+	fakePkg.PreInstall("wget", "")
+	cr, err = s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cr.NeedsChange {
-		t.Error("expected NeedsChange when package is installed")
+		t.Error("expected NeedsChange when the provider reports installed")
 	}
 }
 
@@ -179,9 +303,13 @@ func TestPkgPurgedApplyError(t *testing.T) {
 	}
 }
 
-func TestPkgPurgedRevert(t *testing.T) {
+func TestPkgPurgedRevertFreshInstanceCleanNoOp(t *testing.T) {
+	// The runner builds FRESH instances for ModeRevert: Revert must be an
+	// explicit clean no-op — never a guessed reinstall of whatever the
+	// repo's latest candidate is, and never a lying Changed:true.
 	fakePkg := exectest.NewFakePackageExec("apt")
-	mctx := testPkgPurgedMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
+	fakeCmd := exectest.NewFakeCommandExec()
+	mctx := testPkgPurgedMctx(fakePkg, fakeCmd, "debian")
 	builder := NewPkgPurgedBuilder(mctx)
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
@@ -191,11 +319,50 @@ func TestPkgPurgedRevert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ar.Changed {
-		t.Error("expected Changed after revert (reinstall)")
+	if ar.Changed {
+		t.Error("Revert must not report Changed: nothing was purged this run")
 	}
-	if !fakePkg.IsInstalledSync("nginx") {
-		t.Error("expected nginx to be reinstalled")
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("diff should explain the no-op, got %q", ar.Diff)
+	}
+	if fakeCmd.CallCount() != 0 {
+		t.Errorf("Revert must not run any command, ran %d", fakeCmd.CallCount())
+	}
+	if fakePkg.IsInstalledSync("nginx") {
+		t.Error("Revert must not reinstall the package")
+	}
+}
+
+func TestPkgPurgedRevertAfterApplySameInstanceStillNoOp(t *testing.T) {
+	// Even same-instance Apply -> Revert must not reinstall: the purged
+	// version was never recorded and the purged conffiles cannot be
+	// restored — reinstall-latest is not the inverse of Apply.
+	fakePkg := exectest.NewFakePackageExec("apt")
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: "config-files\n", ExitCode: 0}, nil)
+	mctx := testPkgPurgedMctx(fakePkg, fakeCmd, "debian")
+	builder := NewPkgPurgedBuilder(mctx)
+	s, err := builder("nginx", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("Revert must not report Changed even after a same-instance Apply")
+	}
+	for _, c := range fakeCmd.Calls() {
+		if len(c.Args) > 0 && c.Args[0] == "install" {
+			t.Errorf("Revert must not run an install, saw %s %v", c.Command, c.Args)
+		}
+	}
+	if fakePkg.IsInstalledSync("nginx") {
+		t.Error("Revert must not reinstall the package")
 	}
 }
 

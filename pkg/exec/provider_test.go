@@ -66,8 +66,10 @@ func TestAptProviderInstalledVersion(t *testing.T) {
 }
 
 func TestAptProviderIsInstalledNotFound(t *testing.T) {
+	// The probe RAN and exited non-zero (no dpkg record): that is the
+	// "absent" ANSWER, not an error.
 	cmd := exectest.NewFakeCommandExec()
-	cmd.SetError("dpkg", fmt.Errorf("not installed"))
+	cmd.SetError("dpkg-query", fmt.Errorf("exit status 1"))
 	p := exec.NewAptProvider(cmd)
 
 	installed, err := p.IsInstalled(context.Background(), "nginx")
@@ -75,7 +77,79 @@ func TestAptProviderIsInstalledNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	if installed {
-		t.Error("expected not installed when dpkg fails")
+		t.Error("expected not installed when dpkg-query exits non-zero")
+	}
+
+	v, err := p.InstalledVersion(context.Background(), "nginx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != "" {
+		t.Errorf("expected empty version for absent package, got %q", v)
+	}
+}
+
+func TestAptProviderIsInstalledMultiArch(t *testing.T) {
+	// A package installed for multiple architectures prints one status per
+	// matching instance; without the \n record separator in the -f format
+	// they concatenate ("installedinstalled") and a fully-installed package
+	// would read as absent — pkg.installed would perma-churn.
+	for name, tc := range map[string]struct {
+		stdout string
+		want   bool
+	}{
+		"both installed": {"installed\ninstalled\n", true},
+		"one arch rc":    {"installed\nconfig-files\n", true},
+		"both rc":        {"config-files\nconfig-files\n", false},
+	} {
+		cmd := exectest.NewFakeCommandExec()
+		cmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: tc.stdout, ExitCode: 0}, nil)
+		p := exec.NewAptProvider(cmd)
+		installed, err := p.IsInstalled(context.Background(), "libc6")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if installed != tc.want {
+			t.Errorf("%s: installed = %v, want %v", name, installed, tc.want)
+		}
+	}
+}
+
+func TestAptProviderInstalledVersionMultiArch(t *testing.T) {
+	for name, tc := range map[string]struct {
+		stdout string
+		want   string
+	}{
+		"two arches":      {"installed 2.36-9+deb12u14\ninstalled 2.36-9+deb12u14\n", "2.36-9+deb12u14"},
+		"rc then current": {"config-files 1.20.0-1\ninstalled 2.36-9\n", "2.36-9"},
+	} {
+		cmd := exectest.NewFakeCommandExec()
+		cmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: tc.stdout, ExitCode: 0}, nil)
+		p := exec.NewAptProvider(cmd)
+		v, err := p.InstalledVersion(context.Background(), "libc6")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != tc.want {
+			t.Errorf("%s: version = %q, want %q", name, v, tc.want)
+		}
+	}
+}
+
+func TestAptProviderProbeNeverRanErrors(t *testing.T) {
+	// A nil CommandResult means the probe never executed (spawn failure,
+	// context death, missing dpkg-query). That must surface as an ERROR —
+	// swallowing it as "not installed" lets pkg.removed/pkg.purged record
+	// clean convergence on a probe that never ran.
+	cmd := exectest.NewFakeCommandExec()
+	cmd.SetResult("dpkg-query", nil, fmt.Errorf("context canceled"))
+	p := exec.NewAptProvider(cmd)
+
+	if _, err := p.IsInstalled(context.Background(), "nginx"); err == nil {
+		t.Error("IsInstalled: expected error when the probe never ran")
+	}
+	if _, err := p.InstalledVersion(context.Background(), "nginx"); err == nil {
+		t.Error("InstalledVersion: expected error when the probe never ran")
 	}
 }
 
@@ -232,6 +306,64 @@ func TestYumProviderInstallWithVersion(t *testing.T) {
 	lastArg := cmd.Calls()[0].Args[len(cmd.Calls()[0].Args)-1]
 	if lastArg != "nginx-1.20" {
 		t.Errorf("version arg: got %q, want %q", lastArg, "nginx-1.20")
+	}
+}
+
+func TestYumProviderInstallPinnedDowngradeFallback(t *testing.T) {
+	// EL7 yum silently no-ops `install pkg-<older>` when a NEWER version is
+	// installed ("Nothing to do", exit 0). installPinned verifies the pin
+	// landed and falls back to `yum downgrade` so a version-pinned state
+	// converges (install-over-newer) instead of perma-churning.
+	cmd := exectest.NewFakeCommandExec()
+	// rpm still reports the newer version after the install attempt.
+	cmd.SetResult("rpm", &exec.CommandResult{Stdout: "2.0-1", ExitCode: 0}, nil)
+	p := exec.NewYumProvider(cmd)
+
+	if err := p.Install(context.Background(), "dummy", "1.0-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := cmd.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("expected install, verify, downgrade — got %d calls: %+v", len(calls), calls)
+	}
+	if calls[0].Command != "yum" || calls[0].Args[0] != "install" ||
+		calls[0].Args[len(calls[0].Args)-1] != "dummy-1.0-1" {
+		t.Errorf("call 0: got %s %v, want yum install ... dummy-1.0-1", calls[0].Command, calls[0].Args)
+	}
+	if calls[1].Command != "rpm" || calls[1].Args[0] != "-q" {
+		t.Errorf("call 1: got %s %v, want rpm -q pin verification", calls[1].Command, calls[1].Args)
+	}
+	if calls[2].Command != "yum" || calls[2].Args[0] != "downgrade" ||
+		calls[2].Args[len(calls[2].Args)-1] != "dummy-1.0-1" {
+		t.Errorf("call 2: got %s %v, want yum downgrade -y dummy-1.0-1", calls[2].Command, calls[2].Args)
+	}
+}
+
+func TestYumProviderInstallPinnedAlreadyLanded(t *testing.T) {
+	// Pin verification reports the requested version: no downgrade runs.
+	cmd := exectest.NewFakeCommandExec()
+	cmd.SetResult("rpm", &exec.CommandResult{Stdout: "1.0-1", ExitCode: 0}, nil)
+	p := exec.NewYumProvider(cmd)
+
+	if err := p.Install(context.Background(), "dummy", "1.0-1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cmd.Calls() {
+		if c.Command == "yum" && len(c.Args) > 0 && c.Args[0] == "downgrade" {
+			t.Errorf("unexpected downgrade when the pin landed: %v", c.Args)
+		}
+	}
+}
+
+func TestYumProviderInstallUnpinnedSkipsVerification(t *testing.T) {
+	cmd := exectest.NewFakeCommandExec()
+	p := exec.NewYumProvider(cmd)
+	if err := p.Install(context.Background(), "dummy", ""); err != nil {
+		t.Fatal(err)
+	}
+	if cmd.CallCount() != 1 {
+		t.Fatalf("unpinned install must be a single yum call, got %d", cmd.CallCount())
 	}
 }
 

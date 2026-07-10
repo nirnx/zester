@@ -20,9 +20,9 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ## Check Behavior
 
-- Installation status is checked via the package provider when available, otherwise by probing `dpkg -s <pkg>` (Debian) or `rpm -q <pkg>` (RedHat).
-- Installed → changes needed; not installed → no changes.
-- On an unknown package system without a package provider, Check errors.
+- Converged means **no package record at all**. On Debian the probe is dpkg-status-aware (`dpkg-query -W -f='${db:Status-Status}'`): a removed-but-not-purged package (`rc` state — configuration files remain) still **needs a purge**, which is exactly this state's value over `pkg.removed`. On RedHat the probe is `rpm -q <pkg>` (rpm has no `rc` equivalent).
+- Installed or residual (`rc`) state → changes needed; no record → no changes.
+- On an unknown package system, Check falls back to the package provider's installed probe; without a provider, Check errors.
 
 ---
 
@@ -40,7 +40,7 @@ The OS family is detected from the `os.family` fact, falling back to the active 
 
 ## Revert Behavior
 
-Reinstalls the package — via the package provider when available, otherwise `<mgr> install -y <pkg>`. Purged configuration files are **not** restored.
+Explicit no-op (same contract as `pkg.removed`): the purged version is never recorded and the purged configuration files cannot be restored, so a reinstall would only guess at the repo's current latest candidate — not the inverse of Apply. Reinstall explicitly with `pkg.installed`.
 
 ---
 
