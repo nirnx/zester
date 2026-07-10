@@ -16,16 +16,27 @@ import (
 	"github.com/nirnx/zester/internal/config"
 	"github.com/nirnx/zester/internal/logging"
 	"github.com/nirnx/zester/internal/masterd"
+	"github.com/nirnx/zester/internal/version"
 )
 
 func main() {
 	fs := flag.CommandLine
-	configFile, err := setupMasterFlags(fs)
+	configFile, showVersion, err := setupMasterFlags(fs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "zester-master:", err)
 		os.Exit(1)
 	}
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("zester-master"))
+		return
+	}
+	// A daemon must never boot because of a mistyped probe: positional args
+	// carry no meaning here.
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "zester-master: unexpected argument %q (flags only; see --help, or --version)\n", fs.Arg(0))
+		os.Exit(2)
+	}
 
 	cfg, err := loadMasterConfig(fs, *configFile)
 	if err != nil {
@@ -66,13 +77,14 @@ func main() {
 // `flag:"..."`-tagged MasterDaemonConfig field (defaults come from
 // config.MasterDaemonDefaults). Extracted from main so the flag-parity test
 // can assert the exact flag set (names, defaults, usage).
-func setupMasterFlags(fs *flag.FlagSet) (*string, error) {
+func setupMasterFlags(fs *flag.FlagSet) (*string, *bool, error) {
 	configFile := fs.String("config", "", "Path to YAML config file (default: /etc/zester/master.yaml)")
+	showVersion := fs.Bool("version", false, "Print version and exit")
 	defaults := config.MasterDaemonDefaults()
 	if err := config.BindFlags(fs, &defaults); err != nil {
-		return nil, fmt.Errorf("main: bind flags: %w", err)
+		return nil, nil, fmt.Errorf("main: bind flags: %w", err)
 	}
-	return configFile, nil
+	return configFile, showVersion, nil
 }
 
 // loadMasterConfig loads the YAML config file (or built-in defaults when no

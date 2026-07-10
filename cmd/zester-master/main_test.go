@@ -16,13 +16,14 @@ import (
 func TestMasterFlagParity(t *testing.T) {
 	fs := flag.NewFlagSet("zester-master", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	if _, err := setupMasterFlags(fs); err != nil {
+	if _, _, err := setupMasterFlags(fs); err != nil {
 		t.Fatalf("setupMasterFlags: %v", err)
 	}
 
 	// flag name -> expected default (flag.Flag.DefValue string form).
 	want := map[string]string{
 		"config":             "",
+		"version":            "false",
 		"nats-url":           "tls://nats:4222",
 		"nats-ca":            "",
 		"auth-dir":           "/var/lib/zester/auth",
@@ -109,7 +110,7 @@ gitfs:
 
 	fs := flag.NewFlagSet("zester-master", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	configFile, err := setupMasterFlags(fs)
+	configFile, _, err := setupMasterFlags(fs)
 	if err != nil {
 		t.Fatalf("setupMasterFlags: %v", err)
 	}

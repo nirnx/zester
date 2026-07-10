@@ -41,6 +41,7 @@ type watchdogFlags struct {
 	component      string
 	logLevel       string
 	logFormat      string
+	showVersion    bool
 }
 
 // registerFlags declares all watchdog flags on fs with their defaults.
@@ -62,12 +63,23 @@ func registerFlags(fs *flag.FlagSet) *watchdogFlags {
 	fs.StringVar(&f.component, "component", "", `"peel" or "master" (required)`)
 	fs.StringVar(&f.logLevel, "log-level", logging.DefaultLevel, fmt.Sprintf("Log level (%s)", strings.Join(logging.Levels(), "|")))
 	fs.StringVar(&f.logFormat, "log-format", logging.DefaultFormat, fmt.Sprintf("Log format (%s)", strings.Join(logging.Formats(), "|")))
+	fs.BoolVar(&f.showVersion, "version", false, "Print version and exit")
 	return f
 }
 
 func main() {
 	f := registerFlags(flag.CommandLine)
 	flag.Parse()
+	if f.showVersion {
+		fmt.Println(version.String("zester-watchdog"))
+		return
+	}
+	// A supervisor must never boot because of a mistyped probe: positional
+	// args carry no meaning here.
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "watchdog: unexpected argument %q (flags only; see --help, or --version)\n", flag.Arg(0))
+		os.Exit(2)
+	}
 
 	// Flags the operator set explicitly always win over the component-derived
 	// defaults below (stdlib flag has no per-value "was set" bit; Visit only

@@ -15,15 +15,16 @@ import (
 // all of which break existing deployments.
 func TestPeelFlagParity(t *testing.T) {
 	defaults := config.PeelDefaults()
-	fs, _, err := peelFlags(&defaults)
+	fs, _, _, err := peelFlags(&defaults)
 	if err != nil {
 		t.Fatalf("peelFlags: %v", err)
 	}
 
 	want := map[string]string{
 		// Pre-existing flags (parity: name must not change).
-		"config": "",
-		"id":     "",
+		"config":  "",
+		"version": "false",
+		"id":      "",
 		// nats-url default is now empty (discovery sentinel: unset =
 		// discover; the builtin tls://nats:4222 tail is applied at runtime).
 		"nats-url":     "",
@@ -83,7 +84,7 @@ log_level: warn
 	}
 
 	defaults := config.PeelDefaults()
-	fs, configFile, err := peelFlags(&defaults)
+	fs, configFile, _, err := peelFlags(&defaults)
 	if err != nil {
 		t.Fatalf("peelFlags: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestPeelFlagExplicitEmptyOverridesYAML(t *testing.T) {
 	}
 
 	defaults := config.PeelDefaults()
-	fs, configFile, err := peelFlags(&defaults)
+	fs, configFile, _, err := peelFlags(&defaults)
 	if err != nil {
 		t.Fatalf("peelFlags: %v", err)
 	}

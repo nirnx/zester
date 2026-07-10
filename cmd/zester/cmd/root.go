@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nirnx/zester/internal/config"
+	"github.com/nirnx/zester/internal/version"
 )
 
 var (
@@ -34,6 +35,10 @@ Manage infrastructure:
 	Args:          cobra.ArbitraryArgs,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// Setting Version makes cobra register --version (print and exit) —
+	// the same probe safety the daemons' --version flags provide. Cobra's
+	// template prefixes "<name> version ", so this is just the value part.
+	Version: fmt.Sprintf("%s (commit %s, built %s)", version.Version, version.GitCommit, version.BuildDate),
 }
 
 func Execute() error {

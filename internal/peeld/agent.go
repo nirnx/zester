@@ -848,9 +848,24 @@ func (a *Agent) runCleanups() {
 
 // runGuard backs guardRunner: it runs an onlyif/unless shell guard via the
 // peel's command provider and returns the exit code.
+//
+// A NON-ZERO EXIT IS THE GUARD'S ANSWER, NOT AN ERROR: the documented
+// contract is "guard-not-met is a clean no-op", and unless's normal
+// run-the-state path IS a non-zero exit. CommandExec.Run wraps non-zero
+// exits in an error, so the exit code must be extracted here — passing that
+// error through made every failing onlyif report an error instead of a skip
+// and every unless-guarded state fail instead of run. Only a guard with no
+// meaningful answer errors: context death (killed mid-run — code -1) or a
+// spawn failure (never ran — ExitCode -1, or no result at all).
 func (a *Agent) runGuard(gctx context.Context, cmd string) (int, error) {
 	res, err := a.mctx.Command.Run(gctx, exec.CommandOpts{Command: cmd, Shell: true})
 	if err != nil {
+		if gctx.Err() != nil {
+			return 1, gctx.Err()
+		}
+		if res != nil && res.ExitCode > 0 {
+			return res.ExitCode, nil
+		}
 		return 1, err
 	}
 	return res.ExitCode, nil

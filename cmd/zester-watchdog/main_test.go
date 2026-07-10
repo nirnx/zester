@@ -18,6 +18,7 @@ func TestRegisterFlags_Parity(t *testing.T) {
 	// name -> default value (flag.Flag.DefValue string form).
 	want := map[string]string{
 		// Pre-existing flags — names and defaults must never change.
+		"version":         "false",
 		"child-bin":       "",
 		"child-args":      "",
 		"nats-url":        "tls://localhost:4222",

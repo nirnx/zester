@@ -36,7 +36,7 @@ func TestGitfsRemotesFlagSplitSemantics(t *testing.T) {
 	for _, tt := range tests {
 		fs := flag.NewFlagSet("zester-master", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		configFile, err := setupMasterFlags(fs)
+		configFile, _, err := setupMasterFlags(fs)
 		if err != nil {
 			t.Fatalf("setupMasterFlags: %v", err)
 		}

@@ -4,6 +4,26 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [0.4.1] - 2026-07-09
+
+### Fixed
+- **`onlyif`/`unless` guards: a non-zero guard exit is the guard's answer,
+  not an error.** The peel's guard runner passed the command provider's
+  exit-status error through, so any failing `onlyif` reported
+  `error: onlyif ...: exit status 1` instead of the documented clean skip,
+  and `unless` was unusable — its normal run-the-state path IS a non-zero
+  exit, so every such state failed instead of running (found during 0.4.0
+  fleet operations). The exit code is now extracted; only guards with no
+  meaningful answer error (killed by context deadline, or spawn failure).
+
+### Added
+- **`--version` on every binary.** `zester-peel`, `zester-master`, and
+  `zester-watchdog` gain a `--version` flag (version, commit, build date;
+  print and exit), and `zester --version` works via the CLI root. The
+  daemons additionally now REFUSE unexpected positional arguments (exit 2)
+  instead of silently starting: probing a peel binary with
+  `zester-peel version` used to boot — and enroll — a peel.
+
 ## [0.4.0] - 2026-07-09
 
 Live file distribution: on-disk edits reach the fleet in seconds with no

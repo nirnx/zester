@@ -15,16 +15,28 @@ import (
 	"github.com/nirnx/zester/internal/config"
 	"github.com/nirnx/zester/internal/logging"
 	"github.com/nirnx/zester/internal/peeld"
+	"github.com/nirnx/zester/internal/version"
 )
 
 func main() {
 	defaults := config.PeelDefaults()
-	fs, configFile, err := peelFlags(&defaults)
+	fs, configFile, showVersion, err := peelFlags(&defaults)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 	_ = fs.Parse(os.Args[1:]) // flag.ExitOnError: Parse exits on bad input
+	if *showVersion {
+		fmt.Println(version.String("zester-peel"))
+		return
+	}
+	// A daemon must never boot because of a mistyped probe: positional args
+	// carry no meaning here (`zester-peel version` used to silently start —
+	// and enroll — a peel).
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "error: unexpected argument %q (flags only; see --help, or --version)\n", fs.Arg(0))
+		os.Exit(2)
+	}
 
 	cfg, err := config.LoadPeel(*configFile)
 	if err != nil {
@@ -80,11 +92,12 @@ func main() {
 // peelFlags builds the zester-peel flag set: the hand-registered --config
 // flag plus one flag per `flag:"..."`-tagged PeelConfig field, with defaults
 // taken from the passed struct. Extracted from main for flag-parity testing.
-func peelFlags(defaults *config.PeelConfig) (*flag.FlagSet, *string, error) {
+func peelFlags(defaults *config.PeelConfig) (*flag.FlagSet, *string, *bool, error) {
 	fs := flag.NewFlagSet("zester-peel", flag.ExitOnError)
 	configFile := fs.String("config", "", "Path to YAML config file (default: /etc/zester/peel.yaml)")
+	showVersion := fs.Bool("version", false, "Print version and exit")
 	if err := config.BindFlags(fs, defaults); err != nil {
-		return nil, nil, fmt.Errorf("register flags: %w", err)
+		return nil, nil, nil, fmt.Errorf("register flags: %w", err)
 	}
-	return fs, configFile, nil
+	return fs, configFile, showVersion, nil
 }
