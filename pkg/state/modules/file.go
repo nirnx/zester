@@ -56,9 +56,10 @@ type FileManaged struct {
 	// render is the injected template rendering function.
 	render func(name, source string, extra map[string]any) (string, error)
 
-	// backup stores original content for revert.
-	backup    []byte
-	backupSet bool
+	// backup stores original content (and its mode) for revert.
+	backup     []byte
+	backupMode fs.FileMode
+	backupSet  bool
 
 	// wasCreated records that Apply created the file (it did not pre-exist),
 	// so a same-instance Revert removes it. With neither memo set, Revert is
@@ -228,11 +229,19 @@ func (f *FileManaged) Apply(ctx context.Context) (state.ApplyResult, error) {
 	// a file whose current content could not be captured.
 	preExisted := false
 	var priorContent []byte
+	var priorMode fs.FileMode
 	existing, err := f.file.ReadFile(ctx, f.Path)
 	switch {
 	case err == nil:
 		preExisted = true
 		priorContent = existing
+		// Capture the prior mode too, so Revert can restore it (not the
+		// desired mode, which is what Apply sets).
+		info, statErr := f.file.Stat(ctx, f.Path)
+		if statErr != nil {
+			return state.ApplyResult{}, fmt.Errorf("file.managed: stat %s: %w", f.Path, statErr)
+		}
+		priorMode = info.Mode().Perm()
 	case errors.Is(err, fs.ErrNotExist):
 		// Will create.
 	default:
@@ -263,11 +272,26 @@ func (f *FileManaged) Apply(ctx context.Context) (state.ApplyResult, error) {
 	}
 
 	// Record revert memos only after the write actually changed the system.
+	// First capture wins: a re-Apply on the same instance (retry:, watch-
+	// forced runs) must not clobber the original backup with already-applied
+	// content — and a file this instance CREATED stays wasCreated, or Revert
+	// would rewrite content into a file that never pre-existed instead of
+	// removing it.
 	if preExisted {
-		f.backup = priorContent
-		f.backupSet = true
+		if !f.backupSet && !f.wasCreated {
+			f.backup = priorContent
+			f.backupMode = priorMode
+			f.backupSet = true
+		}
 	} else {
 		f.wasCreated = true
+	}
+
+	// os.WriteFile applies perm at creation only — enforce the desired mode
+	// on pre-existing files too, or the mode drift Check reports would never
+	// converge (Apply would rewrite identical bytes forever).
+	if err := f.file.Chmod(ctx, f.Path, mode); err != nil {
+		return state.ApplyResult{}, fmt.Errorf("file.managed: chmod %s: %w", f.Path, err)
 	}
 
 	if err := f.setOwnership(ctx); err != nil {
@@ -288,9 +312,14 @@ func (f *FileManaged) Apply(ctx context.Context) (state.ApplyResult, error) {
 func (f *FileManaged) Revert(ctx context.Context) (state.ApplyResult, error) {
 	switch {
 	case f.backupSet:
-		mode, _ := f.desiredMode()
-		if err := f.file.WriteFile(ctx, f.Path, f.backup, mode); err != nil {
+		if err := f.file.WriteFile(ctx, f.Path, f.backup, f.backupMode); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("file.managed: revert %s: %w", f.Path, err)
+		}
+		// os.WriteFile sets perm at creation only; restore the CAPTURED
+		// prior mode explicitly (never the desired mode — that is what
+		// Apply set).
+		if err := f.file.Chmod(ctx, f.Path, f.backupMode); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("file.managed: revert chmod %s: %w", f.Path, err)
 		}
 		return state.ApplyResult{
 			Changed: true,

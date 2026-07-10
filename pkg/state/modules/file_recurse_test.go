@@ -113,9 +113,10 @@ func TestFileRecurseCheckNoChange(t *testing.T) {
 	src := setupSourceDir(t)
 	dest := t.TempDir()
 
-	// Check now verifies dir_mode (default 0755) on every managed directory,
-	// including the dest root — align the temp dir explicitly.
-	if err := os.Chmod(dest, 0755); err != nil {
+	// dir_mode is undeclared, so the dest root's mode must NOT be compared —
+	// pin that by keeping it 0700 (t.TempDir's default), which would churn if
+	// the built-in 0755 default were enforced on existing dirs.
+	if err := os.Chmod(dest, 0700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -452,6 +453,76 @@ func TestFileRecurseCheckDirModeDrift(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0750 {
 		t.Errorf("dir mode after re-apply: got %04o, want 0750", info.Mode().Perm())
+	}
+
+	// Convergence: the facet Apply just enforced must check clean.
+	cr, err = s.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("declared dir_mode facet did not converge, diff: %s", cr.Diff)
+	}
+}
+
+// TestFileRecurseUndeclaredDirModeNoChurn pins the round-2 fix: with no
+// dir_mode declared, a converged tree whose dirs carry operator-set modes
+// (e.g. a private 0700 root) must neither flag Check nor be silently
+// chmod-widened by Apply — dir_mode is a declared-only facet in BOTH phases.
+func TestFileRecurseUndeclaredDirModeNoChurn(t *testing.T) {
+	ctx := context.Background()
+	src := setupSourceDir(t)
+	dest := t.TempDir()
+
+	// Operator-private tree: root and subdir at 0700.
+	if err := os.Chmod(dest, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dest, "subdir"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "file1.txt"), []byte("content1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "subdir", "file2.txt"), []byte("content2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileRecurseBuilder(testFileRecurseMctx())(dest, map[string]any{
+		"source": src, "file_mode": "0644",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Fatalf("undeclared dir_mode must not churn a converged 0700 tree, diff: %s", cr.Diff)
+	}
+
+	// A watch-forced Apply (bypasses Check) must not rewrite the modes.
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{dest, filepath.Join(dest, "subdir")} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0700 {
+			t.Errorf("%s: mode after apply got %04o, want operator-set 0700 preserved", dir, info.Mode().Perm())
+		}
+	}
+
+	cr, err = s.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("tree must stay converged after apply, diff: %s", cr.Diff)
 	}
 }
 

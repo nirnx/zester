@@ -94,6 +94,10 @@ func (r *FileRecurse) desiredFileMode() (fs.FileMode, error) {
 	return fs.FileMode(m), nil
 }
 
+// desiredDirMode returns the declared dir_mode, or the 0755 default. The
+// default applies only when Apply CREATES a directory — dir_mode is a
+// declared-only facet, so existing directory modes are neither compared
+// (Check) nor rewritten (Apply) unless dir_mode is declared.
 func (r *FileRecurse) desiredDirMode() (fs.FileMode, error) {
 	if r.DirMode == "" {
 		return 0755, nil
@@ -159,7 +163,11 @@ func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
 				diffCount++
 				return nil
 			}
-			if info.Mode().Perm() != dirMode {
+			// dir_mode is a declared-only facet: with no dir_mode declared,
+			// existing directory modes (including a pre-existing dest root)
+			// are left alone, so Check must not compare them — Apply doesn't
+			// chmod undeclared dirs either.
+			if r.DirMode != "" && info.Mode().Perm() != dirMode {
 				diffCount++
 			}
 			return nil
@@ -300,8 +308,13 @@ func (r *FileRecurse) Apply(ctx context.Context) (state.ApplyResult, error) {
 			if err := r.file.MkdirAll(ctx, destPath, dirMode); err != nil {
 				return fmt.Errorf("mkdir %s: %w", destPath, err)
 			}
-			if err := r.file.Chmod(ctx, destPath, dirMode); err != nil {
-				return fmt.Errorf("chmod %s: %w", destPath, err)
+			// Declared-only facet, mirroring Check: chmod managed dirs only
+			// when dir_mode is declared — an undeclared dir_mode must never
+			// rewrite an operator-set mode on a pre-existing directory.
+			if r.DirMode != "" {
+				if err := r.file.Chmod(ctx, destPath, dirMode); err != nil {
+					return fmt.Errorf("chmod %s: %w", destPath, err)
+				}
 			}
 			copiedDirs++
 			return nil
