@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"text/tabwriter"
 	"time"
 
@@ -52,15 +53,27 @@ func runUpdateVersions(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	sort.Slice(manifests, func(i, j int) bool {
+		return update.CompareVersions(manifests[i].Version, manifests[j].Version) > 0
+	})
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "VERSION\tOS\tARCH\tSIZE\tSHA256\tPUBLISHED")
+	fmt.Fprintln(w, "VERSION\tOS\tARCH\tSIZE\tSHA256\tPUBLISHED\tPROMOTED\tEXPIRES")
 	for _, m := range manifests {
 		published := m.Published.Local().Format("2006-01-02 15:04")
 		shortHash := m.SHA256
 		if len(shortHash) > 12 {
 			shortHash = shortHash[:12]
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n", m.Version, m.GOOS, m.GOARCH, m.Size, shortHash, published)
+		promoted := "-"
+		if m.Promoted {
+			promoted = "yes"
+		}
+		expires := "never"
+		if exp, ok := m.Expiry(); ok {
+			expires = exp.Local().Format("2006-01-02 15:04")
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n", m.Version, m.GOOS, m.GOARCH, m.Size, shortHash, published, promoted, expires)
 	}
 	w.Flush()
 

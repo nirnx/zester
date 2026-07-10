@@ -65,6 +65,13 @@ func TestMasterFlagParity(t *testing.T) {
 		"files-watch":              "true",
 		"files-mirror":             "true",
 		"publisher-status-file":    "/run/zester/publisher-status",
+		// Promoted-version auto-rollout (0.5.0):
+		"update-auto-rollout":    "true",
+		"update-auto-components": "peel",
+		"update-auto-batch-size": "5",
+		"update-auto-soak-time":  (60 * time.Second).String(),
+		"update-auto-max-failed": "1",
+		"update-auto-interval":   time.Minute.String(),
 	}
 
 	got := map[string]*flag.Flag{}

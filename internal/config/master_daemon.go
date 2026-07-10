@@ -57,6 +57,18 @@ type MasterDaemonConfig struct {
 	// not published. Empty disables. The packaged unit's RuntimeDirectory
 	// provides /run/zester.
 	PublisherStatusFile string `yaml:"publisher_status_file" flag:"publisher-status-file" usage:"File rewritten with this master's publisher-lease role on every transition (empty disables)"`
+
+	// Promoted-version auto-rollout. The FLEET switch lives in NATS
+	// (`zester update auto on|off`, default on); UpdateAutoRollout is this
+	// master's local participation knob — effective behavior is the AND of
+	// both. Default-on is safe: auto-rollout only ever acts on explicitly
+	// PROMOTED versions.
+	UpdateAutoRollout    bool     `yaml:"update_auto_rollout" flag:"update-auto-rollout" usage:"Participate in promoted-version auto-rollouts (fleet switch: zester update auto on|off)"`
+	UpdateAutoComponents []string `yaml:"update_auto_components" flag:"update-auto-components" usage:"Components eligible for auto-rollout"`
+	UpdateAutoBatchSize  int      `yaml:"update_auto_batch_size" flag:"update-auto-batch-size" usage:"Auto-rollout nodes per batch"`
+	UpdateAutoSoakTime   Duration `yaml:"update_auto_soak_time" flag:"update-auto-soak-time" usage:"Auto-rollout per-node soak time"`
+	UpdateAutoMaxFailed  int      `yaml:"update_auto_max_failed" flag:"update-auto-max-failed" usage:"Auto-rollout failure budget before abort"`
+	UpdateAutoInterval   Duration `yaml:"update_auto_interval" flag:"update-auto-interval" usage:"Auto-rollout trigger check interval"`
 }
 
 // MasterCA configures the embedded certificate authority. Mode selects how
@@ -141,6 +153,12 @@ func MasterDaemonDefaults() MasterDaemonConfig {
 		FilesWatch:             true,
 		FilesMirror:            true,
 		PublisherStatusFile:    "/run/zester/publisher-status",
+		UpdateAutoRollout:      true,
+		UpdateAutoComponents:   []string{"peel"},
+		UpdateAutoBatchSize:    5,
+		UpdateAutoSoakTime:     Duration(60 * time.Second),
+		UpdateAutoMaxFailed:    1,
+		UpdateAutoInterval:     Duration(time.Minute),
 		LogLevel:               "info",
 		LogFormat:              "json",
 		Enroll: MasterEnroll{

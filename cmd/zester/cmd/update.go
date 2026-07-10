@@ -18,4 +18,10 @@ func init() {
 	updateCmd.AddCommand(updateAbortCmd)
 	updateCmd.AddCommand(updateRollbackCmd)
 	updateCmd.AddCommand(updateVersionsCmd)
+	updateCmd.AddCommand(updateRolloutsCmd)
+	updateCmd.AddCommand(updateUnpublishCmd)
+	updateCmd.AddCommand(updatePromoteCmd)
+	updateCmd.AddCommand(updateDemoteCmd)
+	updateCmd.AddCommand(updateSetTTLCmd)
+	updateCmd.AddCommand(updateAutoCmd)
 }

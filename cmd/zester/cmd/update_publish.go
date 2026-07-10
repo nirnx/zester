@@ -25,6 +25,7 @@ func init() {
 	updatePublishCmd.Flags().String("version", "", "Version string, e.g., v0.5.0 (required)")
 	updatePublishCmd.Flags().String("goos", runtime.GOOS, "Target OS")
 	updatePublishCmd.Flags().String("goarch", runtime.GOARCH, "Target architecture")
+	updatePublishCmd.Flags().Duration("ttl", update.DefaultBinaryTTL, "Lifetime before the master GC removes this version (0 = never expires; promotion also never expires)")
 	updatePublishCmd.MarkFlagRequired("component")
 	updatePublishCmd.MarkFlagRequired("version")
 }
@@ -38,6 +39,7 @@ func runUpdatePublish(cmd *cobra.Command, args []string) error {
 	version, _ := cmd.Flags().GetString("version")
 	goos, _ := cmd.Flags().GetString("goos")
 	goarch, _ := cmd.Flags().GetString("goarch")
+	ttl, _ := cmd.Flags().GetDuration("ttl")
 
 	if component != "peel" && component != "master" {
 		return fmt.Errorf("component must be 'peel' or 'master', got %q", component)
@@ -84,6 +86,11 @@ func runUpdatePublish(cmd *cobra.Command, args []string) error {
 		Published: time.Now(),
 		Publisher: "cli",
 	}
+	if ttl == 0 {
+		manifest.ExpiresAtUnix = update.TTLNever
+	} else {
+		manifest.ExpiresAtUnix = time.Now().Add(ttl).Unix()
+	}
 
 	mStore := update.NewManifestStore(manifestKV)
 	if err := mStore.Publish(ctx, manifest); err != nil {
@@ -94,6 +101,11 @@ func runUpdatePublish(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  SHA-256: %s\n", digest)
 	fmt.Printf("  Size:    %d bytes\n", len(data))
 	fmt.Printf("  Key:     %s\n", objectKey)
+	if exp, expires := manifest.Expiry(); expires {
+		fmt.Printf("  Expires: %s (extend: zester update set-ttl / promote)\n", exp.Local().Format("2006-01-02 15:04"))
+	} else {
+		fmt.Printf("  Expires: never\n")
+	}
 
 	return nil
 }

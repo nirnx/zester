@@ -65,6 +65,12 @@ type RolloutConfig struct {
 	BatchPause   time.Duration `msgpack:"batch_pause"`   // pause between batches (default: 30s)
 	MaxFailed    int           `msgpack:"max_failed"`    // abort after N failures (default: 1)
 	DryRun       bool          `msgpack:"dry_run"`
+
+	// RolloutID, when set, overrides the generated KSUID id. Auto-rollout
+	// uses deterministic ids (rol-auto-<component>-<version>) so a
+	// concurrently-triggered duplicate CAS-conflicts on Create instead of
+	// double-rolling the fleet. Additive.
+	RolloutID string `msgpack:"rollout_id,omitempty"`
 }
 
 // RolloutStartRequest is sent by the CLI to the master to initiate a rollout.
@@ -332,7 +338,10 @@ func (r *RolloutController) StartRollout(ctx context.Context, config RolloutConf
 	copy(sorted, eligible)
 	sort.Strings(sorted)
 
-	id := "rol-" + ksuid.New().String()
+	id := config.RolloutID
+	if id == "" {
+		id = "rol-" + ksuid.New().String()
+	}
 
 	state := &RolloutState{
 		ID:          id,
@@ -1034,4 +1043,10 @@ func computeBatches(nodeIDs []string, batchSize int, batchPercent int) [][]strin
 		batches = append(batches, chunk)
 	}
 	return batches
+}
+
+// RolloutTerminal reports whether a rollout state is final (no driver will
+// touch it again). Dry-run records are also effectively terminal.
+func RolloutTerminal(state string) bool {
+	return state == RolloutCompleted || state == RolloutAborted
 }

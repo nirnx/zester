@@ -142,3 +142,13 @@ type fakeObjectResult struct {
 func (r *fakeObjectResult) Close() error                         { return nil }
 func (r *fakeObjectResult) Info() (*jetstream.ObjectInfo, error) { return r.info, nil }
 func (r *fakeObjectResult) Error() error                         { return nil }
+
+// setModTime backdates a stored object (GC orphan-age tests).
+func (f *fakeObjectStore) setModTime(name string, t time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if obj, ok := f.objects[name]; ok {
+		obj.info.ModTime = t
+		f.objects[name] = obj
+	}
+}

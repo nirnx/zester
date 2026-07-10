@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"text/tabwriter"
 	"time"
 
@@ -66,15 +67,40 @@ func runUpdateStatus(cmd *cobra.Command, args []string) error {
 		}
 
 		if len(state.NodeResults) > 0 {
+			// Stable order: batch, then node name — two invocations of this
+			// command line up row-for-row, so mid-rollout snapshots are
+			// visually diffable (map iteration order made every row jump).
+			batchOf := make(map[string]int, len(state.NodeResults))
+			for bi, batch := range state.Batches {
+				for _, id := range batch {
+					batchOf[id] = bi + 1
+				}
+			}
+			ids := make([]string, 0, len(state.NodeResults))
+			for id := range state.NodeResults {
+				ids = append(ids, id)
+			}
+			sort.Slice(ids, func(i, j int) bool {
+				if batchOf[ids[i]] != batchOf[ids[j]] {
+					return batchOf[ids[i]] < batchOf[ids[j]]
+				}
+				return ids[i] < ids[j]
+			})
+
 			fmt.Println("\nNode Results:")
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NODE\tSTATUS\tERROR\tUPDATED")
-			for id, nr := range state.NodeResults {
+			fmt.Fprintln(w, "BATCH\tNODE\tSTATUS\tERROR\tUPDATED")
+			for _, id := range ids {
+				nr := state.NodeResults[id]
 				errMsg := nr.Error
 				if errMsg == "" {
 					errMsg = "-"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", displayPeel(id), nr.Status, errMsg, nr.Updated.Local().Format("15:04:05"))
+				batch := "-"
+				if b := batchOf[id]; b > 0 {
+					batch = fmt.Sprintf("%d", b)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", batch, displayPeel(id), nr.Status, errMsg, nr.Updated.Local().Format("15:04:05"))
 			}
 			w.Flush()
 		}

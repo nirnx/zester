@@ -212,6 +212,7 @@ type Daemon struct {
 
 	rolloutCtrl *update.RolloutController
 	statusKV    bus.KV // update-status bucket, read by handleRolloutStart
+	manifestKV  bus.KV // update-manifests bucket (auto-rollout switch reads)
 
 	// targetState tracks the 'target-service' readiness result
 	// (health.CheckResult): OK once the resolve service is serving, Down
@@ -446,6 +447,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer unsubRollout()
 	// Resume loop: adopt rollouts orphaned by a dead master (finding 26).
 	go d.rolloutCtrl.RunResumeLoop(runCtx)
+	if err := d.startUpdatePlane(runCtx); err != nil {
+		d.logger.Warn("update plane (GC + auto-rollout) unavailable", "error", err)
+	}
 	d.logger.Info("rollout controller initialized")
 
 	// Target-resolution service (roadmap C2): every master joins the queue

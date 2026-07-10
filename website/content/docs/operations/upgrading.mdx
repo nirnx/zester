@@ -22,6 +22,55 @@ Zester has **two independent upgrade channels**, and keeping them straight is wh
 Running `pkg.latest zester-peel` through zester used to make the peel kill itself: the old package's `prerm` stopped the service unconditionally, and because `apt` was a child of the peel's own cgroup, stopping the unit took down watchdog + peel + apt + dpkg mid-unpack. Fixed by gating `prerm` on `remove` — but the rule stands: don't synchronously restart your own service from a job.
 </Callout>
 
+## Release promotion and auto-rollout
+
+Promotion turns a published version into *the* release, in one command:
+
+```bash
+zester update publish zester-peel --component peel --version 0.5.0   # TTL 30d by default
+zester update promote --component peel --version 0.5.0
+```
+
+A **promoted** version never expires, and every master with auto-rollout
+enabled (the default) automatically starts a rollout to the latest promoted
+version whenever live nodes lag behind it — using the exact same machinery as
+a manual `update rollout`: batches, per-node soak with auto-rollback, the
+failure budget, degraded-node exclusion. Auto-rollout never downgrades (nodes
+at or ahead of the promoted version are untouched), runs at most one rollout
+per component at a time, and never retries a rollout an operator aborted.
+
+The fleet-wide switch lives in NATS — flip it at runtime, no master restart:
+
+```bash
+zester update auto status   # ON by default (nothing rolls until you promote)
+zester update auto off      # freeze auto-rollouts fleet-wide
+zester update auto on
+```
+
+Masters additionally honor a local `update_auto_rollout` config knob (plus
+`update_auto_components`, `update_auto_batch_size`, `update_auto_soak_time`,
+`update_auto_max_failed`, `update_auto_interval` for tuning).
+
+### Version lifetimes
+
+Expiry is per-version, carried in the manifest (the object-store bucket has
+no TTL anymore); a master-side GC reaps expired versions hourly, always
+skipping promoted versions and anything an in-flight rollout still needs:
+
+```bash
+zester update publish ... --ttl 720h     # explicit lifetime (0 = never)
+zester update set-ttl --component peel --version 0.4.9 --ttl 168h
+zester update demote  --component peel --version 0.4.9 --ttl 24h   # promotion off, expiry resumes
+zester update versions --component peel  # PROMOTED + EXPIRES columns
+zester update unpublish --component peel --version 0.4.8           # immediate removal
+zester update rollouts                   # rollout history with ids
+```
+
+`unpublish` is refused while a live rollout references the version and needs
+`--force` for promoted versions. Node-side rollback never re-downloads —
+nodes revert from their local previous-binary slot — so removing old
+versions cannot break rollbacks.
+
 ## Managing zester with the pkg module
 
 Once the `prerm` fix is in place, aligning packages fleet-wide is safe from the master:

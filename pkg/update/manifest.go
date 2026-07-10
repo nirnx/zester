@@ -33,6 +33,45 @@ type Manifest struct {
 	// status record fail the check only when MinProtocol > 0. Additive:
 	// manifests published by older CLIs decode with MinProtocol 0.
 	MinProtocol int `msgpack:"min_protocol,omitempty"`
+
+	// Promoted marks this version as a promoted release: it never expires
+	// (the master GC skips it regardless of ExpiresAtUnix) and it is a
+	// candidate for auto-rollout on masters with update.auto_rollout
+	// enabled. Additive: pre-promotion manifests decode as not promoted.
+	Promoted bool `msgpack:"promoted,omitempty"`
+
+	// ExpiresAtUnix is when the master GC may delete this version (unix
+	// seconds). Sentinels: 0 = legacy manifest published before per-version
+	// TTLs — treated as Published + DefaultBinaryTTL (the old bucket-level
+	// TTL, so upgrades change nothing); TTLNever (-1) = never expires.
+	// Ignored while Promoted. Additive.
+	ExpiresAtUnix int64 `msgpack:"expires_at,omitempty"`
+}
+
+// DefaultBinaryTTL is the default lifetime of a published (non-promoted)
+// binary — the same 30 days the object-store bucket TTL used to enforce
+// before expiry moved to the manifest-driven master GC.
+const DefaultBinaryTTL = 30 * 24 * time.Hour
+
+// TTLNever is the ExpiresAtUnix sentinel for "never expires".
+const TTLNever int64 = -1
+
+// Expiry returns when this version expires, and false when it never does
+// (promoted, or explicit TTLNever).
+func (m *Manifest) Expiry() (time.Time, bool) {
+	if m.Promoted || m.ExpiresAtUnix == TTLNever {
+		return time.Time{}, false
+	}
+	if m.ExpiresAtUnix == 0 {
+		return m.Published.Add(DefaultBinaryTTL), true // legacy fallback
+	}
+	return time.Unix(m.ExpiresAtUnix, 0), true
+}
+
+// Expired reports whether the version is eligible for GC at the given time.
+func (m *Manifest) Expired(now time.Time) bool {
+	exp, expires := m.Expiry()
+	return expires && now.After(exp)
 }
 
 // ManifestKey returns the KV key for this manifest.
@@ -89,6 +128,9 @@ func (s *ManifestStore) ListByComponent(ctx context.Context, component string) (
 	var manifests []*Manifest
 	prefix := component + "."
 	for _, key := range keys {
+		if strings.HasPrefix(key, "_") { // meta keys (_auto-rollout) are not manifests
+			continue
+		}
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
@@ -169,4 +211,50 @@ func (s *BinaryStore) List(ctx context.Context) ([]*jetstream.ObjectInfo, error)
 		return nil, fmt.Errorf("update: list binaries: %w", err)
 	}
 	return infos, nil
+}
+
+// List returns every manifest in the store, across components and platforms.
+func (s *ManifestStore) List(ctx context.Context) ([]*Manifest, error) {
+	keys, err := s.kv.Keys(ctx)
+	if err != nil {
+		if err == bus.ErrNoKeysFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update: list manifest keys: %w", err)
+	}
+	var manifests []*Manifest
+	for _, key := range keys {
+		if strings.HasPrefix(key, "_") { // meta keys (_auto-rollout) are not manifests
+			continue
+		}
+		var m Manifest
+		if err := bus.KVGet(ctx, s.kv, key, &m); err != nil {
+			continue // skip unreadable entries
+		}
+		manifests = append(manifests, &m)
+	}
+	return manifests, nil
+}
+
+// Delete removes a manifest record.
+func (s *ManifestStore) Delete(ctx context.Context, component, goos, goarch, version string) error {
+	key := fmt.Sprintf("%s.%s.%s.%s", component, goos, goarch, version)
+	if err := s.kv.Delete(ctx, key); err != nil {
+		return fmt.Errorf("update: delete manifest %q: %w", key, err)
+	}
+	return nil
+}
+
+// Mutate loads the manifest for the given coordinates, applies fn, and saves
+// it back. Used by promote/demote/set-ttl.
+func (s *ManifestStore) Mutate(ctx context.Context, component, goos, goarch, version string, fn func(*Manifest)) (*Manifest, error) {
+	m, err := s.Get(ctx, component, goos, goarch, version)
+	if err != nil {
+		return nil, err
+	}
+	fn(m)
+	if err := s.Publish(ctx, m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }

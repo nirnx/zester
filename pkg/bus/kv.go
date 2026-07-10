@@ -714,8 +714,12 @@ func DefaultObjectStoreConfig() jetstream.ObjectStoreConfig {
 	return jetstream.ObjectStoreConfig{
 		Bucket:      ObjectBucketUpdateBinaries,
 		Description: "Binary artifacts for self-update distribution",
-		TTL:         30 * 24 * time.Hour, // 30 days
-		Replicas:    1,
+		// No bucket-level TTL: expiry is per-version, owned by the master's
+		// manifest-driven GC (promoted versions never expire; others carry
+		// an expires_at in their manifest, defaulting to the old 30 days).
+		// A bucket TTL would delete promoted binaries behind the GC's back.
+		TTL:      0,
+		Replicas: 1,
 	}
 }
 

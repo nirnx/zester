@@ -4,6 +4,51 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Added
+- **Release promotion + auto-rollout.** `zester update promote` marks a
+  published version as a promoted release: it **never expires**, and masters
+  automatically roll the fleet to the latest promoted version through the
+  full existing rollout machinery (batches, soak, auto-rollback, failure
+  budget, degraded-node exclusion) — promotion is now the one-command
+  release act. Auto-rollout never downgrades (nodes at or ahead of the
+  promoted version are untouched), starts at most one rollout per component
+  at a time, and uses deterministic rollout ids
+  (`rol-auto-<component>-<version>`) so racing masters CAS-conflict instead
+  of double-rolling; an operator-aborted auto-rollout is never retried
+  automatically. The fleet switch is stored in NATS and **on by default** —
+  safe, because nothing rolls until something is explicitly promoted — and
+  flippable at runtime with `zester update auto on|off|status` (no master
+  restart). Per-master participation and tuning via `update_auto_rollout`
+  (default true), `update_auto_components` (default peel),
+  `update_auto_batch_size` (5), `update_auto_soak_time` (60s),
+  `update_auto_max_failed` (1), `update_auto_interval` (1m).
+- **Per-version TTLs replace the object-store bucket TTL.** Every published
+  version now carries its own expiry in the manifest: `update publish
+  --ttl <d>` (default 30 days, `0` = never), `update set-ttl` adjusts it
+  later, `update demote` resumes expiry for a formerly promoted version.
+  A lease-gated hourly GC on the master reaps expired versions (object +
+  manifest) — skipping anything a non-terminal rollout still references —
+  and sweeps manifest-less orphan objects. The `update-binaries` bucket TTL
+  is removed (it would have deleted promoted binaries behind the GC's
+  back); versions published by older CLIs keep their original
+  `published + 30d` lifetime.
+- **`zester update rollouts`** lists rollout history (id, component,
+  version, state, batch progress, failure budget, timestamps; newest
+  first) — rollout ids no longer live only in the start command's output.
+- **`zester update unpublish`** removes a published version (binary +
+  manifest); refused while a non-terminal rollout references it, and
+  promoted versions require `--force`. Node-side rollback is unaffected
+  (nodes revert from their local previous-binary slot).
+- **`zester update versions`** now shows PROMOTED and EXPIRES columns and
+  sorts newest-first.
+
+### Changed
+- **`zester update status --rollout` Node Results are stable-sorted** by
+  batch, then node name, with a new BATCH column — consecutive invocations
+  line up row-for-row instead of shuffling with map iteration order.
+
 ## [0.4.2] - 2026-07-10
 
 **Fleet-wide state-module convergence audit.** After the `pkg.latest`
