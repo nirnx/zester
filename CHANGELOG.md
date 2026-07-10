@@ -6,74 +6,135 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
-### Added
-- **`archive.extracted` gains `source_hash`.** When declared, the value is
-  recorded in a marker file inside the target dir after a successful
-  extraction and compared by Check — bumping `source`/`source_hash` (a
-  version upgrade) now re-extracts instead of no-oping forever on a
-  pre-existing dir/`if_missing` path. The value is an opaque declaration
-  (e.g. `sha256=<hex>`) compared as a string, NOT verified against the
-  archive bytes; the marker is only written after a successful extraction,
-  so a failed download/extract no longer latches a `makedirs`-created dir
-  as "done". Without `source_hash` the existing (weak) marker semantics are
-  unchanged and now documented in the module.
+**Fleet-wide state-module convergence audit.** After the `pkg.latest`
+stale-index bug shipped in the field, every state module (44 states, 36
+files) was audited against the Check/Apply contract; 48 adversarially
+verified defects across 25 states are fixed in this release. Three defect
+classes dominated: Check blind to a facet only Apply enforces (drift never
+converges, reported compliant forever), destructive or dishonest Revert
+paths, and read errors conflated with "file absent" (data-loss paths).
 
 ### Fixed
-- **`host.present`/`host.absent`/`ssh_auth.present`/`ssh_auth.absent` no
-  longer treat a failed read as "file absent".** Only `fs.ErrNotExist`
-  counts as absent; any other read error (EIO, ESTALE, EACCES) now FAILS
-  the phase. Previously a transient read failure followed by a successful
-  write would truncate `/etc/hosts` (or a user's `authorized_keys`) down to
-  just the managed line — silently erasing every other mapping/key.
-- **Revert of `host.*`/`ssh_auth.*` on a fresh instance is now a clean
-  no-op** (`Changed: false`, "nothing to revert (no apply recorded in this
-  run)"). The shared revert helper used to DELETE the entire file when the
-  Apply-written backup memos were unset — and a runner `ModeRevert` run
-  always builds fresh instances, so any future revert wiring would have
-  wiped `/etc/hosts` / `authorized_keys` wholesale. Same-instance
-  Apply→Revert still restores the backup (now with the module's canonical
-  permissions — `authorized_keys` is restored 0600, not 0644).
-  `git.cloned`/`git.latest` fresh-instance reverts keep their safe no-op and
-  now report the explicit nothing-to-revert diff.
-- **`cmd.run`'s `creates` guard now also gates Apply** (Salt parity via
-  `mod_run_check`): a watch-forced apply bypasses Check entirely and used to
-  re-run creates-guarded one-shots (e.g. `initdb` re-running because a
-  watched config file changed). An unverifiable guard (stat error other
-  than not-exist) fails the phase instead of falling through to
-  re-execution, and declaring `creates` without a file provider is now a
-  build error.
-- **`git.cloned`/`git.latest` with a symbolic `rev:` (tag) now converge
-  instead of re-applying every run.** Check compared the desired rev
-  against the HEAD sha with a string-prefix match, which can never match a
-  tag name — every run reported `Changed: true`, ran a needless `git fetch`,
-  and cascaded through `watch` requisites (e.g. service restarts every
-  highstate). Symbolic revs are now resolved locally via
-  `git rev-parse --verify <rev>^{commit}` (annotated tags peeled, no
-  network) and compared by commit id; sha-prefix revs keep the direct
-  match. `git.cloned` `branch: <tag>` (documented) converges the same way
-  when `refs/heads/<tag>` does not exist.
-- **`locale.present` Check now verifies the `/etc/locale.gen` enabling line
-  that Apply writes**, not just `locale -a` membership. A locale generated
-  out-of-band (image bakery) or whose line was later commented out reported
-  compliant forever, and the next external `locale-gen` run (e.g. a
-  `locales` package upgrade) silently dropped it. Also, an unreadable
-  `locale.gen` (non-not-exist error) now fails the phase instead of being
-  rewritten from scratch.
-- **`pkg.latest` now refreshes the package cache BEFORE checking
-  upgradability** (Salt parity). Refresh (default on) previously ran only in
-  Apply, but Check consulted the stale on-disk index and short-circuited
-  "already at latest" — so Apply, and with it the refresh, never executed:
-  the state was structurally blind to any release published after the box's
-  last cache refresh (field symptom: the first fleet-wide
+- **`pkg.latest` refreshes the package cache BEFORE checking upgradability**
+  (Salt parity). Refresh (default on) ran only in Apply, but Check consulted
+  the stale index and short-circuited "already at latest" — so Apply, and
+  with it the refresh, never executed: any release published after the box's
+  last cache refresh was invisible (field symptom: the first fleet-wide
   `pkg.latest zester-peel` after the 0.4.1 repo publish was a silent
-  `changed: 0` no-op on all apt hosts). Check and Apply now each run their
-  own refresh independently — no cross-phase state, so watch-forced applies
-  that bypass Check still act on a fresh index. Behavior notes: a FAILED
-  refresh (e.g. one rotted third-party repo makes `apt-get update` exit
-  non-zero while still updating the reachable repos) now warns and proceeds
-  with the best-available index in BOTH phases instead of failing the state;
-  and `--test` dry runs now refresh the index too (metadata-only,
-  Salt-consistent).
+  `changed: 0` no-op on every apt host). Check and Apply now each run their
+  own refresh independently. A FAILED refresh (one rotted third-party repo
+  fails `apt-get update` while reachable repos still updated) warns and
+  proceeds in both phases instead of failing the state; `--test` dry runs
+  refresh the index too (metadata-only).
+- **`pkg.installed` honors a declared `version:` pin in Check.** Any
+  installed version used to satisfy a pinned state, so version drift was
+  compliant forever. Check now compares the installed version against the
+  pin (got/want diff); apt Apply passes `--allow-downgrades` for pinned
+  installs so a pinned downgrade actually converges. Undeclared `version:`
+  is unchanged.
+- **Debian `rc`-state packages (removed, conffiles remain) no longer count
+  as installed.** The apt probe requires dpkg status `installed`
+  (`dpkg-query -W -f='${db:Status-Status}'`) instead of the `dpkg -s` exit
+  code — `pkg.installed` could never reinstall a previously-removed
+  conffile-bearing package, and `pkg.removed` re-applied (and fired `watch`
+  dependents) on every highstate after its own successful removal.
+- **`pkgrepo.managed` verifies the Debian signing key.** The `key_url` key
+  now lands persistently at `/etc/apt/keyrings/zester-<name>.gpg` (was a
+  volatile `/tmp` download) and Check reports drift when it is missing —
+  previously a never-imported/deleted key left `apt-get update` failing
+  NO_PUBKEY while the state reported converged. Presence-only (in-place key
+  rotation at the same URL is not detected); Revert removes the artifact.
+- **File states detect ownership drift.** `file.managed`, `file.directory`,
+  and `file.recurse` compare on-disk owner/group against declared
+  `user:`/`group:` in Check (declared facets only — undeclared ownership
+  never churns). `file.recurse` Check also flags `clean: true` extra files
+  (previously the clean feature could never fire once the managed set
+  converged) and `dir_mode` drift on every managed dir, and all its
+  filesystem walks now go through the injected file provider
+  (new `FileExec.Walk`).
+- **`service.running`/`service.dead` compare a declared `enable:` facet in
+  Check** — running-but-disabled (`enable: true`) and stopped-but-enabled
+  (`enable: false`, resurrects at reboot) were compliant forever.
+  `service.running` with `enable: false` now actually disables; an Apply
+  reached only for enable drift never restarts the running service.
+- **`user.present` converges password and name-based primary group.** A
+  declared `password:` hash is compared against the shadow hash (new
+  `UserExec.PasswordHash`); a name-based `gid:`/`primary_group:` is compared
+  and enforced on existing users via `usermod -g` — both facets were
+  silently unenforced outside user creation.
+- **`mount.mounted` compares the LIVE mount** (device and fstype exactly,
+  declared options as a subset of the active set — no churn on kernel
+  defaults) and remounts on mismatch; the fstab comparison now includes
+  `dump`/`pass`. A wrong device serving the mountpoint was compliant forever.
+- **`sysctl.present` with `persist: true` verifies the drop-in file entry**,
+  not just the runtime value — a manual `sysctl -w` match silently died at
+  the next reboot.
+- **`cron.present` entries are keyed on the label** (identifier comment,
+  Salt semantics) instead of the exact command string — editing a state's
+  command replaces the old line instead of orphaning it to run forever.
+  Label-less pre-existing lines with the same command are adopted.
+- **`git.cloned`/`git.latest` with a symbolic `rev:` (tag) converge** —
+  the rev was compared against the HEAD sha by string prefix, which never
+  matches a tag name, so every run re-applied (needless fetches, `watch`
+  cascades, service restarts every highstate). Symbolic revs resolve locally
+  via `git rev-parse --verify <rev>^{commit}`; sha prefixes still match
+  directly.
+- **`locale.present` verifies the `/etc/locale.gen` enabling line** that
+  Apply writes, not just `locale -a` membership — an out-of-band-generated
+  locale was compliant until the next `locales` package upgrade silently
+  dropped it.
+- **Read errors are no longer conflated with "file absent" anywhere.**
+  `host.present`, `ssh_auth.present`, every text-editing file state
+  (`file.line`/`append`/`blockreplace`/`comment`/`keyvalue`/`replace`),
+  `file.managed`/`copy`/`recurse`, `cmd.run`'s `creates` probe,
+  `locale.present`, and the archive marker all treated ANY read error as
+  "missing" — a transient EIO/EACCES/ESTALE followed by a successful write
+  could truncate `/etc/hosts` or a user's `authorized_keys` down to the one
+  managed line, or clobber file content that was never captured. Only
+  `fs.ErrNotExist` selects the absent path now; anything else fails the
+  phase without writing.
+- **Revert contract: a fresh instance never destroys state.** Revert
+  consuming in-instance memos (backups, created flags, saved originals)
+  treated "memo unset" as "file was new" and DELETED the target — and the
+  runner builds FRESH instances for revert, so a revert run would have wiped
+  `/etc/hosts`, `authorized_keys`, or any managed file. Fresh-instance
+  Revert is now an explicit clean no-op across ALL modules
+  ("nothing to revert (no apply recorded in this run)"); same-instance
+  Apply→Revert still restores backups (with canonical permissions —
+  `authorized_keys` restores 0600) and still removes files the same
+  instance created. Related honesty fixes: `sysctl.present` Revert no
+  longer writes an EMPTY value into the kernel and persist file;
+  `mount.mounted` Revert no longer claims an unmount it never performed;
+  `group.present` Revert really restores membership (it only restored the
+  GID); `service.running` Revert reports enable-reverts.
+- **Watch-forced applies are safe on guarded/absent states.** `cmd.run`'s
+  `creates` guard now also gates Apply (a watch trigger used to re-run
+  creates-guarded one-shots like `initdb`); `user.absent`/`group.absent`
+  Apply no-op cleanly when already absent instead of failing `userdel`/
+  `groupdel`; `service.dead`/`mount.mounted`/`sysctl.present`/`user.present`
+  Apply can now honestly report `changed: false` when converged.
+
+### Added
+- **`archive.extracted` gains `source_hash`**: recorded in a marker after a
+  successful extraction and compared by Check, so bumping
+  `source`/`source_hash` re-extracts instead of no-oping forever. Opaque
+  string comparison (not byte verification); the marker is only written
+  after success, so a failed extract no longer latches a `makedirs`-created
+  dir as done. Without `source_hash`, existing marker semantics are
+  unchanged and now documented.
+- **Exec-layer convergence probes** (internal API): status-aware apt
+  installed-probe, `PackageExec.InstalledVersion`, `FileExec.Owner`/`Walk`,
+  `UserExec.PasswordHash`, `UserModifyOpts.PrimaryGroup`; test fakes wrap
+  `fs.ErrNotExist` for missing files and support read-error injection.
+
+### Changed
+- **`pkg.removed` Revert is an explicit clean no-op** — it previously
+  reinstalled the repo's latest candidate driven by a never-populated memo.
+  Reinstall explicitly with `pkg.installed`.
+- **`pkgrepo.managed` Debian key artifact moved** from
+  `/tmp/zester-repo-<name>.gpg` to `/etc/apt/keyrings/zester-<name>.gpg`;
+  existing fleets show ONE pending change per keyed repo on the next
+  highstate (idempotent re-import).
 
 ## [0.4.1] - 2026-07-09
 

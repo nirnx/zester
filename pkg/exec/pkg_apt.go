@@ -66,12 +66,17 @@ func (a *AptProvider) InstalledVersion(ctx context.Context, pkg string) (string,
 
 func (a *AptProvider) Install(ctx context.Context, pkg string, version string) error {
 	target := pkg
+	args := []string{"install", "-y"}
 	if version != "" {
 		target = pkg + "=" + version
+		// An explicit version pin is a statement of intent in BOTH
+		// directions: pkg.installed's version-drift check dispatches Apply
+		// for downgrades too, and apt refuses those without this flag.
+		args = append(args, "--allow-downgrades")
 	}
 	_, err := a.cmd.Run(ctx, CommandOpts{
 		Command: "apt-get",
-		Args:    append(append([]string{"install", "-y"}, dpkgConfArgs...), target),
+		Args:    append(append(args, dpkgConfArgs...), target),
 		Env:     aptEnv(),
 	})
 	if err != nil {

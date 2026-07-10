@@ -158,6 +158,8 @@ func (s *SvcRunning) Apply(ctx context.Context) (state.ApplyResult, error) {
 
 Undoes Apply. Some modules can't revert (like `cmd.run`) — return `Changed: false` with an explanation.
 
+**Standalone-Revert contract**: in-instance memos (backups, `wasCreated`, saved originals) are valid ONLY for a same-instance Apply→Revert; the runner builds FRESH instances for `ModeRevert`, so the unset-memo path MUST be an explicit clean no-op — `Changed: false`, diff `nothing to revert (no apply recorded in this run)`. It must NEVER be destructive (inferring "file was new" from a missing backup memo deleted pre-existing files — the 2026-07 audit's worst class) and never report a lying diff. Do not re-derive prior state to make standalone revert "work".
+
 ```go
 func (s *SvcRunning) Revert(ctx context.Context) (state.ApplyResult, error) {
     if err := s.svc.Stop(ctx, s.Service); err != nil {
