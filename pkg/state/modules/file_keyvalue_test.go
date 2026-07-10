@@ -195,6 +195,29 @@ func TestFileKeyValueRevertRemovesCreatedFile(t *testing.T) {
 	}
 }
 
+func TestFileKeyValueRevertCreatedToleratesMissing(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "new.conf")
+	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+		"key": "K", "value": "v",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// The created file vanished externally; revert must tolerate it —
+	// file-absent already IS the reverted state (same semantics as file.copy).
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatalf("Revert must tolerate an already-missing created file: %v", err)
+	}
+}
+
 func TestFileKeyValueReadErrorFailsCheckAndApply(t *testing.T) {
 	ctx := context.Background()
 	original := "keep=me\nK=old\n"

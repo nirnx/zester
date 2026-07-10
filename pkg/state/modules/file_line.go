@@ -372,9 +372,11 @@ func fsxRevert(ctx context.Context, file exec.FileExec, path string, backup []by
 // managed file: when this instance's Apply created it (created true) and no
 // pre-existing content was captured, removing the file is the exact inverse.
 // A captured backup takes precedence — it is genuine pre-apply content.
+// An already-missing created file is tolerated (fs.ErrNotExist): file-absent
+// IS the reverted state — aligned with FileCopy.Revert and FileManaged.Revert.
 func fsxRevertWithCreate(ctx context.Context, file exec.FileExec, path string, backup []byte, backupSet, created bool, module string) (state.ApplyResult, error) {
 	if !backupSet && created {
-		if err := file.Remove(ctx, path); err != nil {
+		if err := file.Remove(ctx, path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return state.ApplyResult{}, fmt.Errorf("%s: revert remove %s: %w", module, path, err)
 		}
 		return state.ApplyResult{

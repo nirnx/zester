@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -247,6 +248,56 @@ func TestFileLineRevertRemovesCreatedFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("expected created file removed on same-instance revert")
+	}
+}
+
+func TestFileLineRevertCreatedToleratesMissing(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "new.txt")
+	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{"content": "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// The created file vanished externally; revert must tolerate it —
+	// file-absent already IS the reverted state (same semantics as file.copy).
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatalf("Revert must tolerate an already-missing created file: %v", err)
+	}
+}
+
+// removeErrFileExec overrides Remove with a fixed error; no other FileExec
+// method is invoked on fsxRevertWithCreate's created branch.
+type removeErrFileExec struct {
+	exec.FileExec
+	err error
+}
+
+func (r removeErrFileExec) Remove(context.Context, string) error { return r.err }
+
+func TestFsxRevertWithCreateToleratesNotExist(t *testing.T) {
+	// os.Remove reports a missing file as a *PathError wrapping fs.ErrNotExist.
+	notExist := &fs.PathError{Op: "remove", Path: "/etc/x", Err: fs.ErrNotExist}
+	ar, err := fsxRevertWithCreate(context.Background(), removeErrFileExec{err: notExist}, "/etc/x", nil, false, true, "file.line")
+	if err != nil {
+		t.Fatalf("created-branch revert must tolerate fs.ErrNotExist: %v", err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed reverting a created file (absent = reverted state)")
+	}
+}
+
+func TestFsxRevertWithCreateOtherRemoveErrorFails(t *testing.T) {
+	boom := errors.New("permission denied")
+	_, err := fsxRevertWithCreate(context.Background(), removeErrFileExec{err: boom}, "/etc/x", nil, false, true, "file.line")
+	if !errors.Is(err, boom) {
+		t.Fatalf("expected a non-NotExist remove error to propagate, got %v", err)
 	}
 }
 
