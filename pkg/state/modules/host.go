@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -31,6 +33,10 @@ type HostPresent struct {
 
 	file exec.FileExec
 
+	// Revert memos, valid only for a same-instance Apply→Revert sequence.
+	// A fresh instance (the runner builds states fresh per execution, so
+	// ModeRevert always is one) leaves them unset and Revert is an explicit
+	// clean no-op — see revertHostsFile.
 	backup    []byte
 	backupSet bool
 	created   bool
@@ -70,7 +76,10 @@ func (h *HostPresent) Name() string           { return "host.present:" + h.id }
 func (h *HostPresent) Reqs() state.Requisites { return h.reqs }
 
 func (h *HostPresent) Check(ctx context.Context) (state.CheckResult, error) {
-	current := h.readHosts(ctx)
+	current, _, err := readManagedFile(ctx, h.file, h.Path)
+	if err != nil {
+		return state.CheckResult{}, fmt.Errorf("host.present: read %s: %w", h.Path, err)
+	}
 	desired := renderHostPresent(current, h.IP, h.Hostname)
 	if desired == current {
 		return state.CheckResult{NeedsChange: false}, nil
@@ -82,7 +91,10 @@ func (h *HostPresent) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (h *HostPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
-	current, existed := h.readHostsExists(ctx)
+	current, existed, err := readManagedFile(ctx, h.file, h.Path)
+	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("host.present: read %s: %w", h.Path, err)
+	}
 	h.backup = []byte(current)
 	h.backupSet = existed
 	h.created = !existed
@@ -108,20 +120,7 @@ func (h *HostPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (h *HostPresent) Revert(ctx context.Context) (state.ApplyResult, error) {
-	return revertHostsFile(ctx, h.file, h.Path, h.backup, h.backupSet, h.created, "host.present")
-}
-
-func (h *HostPresent) readHosts(ctx context.Context) string {
-	c, _ := h.readHostsExists(ctx)
-	return c
-}
-
-func (h *HostPresent) readHostsExists(ctx context.Context) (string, bool) {
-	data, err := h.file.ReadFile(ctx, h.Path)
-	if err != nil {
-		return "", false
-	}
-	return string(data), true
+	return revertHostsFile(ctx, h.file, h.Path, h.backup, h.backupSet, h.created, 0644, "host.present")
 }
 
 // HostAbsent implements the host.absent state.
@@ -135,6 +134,8 @@ type HostAbsent struct {
 
 	file exec.FileExec
 
+	// Revert memos, valid only for a same-instance Apply→Revert sequence;
+	// unset memos make Revert an explicit clean no-op (see revertHostsFile).
 	backup    []byte
 	backupSet bool
 }
@@ -168,11 +169,13 @@ func (h *HostAbsent) Name() string           { return "host.absent:" + h.id }
 func (h *HostAbsent) Reqs() state.Requisites { return h.reqs }
 
 func (h *HostAbsent) Check(ctx context.Context) (state.CheckResult, error) {
-	data, err := h.file.ReadFile(ctx, h.Path)
+	current, existed, err := readManagedFile(ctx, h.file, h.Path)
 	if err != nil {
+		return state.CheckResult{}, fmt.Errorf("host.absent: read %s: %w", h.Path, err)
+	}
+	if !existed {
 		return state.CheckResult{NeedsChange: false}, nil
 	}
-	current := string(data)
 	desired := renderHostAbsent(current, h.Hostname)
 	if desired == current {
 		return state.CheckResult{NeedsChange: false}, nil
@@ -184,11 +187,13 @@ func (h *HostAbsent) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (h *HostAbsent) Apply(ctx context.Context) (state.ApplyResult, error) {
-	data, err := h.file.ReadFile(ctx, h.Path)
+	current, existed, err := readManagedFile(ctx, h.file, h.Path)
 	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("host.absent: read %s: %w", h.Path, err)
+	}
+	if !existed {
 		return state.ApplyResult{Changed: false}, nil
 	}
-	current := string(data)
 	h.backup = []byte(current)
 	h.backupSet = true
 
@@ -212,7 +217,7 @@ func (h *HostAbsent) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (h *HostAbsent) Revert(ctx context.Context) (state.ApplyResult, error) {
-	return revertHostsFile(ctx, h.file, h.Path, h.backup, h.backupSet, false, "host.absent")
+	return revertHostsFile(ctx, h.file, h.Path, h.backup, h.backupSet, false, 0644, "host.absent")
 }
 
 // hostsPath resolves the hosts file path from config, defaulting to /etc/hosts.
@@ -319,25 +324,56 @@ func joinHostLines(lines []string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// revertHostsFile restores a hosts file to its backup, or removes it if the
-// file did not exist before Apply.
-func revertHostsFile(ctx context.Context, file exec.FileExec, path string, backup []byte, backupSet, created bool, mod string) (state.ApplyResult, error) {
-	if created || !backupSet {
-		if err := file.Remove(ctx, path); err != nil {
+// readManagedFile reads a line-managed file, distinguishing a genuinely
+// absent file from a failed read: fs.ErrNotExist is the ONLY absent signal
+// (returned as "", false, nil); any other read error is returned to the
+// caller so the phase FAILS instead of treating unreadable content as empty.
+// Conflating the two would let a transient read failure (EIO, ESTALE, EACCES)
+// followed by a successful write truncate /etc/hosts or authorized_keys down
+// to just the managed line.
+func readManagedFile(ctx context.Context, file exec.FileExec, path string) (content string, existed bool, err error) {
+	data, err := file.ReadFile(ctx, path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return string(data), true, nil
+}
+
+// revertHostsFile undoes a same-instance Apply on a line-managed file using
+// the memos Apply recorded: remove the file when Apply created it, restore
+// the backup (with the module's canonical permissions) when Apply captured
+// one. When NO memo is set — Revert on a fresh instance where Apply never
+// ran (the runner builds states fresh per execution, so ModeRevert always
+// hits this) or Apply failed before reading — it is an explicit clean no-op:
+// deleting or rewriting a shared file like /etc/hosts or authorized_keys to
+// "revert" an unrecorded apply is never safe.
+func revertHostsFile(ctx context.Context, file exec.FileExec, path string, backup []byte, backupSet, created bool, perm fs.FileMode, mod string) (state.ApplyResult, error) {
+	switch {
+	case created:
+		if err := file.Remove(ctx, path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return state.ApplyResult{}, fmt.Errorf("%s: revert remove %s: %w", mod, path, err)
 		}
 		return state.ApplyResult{
 			Changed: true,
-			Diff:    fmt.Sprintf("removed %s (revert; no prior file)", path),
+			Diff:    fmt.Sprintf("removed %s (revert; created by this apply)", path),
+		}, nil
+	case backupSet:
+		if err := file.WriteFile(ctx, path, backup, perm); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("%s: revert %s: %w", mod, path, err)
+		}
+		return state.ApplyResult{
+			Changed: true,
+			Diff:    fmt.Sprintf("reverted %s to previous content", path),
+		}, nil
+	default:
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    mod + ": nothing to revert (no apply recorded in this run)",
 		}, nil
 	}
-	if err := file.WriteFile(ctx, path, backup, 0644); err != nil {
-		return state.ApplyResult{}, fmt.Errorf("%s: revert %s: %w", mod, path, err)
-	}
-	return state.ApplyResult{
-		Changed: true,
-		Diff:    fmt.Sprintf("reverted %s to previous content", path),
-	}, nil
 }
 
 // dropString returns ss with all occurrences of s removed.

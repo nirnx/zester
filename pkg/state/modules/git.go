@@ -25,7 +25,8 @@ type GitCloned struct {
 	// Branch is an optional branch or tag to checkout.
 	Branch string
 
-	// Rev is an optional specific commit hash to checkout.
+	// Rev is an optional revision to checkout: a commit sha (full or
+	// abbreviated), tag, or any rev git can resolve locally.
 	Rev string
 
 	// Depth is the shallow clone depth (0 = full clone).
@@ -37,8 +38,11 @@ type GitCloned struct {
 	cmd  exec.CommandExec
 	file exec.FileExec
 
-	// createdByApply tracks whether Apply created the directory,
-	// so Revert knows whether it's safe to remove it.
+	// createdByApply tracks whether a same-instance Apply cloned the
+	// directory, so Revert knows it is safe to remove it. Valid only for a
+	// same-instance Apply→Revert sequence; a fresh instance (any runner
+	// ModeRevert run — states are rebuilt per execution) leaves it false and
+	// Revert is an explicit clean no-op.
 	createdByApply bool
 }
 
@@ -134,24 +138,35 @@ func (g *GitCloned) Check(ctx context.Context) (state.CheckResult, error) {
 	}
 	head := strings.TrimSpace(headResult.Stdout)
 
-	// For a full SHA, compare directly; otherwise the checkout is needed.
-	if g.Rev != "" && strings.HasPrefix(head, g.Rev) {
-		return state.CheckResult{
-			NeedsChange: false,
-			Diff:        fmt.Sprintf("%s is at rev %s", g.Path, g.Rev),
-		}, nil
-	}
-
-	if g.Rev == "" {
-		// Branch comparison: resolve the desired branch ref.
+	if g.Rev != "" {
+		// Sha revs match by prefix; symbolic revs (tags, refs) resolve
+		// locally and compare by commit id — a checked-out tag converges
+		// instead of perpetually re-applying.
+		if revAtHead(ctx, g.cmd, g.Path, g.Rev, head) {
+			return state.CheckResult{
+				NeedsChange: false,
+				Diff:        fmt.Sprintf("%s is at rev %s", g.Path, g.Rev),
+			}, nil
+		}
+	} else {
+		// Branch comparison: resolve the desired branch ref. branch: also
+		// documents tags — `git clone --branch <tag>` leaves a detached HEAD
+		// with no local branch, so fall back to symbolic-rev resolution.
 		refResult, refErr := g.cmd.Run(ctx, exec.CommandOpts{
 			Command: "git",
 			Args:    []string{"-C", g.Path, "rev-parse", "refs/heads/" + g.Branch},
 		})
-		if refErr == nil && strings.TrimSpace(refResult.Stdout) == head {
+		if refErr == nil && refResult != nil && refResult.ExitCode == 0 &&
+			strings.TrimSpace(refResult.Stdout) == head {
 			return state.CheckResult{
 				NeedsChange: false,
 				Diff:        fmt.Sprintf("%s is on branch %s", g.Path, g.Branch),
+			}, nil
+		}
+		if revAtHead(ctx, g.cmd, g.Path, g.Branch, head) {
+			return state.CheckResult{
+				NeedsChange: false,
+				Diff:        fmt.Sprintf("%s is at %s", g.Path, g.Branch),
 			}, nil
 		}
 	}
@@ -244,7 +259,7 @@ func (g *GitCloned) Revert(ctx context.Context) (state.ApplyResult, error) {
 	if !g.createdByApply {
 		return state.ApplyResult{
 			Changed: false,
-			Diff:    "git.cloned: directory was not created by this apply; skipping removal",
+			Diff:    "git.cloned: nothing to revert (no clone recorded in this run)",
 		}, nil
 	}
 
@@ -256,4 +271,58 @@ func (g *GitCloned) Revert(ctx context.Context) (state.ApplyResult, error) {
 		Changed: true,
 		Diff:    fmt.Sprintf("removed cloned directory %s", g.Path),
 	}, nil
+}
+
+// isHexRevPrefix reports whether rev could be an abbreviated commit sha:
+// pure hex, at least 4 chars (git's minimum abbreviation), at most a full
+// SHA-256 id.
+func isHexRevPrefix(rev string) bool {
+	if len(rev) < 4 || len(rev) > 64 {
+		return false
+	}
+	for _, r := range rev {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// isFullHexSHA reports whether s looks like a full commit id (40- or
+// 64-hex-char sha).
+func isFullHexSHA(s string) bool {
+	return (len(s) == 40 || len(s) == 64) && isHexRevPrefix(s)
+}
+
+// resolveRevCommit resolves rev to a full commit id within the repo at path
+// via `git rev-parse --verify <rev>^{commit}`, peeling annotated tags to the
+// commits they point at. Local-only — no network round-trip. Returns ""
+// when the rev does not resolve (e.g. a tag that has not been fetched yet:
+// the caller reports NeedsChange and Apply's fetch+checkout converges it).
+func resolveRevCommit(ctx context.Context, cmd exec.CommandExec, path, rev string) string {
+	res, err := cmd.Run(ctx, exec.CommandOpts{
+		Command: "git",
+		Args:    []string{"-C", path, "rev-parse", "--verify", rev + "^{commit}"},
+	})
+	if err != nil || res == nil || res.ExitCode != 0 {
+		return ""
+	}
+	out := strings.TrimSpace(res.Stdout)
+	if !isFullHexSHA(out) {
+		return ""
+	}
+	return out
+}
+
+// revAtHead reports whether the desired rev denotes the commit currently at
+// head. Hex revs keep sha-prefix matching (no subprocess); anything else —
+// a tag or other symbolic rev, whose name can never prefix-match a hex sha —
+// is resolved locally and compared by commit id, so pinned tags CONVERGE
+// after checkout instead of re-applying on every run.
+func revAtHead(ctx context.Context, cmd exec.CommandExec, path, rev, head string) bool {
+	if isHexRevPrefix(rev) && strings.HasPrefix(strings.ToLower(head), strings.ToLower(rev)) {
+		return true
+	}
+	resolved := resolveRevCommit(ctx, cmd, path, rev)
+	return resolved != "" && resolved == head
 }

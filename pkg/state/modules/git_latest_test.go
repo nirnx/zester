@@ -256,6 +256,100 @@ func TestGitLatestCheckPinnedRev(t *testing.T) {
 	}
 }
 
+func TestGitLatestCheckPinnedTagRevConverges(t *testing.T) {
+	// rev: v2.0 checked out (detached HEAD at the tag's commit): the state
+	// must converge via local rev-parse <rev>^{commit} — no network, no
+	// perpetual Changed:true churn cascading through watch requisites.
+	url := "https://example.com/repo.git"
+	cmd := &gitLatestScriptCmd{respond: gitRevRespond(url, gitTestHead, map[string]string{
+		"v2.0^{commit}": gitTestHead,
+	})}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{
+		"target": "/opt/repo",
+		"rev":    "v2.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when HEAD is at the pinned tag's commit, diff: %s", cr.Diff)
+	}
+	for _, c := range cmd.Calls() {
+		joined := strings.Join(c.Args, " ")
+		if strings.Contains(joined, "ls-remote") {
+			t.Errorf("pinned rev check must not run ls-remote: %v", c.Args)
+		}
+		if strings.Contains(joined, "fetch") || strings.Contains(joined, "checkout") {
+			t.Errorf("Check ran mutating git command: %v", c.Args)
+		}
+	}
+}
+
+func TestGitLatestCheckPinnedTagRevBehind(t *testing.T) {
+	url := "https://example.com/repo.git"
+	cmd := &gitLatestScriptCmd{respond: gitRevRespond(url, gitTestHead, map[string]string{
+		"v2.0^{commit}": "1111111111111111111111111111111111111111",
+	})}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{
+		"target": "/opt/repo",
+		"rev":    "v2.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange when the pinned tag resolves to a different commit")
+	}
+}
+
+func TestGitLatestRevertFreshInstanceNoOp(t *testing.T) {
+	// Fresh instance (the runner's ModeRevert pattern): both memos unset —
+	// Revert must be an explicit clean no-op, never a removal or reset.
+	cmd := &gitLatestScriptCmd{}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+		"target": "/opt/repo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected clean no-op revert on a fresh instance")
+	}
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("expected explicit nothing-to-revert diff, got %q", ar.Diff)
+	}
+	if !fakeFile.Exists("/opt/repo") {
+		t.Error("fresh-instance revert must not remove the repo directory")
+	}
+	if len(cmd.Calls()) != 0 {
+		t.Errorf("fresh-instance revert must not run git commands, got %v", cmd.Calls())
+	}
+}
+
 func TestGitLatestUpdateFetchResetWhenBehind(t *testing.T) {
 	url := "https://example.com/repo.git"
 	cmd := &gitLatestScriptCmd{respond: gitLatestRespond(url, "oldsha", "newsha")}

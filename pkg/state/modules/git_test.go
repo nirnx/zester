@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -196,13 +197,215 @@ func TestGitClonedRevert_NotCreatedByApply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Do NOT call Apply — revert without prior apply.
+	// Do NOT call Apply — revert without prior apply (fresh-instance
+	// ModeRevert pattern). Must be an explicit clean no-op.
 	ar, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ar.Changed {
 		t.Error("expected no change on revert when not created by apply")
+	}
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("expected explicit nothing-to-revert diff, got %q", ar.Diff)
+	}
+	if !fakeFile.Exists("/opt/repo") {
+		t.Error("fresh-instance revert must not remove the repo directory")
+	}
+}
+
+const gitTestHead = "9fceb02d0ae598e95dc970b74767f19372d61af8"
+
+// gitRevRespond scripts the read-only git queries used by the Check paths:
+// remote get-url, rev-parse HEAD, rev-parse of specific revs (the resolve
+// map keys, e.g. "v1.2.3^{commit}" or "refs/heads/main"), and ls-remote.
+// Unresolvable revs answer exit 128 like real git.
+func gitRevRespond(url, head string, resolve map[string]string) func([]string) *exec.CommandResult {
+	return func(args []string) *exec.CommandResult {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "get-url"):
+			return &exec.CommandResult{Stdout: url + "\n"}
+		case strings.Contains(joined, "rev-parse"):
+			last := args[len(args)-1]
+			if last == "HEAD" {
+				return &exec.CommandResult{Stdout: head + "\n"}
+			}
+			if sha, ok := resolve[last]; ok {
+				return &exec.CommandResult{Stdout: sha + "\n"}
+			}
+			return &exec.CommandResult{ExitCode: 128, Stderr: "unknown revision"}
+		case strings.Contains(joined, "ls-remote"):
+			return &exec.CommandResult{Stdout: head + "\tHEAD\n"}
+		}
+		return nil
+	}
+}
+
+func TestGitClonedCheckTagRevConverges(t *testing.T) {
+	// rev: v1.2.3 checked out (detached HEAD at the tag's commit): the state
+	// must converge via rev-parse <rev>^{commit}, not churn forever because
+	// HasPrefix(sha, "v1.2.3") can never match.
+	url := "https://example.com/repo.git"
+	cmd := &gitLatestScriptCmd{respond: gitRevRespond(url, gitTestHead, map[string]string{
+		"v1.2.3^{commit}": gitTestHead,
+	})}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+		"url": url,
+		"rev": "v1.2.3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when HEAD is at the tag's commit, diff: %s", cr.Diff)
+	}
+	// Check must stay read-only: no fetch/checkout.
+	for _, c := range cmd.Calls() {
+		joined := strings.Join(c.Args, " ")
+		if strings.Contains(joined, "fetch") || strings.Contains(joined, "checkout") {
+			t.Errorf("Check ran mutating git command: %v", c.Args)
+		}
+	}
+}
+
+func TestGitClonedCheckTagRevNeedsChangeWhenDifferent(t *testing.T) {
+	url := "https://example.com/repo.git"
+	cmd := &gitLatestScriptCmd{respond: gitRevRespond(url, gitTestHead, map[string]string{
+		"v1.2.3^{commit}": "1111111111111111111111111111111111111111",
+	})}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+		"url": url,
+		"rev": "v1.2.3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange when the tag resolves to a different commit")
+	}
+}
+
+func TestGitClonedCheckUnresolvableRevNeedsChange(t *testing.T) {
+	// A tag not fetched yet does not resolve locally: NeedsChange, and
+	// Apply's fetch+checkout converges it.
+	url := "https://example.com/repo.git"
+	cmd := &gitLatestScriptCmd{respond: gitRevRespond(url, gitTestHead, nil)}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+		"url": url,
+		"rev": "v9.9.9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange when the rev cannot be resolved locally")
+	}
+}
+
+func TestGitClonedCheckShaPrefixRev(t *testing.T) {
+	url := "https://example.com/repo.git"
+	cmd := &gitLatestScriptCmd{respond: gitRevRespond(url, gitTestHead, nil)}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+		"url": url,
+		"rev": gitTestHead[:7],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change for a sha-prefix rev at HEAD, diff: %s", cr.Diff)
+	}
+	// The sha fast path needs no rev resolution subprocess.
+	for _, c := range cmd.Calls() {
+		if strings.Contains(strings.Join(c.Args, " "), "--verify") {
+			t.Errorf("sha-prefix rev must not invoke rev-parse --verify: %v", c.Args)
+		}
+	}
+}
+
+func TestGitClonedCheckTagInBranchConverges(t *testing.T) {
+	// The docs sanction `branch: v1.2.3` for tags; `git clone --branch <tag>`
+	// leaves a detached HEAD with no local branch, so refs/heads fails and
+	// the symbolic-rev fallback must converge the state.
+	url := "https://example.com/repo.git"
+	cmd := &gitLatestScriptCmd{respond: gitRevRespond(url, gitTestHead, map[string]string{
+		"v1.2.3^{commit}": gitTestHead,
+	})}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+		"url":    url,
+		"branch": "v1.2.3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when detached HEAD is at the branch-declared tag, diff: %s", cr.Diff)
+	}
+}
+
+func TestGitClonedCheckBranchStillMatchesLocalRef(t *testing.T) {
+	url := "https://example.com/repo.git"
+	cmd := &gitLatestScriptCmd{respond: gitRevRespond(url, gitTestHead, map[string]string{
+		"refs/heads/main": gitTestHead,
+	})}
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
+	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+		"url":    url,
+		"branch": "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when HEAD equals the local branch tip, diff: %s", cr.Diff)
 	}
 }
 

@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/state"
@@ -28,6 +30,8 @@ type CmdRun struct {
 
 	// Creates is a path that, if it exists, means the command has already run.
 	// This provides idempotency: skip execution when the creates path exists.
+	// The guard is evaluated independently in BOTH Check and Apply — a
+	// watch-forced apply bypasses Check, and must still honor creates.
 	Creates string
 
 	// cmd is the injected command execution provider.
@@ -66,6 +70,9 @@ func newCmdRun(id string, config map[string]any, cmd exec.CommandExec, file exec
 
 	c.Cwd, _ = config["cwd"].(string)
 	c.Creates, _ = config["creates"].(string)
+	if c.Creates != "" && file == nil {
+		return nil, fmt.Errorf("cmd.run: %s: creates requires a file provider", id)
+	}
 
 	if env, ok := config["env"].(map[string]any); ok {
 		c.Env = make(map[string]string, len(env))
@@ -82,14 +89,33 @@ func newCmdRun(id string, config map[string]any, cmd exec.CommandExec, file exec
 func (c *CmdRun) Name() string           { return "cmd.run:" + c.id }
 func (c *CmdRun) Reqs() state.Requisites { return c.reqs }
 
-func (c *CmdRun) Check(ctx context.Context) (state.CheckResult, error) {
-	if c.Creates != "" {
-		if _, err := c.file.Stat(ctx, c.Creates); err == nil {
-			return state.CheckResult{
-				NeedsChange: false,
-				Diff:        fmt.Sprintf("creates path %s already exists", c.Creates),
-			}, nil
+// createsSatisfied reports whether the creates guard path exists. Only
+// fs.ErrNotExist counts as absent; any other stat error fails the phase —
+// creates canonically guards destructive one-shots (initdb, mkfs), so an
+// unverifiable guard must never fall through to re-execution.
+func (c *CmdRun) createsSatisfied(ctx context.Context) (bool, error) {
+	if c.Creates == "" {
+		return false, nil
+	}
+	if _, err := c.file.Stat(ctx, c.Creates); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
 		}
+		return false, fmt.Errorf("cmd.run: stat creates path %s: %w", c.Creates, err)
+	}
+	return true, nil
+}
+
+func (c *CmdRun) Check(ctx context.Context) (state.CheckResult, error) {
+	satisfied, err := c.createsSatisfied(ctx)
+	if err != nil {
+		return state.CheckResult{}, err
+	}
+	if satisfied {
+		return state.CheckResult{
+			NeedsChange: false,
+			Diff:        fmt.Sprintf("creates path %s already exists", c.Creates),
+		}, nil
 	}
 
 	return state.CheckResult{
@@ -99,6 +125,21 @@ func (c *CmdRun) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (c *CmdRun) Apply(ctx context.Context) (state.ApplyResult, error) {
+	// The creates guard gates Apply too, independently of Check: watch-forced
+	// applies bypass Check entirely, and a creates-guarded one-shot must not
+	// re-run just because a watched dependency changed (Salt honors creates
+	// on watch-triggered runs via mod_run_check).
+	satisfied, err := c.createsSatisfied(ctx)
+	if err != nil {
+		return state.ApplyResult{}, err
+	}
+	if satisfied {
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    fmt.Sprintf("creates path %s already exists; command not run", c.Creates),
+		}, nil
+	}
+
 	opts := exec.CommandOpts{
 		Command: c.Command,
 		Args:    c.Args,

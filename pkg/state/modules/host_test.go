@@ -2,6 +2,8 @@ package modules
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -171,6 +173,85 @@ func TestHostPresentRevert(t *testing.T) {
 	}
 }
 
+func TestHostPresentRevertAfterCreateRemovesFile(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+		"ip":   "10.0.0.5",
+		"path": "/tmp/hosts",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed when revert removes the file Apply created")
+	}
+	if fakeFile.Exists("/tmp/hosts") {
+		t.Error("expected file created by Apply to be removed on revert")
+	}
+}
+
+func TestHostPresentRevertFreshInstanceNoOp(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n10.0.0.9\tother\n"), 0644)
+
+	// Fresh instance: Apply never ran (the runner's ModeRevert call pattern).
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+		"ip": "10.0.0.5",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected clean no-op revert on a fresh instance")
+	}
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("expected explicit nothing-to-revert diff, got %q", ar.Diff)
+	}
+	got, _ := fakeFile.GetFile("/etc/hosts")
+	if string(got) != "127.0.0.1\tlocalhost\n10.0.0.9\tother\n" {
+		t.Errorf("fresh-instance revert must not touch /etc/hosts, got %q", string(got))
+	}
+}
+
+func TestHostPresentReadErrorFailsPhases(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n"), 0644)
+	fakeFile.SetReadError("/etc/hosts", errors.New("input/output error"))
+
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+		"ip": "10.0.0.5",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("expected Check to fail on a non-not-exist read error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("expected Apply to fail on a non-not-exist read error")
+	}
+	// The transiently unreadable hosts file must never be overwritten.
+	got, _ := fakeFile.GetFile("/etc/hosts")
+	if string(got) != "127.0.0.1\tlocalhost\n" {
+		t.Errorf("hosts file must not be rewritten on read error, got %q", string(got))
+	}
+}
+
 func TestHostAbsentName(t *testing.T) {
 	s, err := NewHostAbsentBuilder(testHostMctx(exectest.NewFakeFileExec()))("web1", map[string]any{})
 	if err != nil {
@@ -261,5 +342,72 @@ func TestHostAbsentMissingFile(t *testing.T) {
 	}
 	if ar.Changed {
 		t.Error("expected Apply no-op when hosts file is missing")
+	}
+}
+
+func TestHostAbsentRevertFreshInstanceNoOp(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n10.0.0.5\tweb1\n"), 0644)
+
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected clean no-op revert on a fresh instance")
+	}
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("expected explicit nothing-to-revert diff, got %q", ar.Diff)
+	}
+	if !fakeFile.Exists("/etc/hosts") {
+		t.Fatal("fresh-instance revert must not delete /etc/hosts")
+	}
+}
+
+func TestHostAbsentReadErrorFailsPhases(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/etc/hosts", []byte("10.0.0.5\tweb1\n"), 0644)
+	fakeFile.SetReadError("/etc/hosts", errors.New("input/output error"))
+
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("expected Check to fail on a non-not-exist read error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("expected Apply to fail on a non-not-exist read error")
+	}
+	got, _ := fakeFile.GetFile("/etc/hosts")
+	if string(got) != "10.0.0.5\tweb1\n" {
+		t.Errorf("hosts file must not be modified on read error, got %q", string(got))
+	}
+}
+
+func TestHostAbsentRevertRestoresBackup(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n10.0.0.5\tweb1\n"), 0644)
+
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := fakeFile.GetFile("/etc/hosts")
+	if string(got) != "127.0.0.1\tlocalhost\n10.0.0.5\tweb1\n" {
+		t.Errorf("revert content: got %q", string(got))
 	}
 }
