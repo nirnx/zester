@@ -4,7 +4,7 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
-## [Unreleased]
+## [0.5.0] - 2026-07-10
 
 ### Added
 - **Release promotion + auto-rollout.** `zester update promote` marks a
