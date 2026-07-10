@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -178,6 +180,89 @@ func TestSSHAuthPresentRevert(t *testing.T) {
 	}
 }
 
+func TestSSHAuthPresentRevertRestoresMode(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate(sshAuthTestPath, []byte("ssh-rsa AAAAOTHER other@host\n"), 0600)
+
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+		"config": sshAuthTestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := fakeFile.Stat(ctx, sshAuthTestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != fs.FileMode(0600) {
+		t.Errorf("restored authorized_keys mode: got %o want 0600", fi.Mode().Perm())
+	}
+}
+
+func TestSSHAuthPresentRevertFreshInstanceNoOp(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	content := "ssh-rsa AAAA1 a@h\nssh-rsa AAAA2 b@h\nssh-rsa AAAA3 c@h\n"
+	fakeFile.PreCreate(sshAuthTestPath, []byte(content), 0600)
+
+	// Fresh instance: Apply never ran (the runner's ModeRevert call pattern).
+	// Revert must NOT delete the user's authorized_keys.
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+		"config": sshAuthTestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected clean no-op revert on a fresh instance")
+	}
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("expected explicit nothing-to-revert diff, got %q", ar.Diff)
+	}
+	got, ok := fakeFile.GetFile(sshAuthTestPath)
+	if !ok || string(got) != content {
+		t.Errorf("fresh-instance revert must not touch authorized_keys, got %q (exists=%v)", string(got), ok)
+	}
+}
+
+func TestSSHAuthPresentReadErrorFailsPhases(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	content := "ssh-rsa AAAAOTHER other@host\n"
+	fakeFile.PreCreate(sshAuthTestPath, []byte(content), 0600)
+	fakeFile.SetReadError(sshAuthTestPath, errors.New("stale NFS file handle"))
+
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+		"config": sshAuthTestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("expected Check to fail on a non-not-exist read error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("expected Apply to fail on a non-not-exist read error")
+	}
+	// The transiently unreadable authorized_keys must never be rewritten to
+	// just the managed key.
+	got, _ := fakeFile.GetFile(sshAuthTestPath)
+	if string(got) != content {
+		t.Errorf("authorized_keys must not be rewritten on read error, got %q", string(got))
+	}
+}
+
 func TestSSHAuthAbsentName(t *testing.T) {
 	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()))("AAAAKEY", map[string]any{
 		"config": sshAuthTestPath,
@@ -262,5 +347,58 @@ func TestSSHAuthAbsentMissingFile(t *testing.T) {
 	}
 	if ar.Changed {
 		t.Error("expected Apply no-op when authorized_keys is missing")
+	}
+}
+
+func TestSSHAuthAbsentRevertFreshInstanceNoOp(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	content := "ssh-rsa AAAA1 a@h\nssh-rsa AAAA2 b@h\nssh-rsa AAAA3 c@h\n"
+	fakeFile.PreCreate(sshAuthTestPath, []byte(content), 0600)
+
+	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile))("AAAA2", map[string]any{
+		"config": sshAuthTestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar, err := s.Revert(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected clean no-op revert on a fresh instance")
+	}
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("expected explicit nothing-to-revert diff, got %q", ar.Diff)
+	}
+	got, ok := fakeFile.GetFile(sshAuthTestPath)
+	if !ok || string(got) != content {
+		t.Errorf("fresh-instance revert must not touch authorized_keys, got %q (exists=%v)", string(got), ok)
+	}
+}
+
+func TestSSHAuthAbsentReadErrorFailsPhases(t *testing.T) {
+	ctx := context.Background()
+	fakeFile := exectest.NewFakeFileExec()
+	content := "ssh-rsa AAAATESTKEY alice@example\n"
+	fakeFile.PreCreate(sshAuthTestPath, []byte(content), 0600)
+	fakeFile.SetReadError(sshAuthTestPath, errors.New("permission denied"))
+
+	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+		"config": sshAuthTestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("expected Check to fail on a non-not-exist read error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("expected Apply to fail on a non-not-exist read error")
+	}
+	got, _ := fakeFile.GetFile(sshAuthTestPath)
+	if string(got) != content {
+		t.Errorf("authorized_keys must not be modified on read error, got %q", string(got))
 	}
 }

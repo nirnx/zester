@@ -2,11 +2,15 @@ package modules
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 )
 
 func testCmdMctx() *exec.ModuleContext {
@@ -105,6 +109,109 @@ func TestCmdRunCreatesGuard(t *testing.T) {
 	}
 	if cr.NeedsChange {
 		t.Error("expected no change when creates file exists")
+	}
+}
+
+// statErrFileExec injects a non-not-exist Stat error for one path (the fake's
+// SetReadError only covers ReadFile).
+type statErrFileExec struct {
+	*exectest.FakeFileExec
+	path string
+	err  error
+}
+
+func (s *statErrFileExec) Stat(ctx context.Context, path string) (fs.FileInfo, error) {
+	if path == s.path {
+		return nil, s.err
+	}
+	return s.FakeFileExec.Stat(ctx, path)
+}
+
+func TestCmdRunCreatesGuardGatesApply(t *testing.T) {
+	// The creates guard must gate Apply too: watch-forced applies bypass
+	// Check entirely and must still honor creates (Salt parity).
+	ctx := context.Background()
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate("/var/lib/db/PG_VERSION", []byte("16"), 0644)
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: fakeFile}}
+	s, err := NewCmdRunBuilder(mctx)("initdb", map[string]any{
+		"command": "initdb -D /var/lib/db",
+		"creates": "/var/lib/db/PG_VERSION",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Apply(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected Apply no-op when creates path exists")
+	}
+	if !strings.Contains(ar.Diff, "already exists") {
+		t.Errorf("expected creates-skip diff, got %q", ar.Diff)
+	}
+	if fakeCmd.CallCount() != 0 {
+		t.Fatalf("command must NOT run when creates path exists, got %d calls", fakeCmd.CallCount())
+	}
+
+	// Remove the guard path: Apply now runs the command.
+	if err := fakeFile.Remove(ctx, "/var/lib/db/PG_VERSION"); err != nil {
+		t.Fatal(err)
+	}
+	ar2, err := s.Apply(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar2.Changed {
+		t.Error("expected Changed when creates path is absent")
+	}
+	if fakeCmd.CallCount() != 1 {
+		t.Errorf("expected exactly 1 command call, got %d", fakeCmd.CallCount())
+	}
+}
+
+func TestCmdRunCreatesStatErrorFailsPhases(t *testing.T) {
+	// An unverifiable creates guard (EACCES etc., not fs.ErrNotExist) must
+	// fail the phase, never fall through to re-running a one-shot.
+	ctx := context.Background()
+	fakeCmd := exectest.NewFakeCommandExec()
+	file := &statErrFileExec{
+		FakeFileExec: exectest.NewFakeFileExec(),
+		path:         "/var/lib/db/PG_VERSION",
+		err:          errors.New("permission denied"),
+	}
+
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: file}}
+	s, err := NewCmdRunBuilder(mctx)("initdb", map[string]any{
+		"command": "initdb -D /var/lib/db",
+		"creates": "/var/lib/db/PG_VERSION",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Check(ctx); err == nil {
+		t.Error("expected Check to fail on a non-not-exist stat error")
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Error("expected Apply to fail on a non-not-exist stat error")
+	}
+	if fakeCmd.CallCount() != 0 {
+		t.Errorf("command must not run when the creates guard is unverifiable, got %d calls", fakeCmd.CallCount())
+	}
+}
+
+func TestCmdRunCreatesRequiresFileProvider(t *testing.T) {
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: &exec.OSCommandExec{}}}
+	_, err := NewCmdRunBuilder(mctx)("test", map[string]any{
+		"command": "true",
+		"creates": "/tmp/guard",
+	})
+	if err == nil {
+		t.Error("expected builder error when creates is declared without a file provider")
 	}
 }
 

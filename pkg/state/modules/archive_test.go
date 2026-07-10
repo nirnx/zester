@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -221,6 +222,159 @@ func TestArchiveExtractedIdempotentAfterApply(t *testing.T) {
 	if cr2.NeedsChange {
 		t.Error("expected no change on second Check after apply")
 	}
+}
+
+func TestArchiveExtractedSourceHash(t *testing.T) {
+	ctx := context.Background()
+
+	build := func(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileExec, hash string) *ArchiveExtracted {
+		t.Helper()
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+			"source":      "/tmp/app-" + hash + ".tar.gz",
+			"source_hash": hash,
+			"makedirs":    true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.(*ArchiveExtracted)
+	}
+
+	t.Run("apply writes marker and converges", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		s := build(fakeCmd, fakeFile, "sha256=aaa111")
+
+		cr, err := s.Check(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cr.NeedsChange {
+			t.Fatal("expected NeedsChange before first extraction")
+		}
+		if _, err := s.Apply(ctx); err != nil {
+			t.Fatal(err)
+		}
+		marker, ok := fakeFile.GetFile(s.markerPath())
+		if !ok {
+			t.Fatalf("expected marker file at %s", s.markerPath())
+		}
+		if strings.TrimSpace(string(marker)) != "sha256=aaa111" {
+			t.Errorf("marker content: got %q", string(marker))
+		}
+		cr2, err := s.Check(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cr2.NeedsChange {
+			t.Errorf("expected no change after extraction, diff: %s", cr2.Diff)
+		}
+	})
+
+	t.Run("changed declaration re-extracts", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		// Simulate the 1.2.3 extraction: dir + marker recorded by a prior run.
+		old := build(fakeCmd, fakeFile, "sha256=aaa111")
+		if _, err := old.Apply(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		// Version bump: same state id, new source_hash — a FRESH instance
+		// (states are rebuilt per execution).
+		bumped := build(exectest.NewFakeCommandExec(), fakeFile, "sha256=bbb222")
+		cr, err := bumped.Check(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cr.NeedsChange {
+			t.Error("expected NeedsChange when the declared source_hash differs from the marker")
+		}
+		if !strings.Contains(cr.Diff, "source_hash changed") {
+			t.Errorf("expected source_hash-changed diff, got %q", cr.Diff)
+		}
+		if _, err := bumped.Apply(ctx); err != nil {
+			t.Fatal(err)
+		}
+		cr2, err := bumped.Check(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cr2.NeedsChange {
+			t.Errorf("expected convergence after re-extraction, diff: %s", cr2.Diff)
+		}
+	})
+
+	t.Run("pre-existing dir without marker re-extracts", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate("/opt/app", []byte{}, 0755)
+		s := build(fakeCmd, fakeFile, "sha256=aaa111")
+
+		cr, err := s.Check(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cr.NeedsChange {
+			t.Error("expected NeedsChange when source_hash is declared but no marker exists")
+		}
+	})
+
+	t.Run("if_missing combines with source_hash", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate("/opt/app/bin/app", []byte("binary"), 0755)
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+			"source":      "/tmp/app.tar.gz",
+			"source_hash": "sha256=bbb222",
+			"if_missing":  "/opt/app/bin/app",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// if_missing exists but the marker is absent → re-extract.
+		cr, err := s.Check(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cr.NeedsChange {
+			t.Error("expected NeedsChange when if_missing exists but marker is missing")
+		}
+	})
+
+	t.Run("marker read error fails check", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		s := build(fakeCmd, fakeFile, "sha256=aaa111")
+		if _, err := s.Apply(ctx); err != nil {
+			t.Fatal(err)
+		}
+		fakeFile.SetReadError(s.markerPath(), errors.New("input/output error"))
+		if _, err := s.Check(ctx); err == nil {
+			t.Error("expected Check to fail on a non-not-exist marker read error")
+		}
+	})
+
+	t.Run("failed extraction does not latch the marker", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeCmd.SetResult("tar", &exec.CommandResult{ExitCode: 2, Stderr: "corrupt archive"}, nil)
+		fakeFile := exectest.NewFakeFileExec()
+		s := build(fakeCmd, fakeFile, "sha256=aaa111")
+
+		if _, err := s.Apply(ctx); err == nil {
+			t.Fatal("expected Apply error on failed extraction")
+		}
+		if _, ok := fakeFile.GetFile(s.markerPath()); ok {
+			t.Error("marker must not be written after a failed extraction")
+		}
+		cr, err := s.Check(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cr.NeedsChange {
+			t.Error("expected NeedsChange after a failed extraction (makedirs dir must not latch)")
+		}
+	})
 }
 
 func TestArchiveExtractedExtractFailure(t *testing.T) {

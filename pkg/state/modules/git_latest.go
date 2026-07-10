@@ -35,12 +35,15 @@ type GitLatest struct {
 	cmd  exec.CommandExec
 	file exec.FileExec
 
-	// createdByApply tracks whether Apply cloned the repo, so Revert can
-	// safely remove the directory.
+	// createdByApply tracks whether a same-instance Apply cloned the repo, so
+	// Revert can safely remove the directory. Valid only for a same-instance
+	// Apply→Revert sequence; a fresh instance (any runner ModeRevert run —
+	// states are rebuilt per execution) leaves it false.
 	createdByApply bool
 
 	// prevHead stores the pre-update HEAD sha for an existing clone so Revert
-	// can reset back to it.
+	// can reset back to it. Same same-instance-only validity as
+	// createdByApply; with both memos unset Revert is an explicit clean no-op.
 	prevHead string
 }
 
@@ -116,9 +119,11 @@ func (g *GitLatest) Check(ctx context.Context) (state.CheckResult, error) {
 	}
 	head := strings.TrimSpace(headRes.Stdout)
 
-	// Pinned rev: compare directly, no network needed.
+	// Pinned rev: local comparison only, no network. Sha revs match by
+	// prefix; symbolic revs (tags) resolve via rev-parse ^{commit} and
+	// compare by commit id, so a pinned tag converges after checkout.
 	if g.Rev != "" {
-		if strings.HasPrefix(head, g.Rev) {
+		if revAtHead(ctx, g.cmd, g.Target, g.Rev, head) {
 			return state.CheckResult{NeedsChange: false, Diff: fmt.Sprintf("%s is at rev %s", g.Target, g.Rev)}, nil
 		}
 		return state.CheckResult{
@@ -265,7 +270,7 @@ func (g *GitLatest) Revert(ctx context.Context) (state.ApplyResult, error) {
 
 	return state.ApplyResult{
 		Changed: false,
-		Diff:    "git.latest: nothing to revert",
+		Diff:    "git.latest: nothing to revert (no apply recorded in this run)",
 	}, nil
 }
 

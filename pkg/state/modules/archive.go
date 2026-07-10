@@ -2,7 +2,10 @@ package modules
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +16,21 @@ import (
 
 // ArchiveExtracted implements the archive.extracted state.
 // It extracts a tar or zip archive (from a local path or URL) into a
-// target directory. Idempotency is provided by the if_missing path: when
-// that path exists the extraction is considered already done.
+// target directory.
+//
+// Idempotency semantics (weakest to strongest):
+//   - Without if_missing or source_hash, the state is considered already
+//     extracted when the target dir exists — a PRE-EXISTING target (or a dir
+//     left behind by makedirs after a failed extraction) therefore counts as
+//     done and the archive is never (re-)extracted. Declare if_missing and/or
+//     source_hash for anything beyond throwaway use.
+//   - if_missing: the existence of that path is the extraction marker
+//     (Salt parity); the target-dir fallback is not consulted.
+//   - source_hash: the declared value is recorded in a marker file inside
+//     the target dir after a successful extraction; Check re-extracts when
+//     the declaration no longer matches the recorded value (version bump).
+//     The value is an opaque declaration (e.g. "sha256=<hex>") compared as a
+//     string — it is NOT verified against the archive bytes.
 type ArchiveExtracted struct {
 	id   string
 	reqs state.Requisites
@@ -29,8 +45,15 @@ type ArchiveExtracted struct {
 	Format string
 
 	// IfMissing is a path whose existence means the archive is already
-	// extracted. When set, it is the sole idempotency check.
+	// extracted. When set, it replaces the weak target-dir existence check.
 	IfMissing string
+
+	// SourceHash is the declared hash of the source archive (any stable
+	// string, e.g. "sha256=<hex>"). When set, it is recorded in a marker
+	// file after a successful extraction and Check requires the recorded
+	// value to match — changing the declaration triggers re-extraction.
+	// Compared as an opaque string, never verified against archive bytes.
+	SourceHash string
 
 	// MakeDirs creates the target directory (and parents) before extracting.
 	MakeDirs bool
@@ -76,6 +99,8 @@ func newArchiveExtracted(id string, config map[string]any, cmd exec.CommandExec,
 	}
 	a.IfMissing, _ = config["if_missing"].(string)
 	a.MakeDirs, _ = config["makedirs"].(bool)
+	sh, _ := config["source_hash"].(string)
+	a.SourceHash = strings.TrimSpace(sh)
 
 	a.reqs = state.ParseRequisites(config)
 
@@ -85,37 +110,80 @@ func newArchiveExtracted(id string, config map[string]any, cmd exec.CommandExec,
 func (a *ArchiveExtracted) Name() string           { return "archive.extracted:" + a.id }
 func (a *ArchiveExtracted) Reqs() state.Requisites { return a.reqs }
 
+// markerPath returns the per-state marker file recording the source_hash of
+// the last successful extraction. It is keyed on the state id (stable across
+// source version bumps) and lives inside the target dir, so removing the
+// tree also resets the marker.
+func (a *ArchiveExtracted) markerPath() string {
+	sum := sha256.Sum256([]byte(a.id))
+	return filepath.Join(a.Dir, fmt.Sprintf(".zester-archive-%x.hash", sum[:8]))
+}
+
 func (a *ArchiveExtracted) Check(ctx context.Context) (state.CheckResult, error) {
-	// Preferred idempotency: if_missing path.
+	// Existence gate: if_missing (preferred, Salt parity) or the weak
+	// target-dir fallback. Only fs.ErrNotExist counts as absent; any other
+	// stat error fails the check rather than triggering a re-extraction.
 	if a.IfMissing != "" {
-		if _, err := a.file.Stat(ctx, a.IfMissing); err == nil {
+		if _, err := a.file.Stat(ctx, a.IfMissing); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				return state.CheckResult{}, fmt.Errorf("archive.extracted: stat %s: %w", a.IfMissing, err)
+			}
 			return state.CheckResult{
-				NeedsChange: false,
-				Diff:        fmt.Sprintf("if_missing path %s exists; already extracted", a.IfMissing),
+				NeedsChange: true,
+				Diff:        fmt.Sprintf("if_missing path %s does not exist", a.IfMissing),
 			}, nil
 		}
-		return state.CheckResult{
-			NeedsChange: true,
-			Diff:        fmt.Sprintf("if_missing path %s does not exist", a.IfMissing),
-		}, nil
+	} else {
+		if _, err := a.file.Stat(ctx, a.Dir); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				return state.CheckResult{}, fmt.Errorf("archive.extracted: stat %s: %w", a.Dir, err)
+			}
+			return state.CheckResult{
+				NeedsChange: true,
+				Diff:        fmt.Sprintf("target %s does not exist", a.Dir),
+			}, nil
+		}
 	}
 
-	// Weak fallback: consider extraction done when the target dir exists.
-	if _, err := a.file.Stat(ctx, a.Dir); err == nil {
+	// Declared source_hash: the recorded marker must match the declaration,
+	// so bumping source/source_hash re-extracts instead of no-oping forever.
+	if a.SourceHash != "" {
+		recorded, existed, err := readManagedFile(ctx, a.file, a.markerPath())
+		if err != nil {
+			return state.CheckResult{}, fmt.Errorf("archive.extracted: read marker %s: %w", a.markerPath(), err)
+		}
+		if !existed {
+			return state.CheckResult{
+				NeedsChange: true,
+				Diff:        fmt.Sprintf("source_hash declared but no extraction marker at %s", a.markerPath()),
+			}, nil
+		}
+		if strings.TrimSpace(recorded) != a.SourceHash {
+			return state.CheckResult{
+				NeedsChange: true,
+				Diff:        fmt.Sprintf("source_hash changed (recorded %q, declared %q)", strings.TrimSpace(recorded), a.SourceHash),
+			}, nil
+		}
+	}
+
+	if a.IfMissing != "" {
 		return state.CheckResult{
 			NeedsChange: false,
-			Diff:        fmt.Sprintf("target %s exists (no if_missing set)", a.Dir),
+			Diff:        fmt.Sprintf("if_missing path %s exists; already extracted", a.IfMissing),
 		}, nil
 	}
 	return state.CheckResult{
-		NeedsChange: true,
-		Diff:        fmt.Sprintf("target %s does not exist", a.Dir),
+		NeedsChange: false,
+		Diff:        fmt.Sprintf("target %s exists (no if_missing set)", a.Dir),
 	}, nil
 }
 
 func (a *ArchiveExtracted) Apply(ctx context.Context) (state.ApplyResult, error) {
 	if a.MakeDirs {
 		if _, err := a.file.Stat(ctx, a.Dir); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				return state.ApplyResult{}, fmt.Errorf("archive.extracted: stat %s: %w", a.Dir, err)
+			}
 			if err := a.file.MkdirAll(ctx, a.Dir, 0755); err != nil {
 				return state.ApplyResult{}, fmt.Errorf("archive.extracted: mkdir %s: %w", a.Dir, err)
 			}
@@ -153,6 +221,14 @@ func (a *ArchiveExtracted) Apply(ctx context.Context) (state.ApplyResult, error)
 	}
 	if res != nil && res.ExitCode != 0 {
 		return state.ApplyResult{}, fmt.Errorf("archive.extracted: extract %s: exit %d: %s", a.Source, res.ExitCode, res.Stderr)
+	}
+
+	// Record the declared source_hash only AFTER a successful extraction, so
+	// a failed download/extract never latches the state as done.
+	if a.SourceHash != "" {
+		if err := a.file.WriteFile(ctx, a.markerPath(), []byte(a.SourceHash+"\n"), 0644); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("archive.extracted: write marker %s: %w", a.markerPath(), err)
+		}
 	}
 
 	return state.ApplyResult{

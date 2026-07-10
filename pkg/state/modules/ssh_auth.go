@@ -36,6 +36,8 @@ type SSHAuthPresent struct {
 
 	file exec.FileExec
 
+	// Revert memos, valid only for a same-instance Apply→Revert sequence;
+	// unset memos make Revert an explicit clean no-op (see revertHostsFile).
 	backup    []byte
 	backupSet bool
 	created   bool
@@ -113,7 +115,10 @@ func (s *SSHAuthPresent) Check(ctx context.Context) (state.CheckResult, error) {
 	if err != nil {
 		return state.CheckResult{}, err
 	}
-	current := readFileString(ctx, s.file, path)
+	current, _, err := readManagedFile(ctx, s.file, path)
+	if err != nil {
+		return state.CheckResult{}, fmt.Errorf("ssh_auth.present: read %s: %w", path, err)
+	}
 	desired := renderSSHAuthPresent(current, s.keyBlob(), s.desiredLine())
 	if desired == current {
 		return state.CheckResult{NeedsChange: false}, nil
@@ -136,7 +141,10 @@ func (s *SSHAuthPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 		return state.ApplyResult{}, fmt.Errorf("ssh_auth.present: mkdir %s: %w", dir, err)
 	}
 
-	current, existed := readFileStringExists(ctx, s.file, path)
+	current, existed, err := readManagedFile(ctx, s.file, path)
+	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("ssh_auth.present: read %s: %w", path, err)
+	}
 	s.backup = []byte(current)
 	s.backupSet = existed
 	s.created = !existed
@@ -165,7 +173,7 @@ func (s *SSHAuthPresent) Revert(ctx context.Context) (state.ApplyResult, error) 
 	if err != nil {
 		return state.ApplyResult{}, err
 	}
-	return revertHostsFile(ctx, s.file, path, s.backup, s.backupSet, s.created, "ssh_auth.present")
+	return revertHostsFile(ctx, s.file, path, s.backup, s.backupSet, s.created, 0600, "ssh_auth.present")
 }
 
 func (s *SSHAuthPresent) authKeysPath() (string, error) {
@@ -184,6 +192,8 @@ type SSHAuthAbsent struct {
 
 	file exec.FileExec
 
+	// Revert memos, valid only for a same-instance Apply→Revert sequence;
+	// unset memos make Revert an explicit clean no-op (see revertHostsFile).
 	backup    []byte
 	backupSet bool
 }
@@ -239,7 +249,10 @@ func (s *SSHAuthAbsent) Check(ctx context.Context) (state.CheckResult, error) {
 	if err != nil {
 		return state.CheckResult{}, err
 	}
-	current, existed := readFileStringExists(ctx, s.file, path)
+	current, existed, err := readManagedFile(ctx, s.file, path)
+	if err != nil {
+		return state.CheckResult{}, fmt.Errorf("ssh_auth.absent: read %s: %w", path, err)
+	}
 	if !existed {
 		return state.CheckResult{NeedsChange: false}, nil
 	}
@@ -258,7 +271,10 @@ func (s *SSHAuthAbsent) Apply(ctx context.Context) (state.ApplyResult, error) {
 	if err != nil {
 		return state.ApplyResult{}, err
 	}
-	current, existed := readFileStringExists(ctx, s.file, path)
+	current, existed, err := readManagedFile(ctx, s.file, path)
+	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("ssh_auth.absent: read %s: %w", path, err)
+	}
 	if !existed {
 		return state.ApplyResult{Changed: false}, nil
 	}
@@ -289,7 +305,7 @@ func (s *SSHAuthAbsent) Revert(ctx context.Context) (state.ApplyResult, error) {
 	if err != nil {
 		return state.ApplyResult{}, err
 	}
-	return revertHostsFile(ctx, s.file, path, s.backup, s.backupSet, false, "ssh_auth.absent")
+	return revertHostsFile(ctx, s.file, path, s.backup, s.backupSet, false, 0600, "ssh_auth.absent")
 }
 
 func (s *SSHAuthAbsent) authKeysPath() (string, error) {
@@ -373,19 +389,4 @@ func lineHasKey(line, keyBlob string) bool {
 		}
 	}
 	return false
-}
-
-// readFileString returns the file's contents as a string, or "" if unreadable.
-func readFileString(ctx context.Context, file exec.FileExec, path string) string {
-	s, _ := readFileStringExists(ctx, file, path)
-	return s
-}
-
-// readFileStringExists returns the file contents and whether the file existed.
-func readFileStringExists(ctx context.Context, file exec.FileExec, path string) (string, bool) {
-	data, err := file.ReadFile(ctx, path)
-	if err != nil {
-		return "", false
-	}
-	return string(data), true
 }

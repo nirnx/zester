@@ -6,59 +6,59 @@ All notable changes to Zester are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`archive.extracted` gains `source_hash`.** When declared, the value is
+  recorded in a marker file inside the target dir after a successful
+  extraction and compared by Check — bumping `source`/`source_hash` (a
+  version upgrade) now re-extracts instead of no-oping forever on a
+  pre-existing dir/`if_missing` path. The value is an opaque declaration
+  (e.g. `sha256=<hex>`) compared as a string, NOT verified against the
+  archive bytes; the marker is only written after a successful extraction,
+  so a failed download/extract no longer latches a `makedirs`-created dir
+  as "done". Without `source_hash` the existing (weak) marker semantics are
+  unchanged and now documented in the module.
+
 ### Fixed
-- **State-module audit fixes (service, user, group, cron, mount, sysctl)** —
-  convergence gaps where Check reported compliance for drift Apply would have
-  fixed, plus Apply/Revert contract violations:
-  - `service.running`/`service.dead`: a DECLARED `enable:` facet is now
-    compared in Check (running-but-disabled with `enable: true` — the RHEL
-    post-install case — and stopped-but-still-enabled with `enable: false`
-    were reported compliant forever; the latter resurrected at every reboot).
-    `service.running` with `enable: false` now also disables (previously
-    unenforced). An Apply reached only for enable-facet drift enables/disables
-    WITHOUT restarting the running service; `service.dead` Apply is now a
-    self-contained full flow (clean no-op on an already-converged service
-    instead of a lying `changed: true`).
-  - `user.present`: a declared `password:` hash is now compared against the
-    shadow hash (via the new `UserExec.PasswordHash`) in BOTH Check and Apply
-    — password drift converges, and an in-sync password no longer forces
-    `changed: true` on every modify. A name-based primary group
-    (`gid: '<name>'` / `primary_group:`) is now compared (group-name → GID
-    resolution) and enforced on existing users via `usermod -g <name>`
-    (`UserModifyOpts.PrimaryGroup`); previously it was silently unenforced
-    outside user creation. Declaring it now requires a group provider.
-  - `user.absent`/`group.absent`: Apply re-checks existence first — a
-    watch-forced Apply on an already-absent user/group is a clean no-op
-    instead of a `userdel`/`groupdel` exit-6 failure.
-  - `cron.present`: entries are now KEYED ON THE LABEL (identifier comment,
-    Salt `SALT_CRON_IDENTIFIER` semantics) instead of the exact command
-    string — editing a state's command replaces the old crontab line instead
-    of orphaning it to run forever. Comment-less pre-existing lines with the
-    same command are adopted (and stamped with the label on the next apply);
-    same-command entries under different labels coexist.
-  - `mount.mounted`: Check now compares the LIVE mount (device and fstype
-    exactly, declared options as a subset of the active option set — no
-    churn on kernel-added defaults) by reading the kernel mount table, and
-    Apply remounts on live mismatch — a wrong device/options serving the
-    mountpoint previously reported compliant forever and could never
-    converge. The fstab comparison now includes `dump`/`pass`. Apply is a
-    clean no-op when converged and its diff no longer claims a mount that
-    did not happen.
-  - `sysctl.present` with `persist: true` (the default): Check now verifies
-    the drop-in file entry too — a runtime-only match (manual `sysctl -w`)
-    was reported compliant and silently died at the next reboot. Apply
-    persists even when the runtime value already matches, and no-ops cleanly
-    when fully converged.
-  - Revert contract: `service.running`, `user.present`, `group.present`,
-    `mount.mounted`, and `sysctl.present` Reverts on a never-applied instance
-    are now explicit clean no-ops (`nothing to revert (no apply recorded in
-    this run)`) — `sysctl.present` previously wrote the EMPTY STRING into the
-    kernel parameter and the persist file, and `mount.mounted` reported a
-    diff claiming an unmount/fstab removal it never performed.
-    `group.present` Revert now really restores original membership (it
-    claimed to but only restored the GID) and reports `changed` honestly;
-    `service.running` Revert now reports `changed: true` when it reverted an
-    enable.
+- **`host.present`/`host.absent`/`ssh_auth.present`/`ssh_auth.absent` no
+  longer treat a failed read as "file absent".** Only `fs.ErrNotExist`
+  counts as absent; any other read error (EIO, ESTALE, EACCES) now FAILS
+  the phase. Previously a transient read failure followed by a successful
+  write would truncate `/etc/hosts` (or a user's `authorized_keys`) down to
+  just the managed line — silently erasing every other mapping/key.
+- **Revert of `host.*`/`ssh_auth.*` on a fresh instance is now a clean
+  no-op** (`Changed: false`, "nothing to revert (no apply recorded in this
+  run)"). The shared revert helper used to DELETE the entire file when the
+  Apply-written backup memos were unset — and a runner `ModeRevert` run
+  always builds fresh instances, so any future revert wiring would have
+  wiped `/etc/hosts` / `authorized_keys` wholesale. Same-instance
+  Apply→Revert still restores the backup (now with the module's canonical
+  permissions — `authorized_keys` is restored 0600, not 0644).
+  `git.cloned`/`git.latest` fresh-instance reverts keep their safe no-op and
+  now report the explicit nothing-to-revert diff.
+- **`cmd.run`'s `creates` guard now also gates Apply** (Salt parity via
+  `mod_run_check`): a watch-forced apply bypasses Check entirely and used to
+  re-run creates-guarded one-shots (e.g. `initdb` re-running because a
+  watched config file changed). An unverifiable guard (stat error other
+  than not-exist) fails the phase instead of falling through to
+  re-execution, and declaring `creates` without a file provider is now a
+  build error.
+- **`git.cloned`/`git.latest` with a symbolic `rev:` (tag) now converge
+  instead of re-applying every run.** Check compared the desired rev
+  against the HEAD sha with a string-prefix match, which can never match a
+  tag name — every run reported `Changed: true`, ran a needless `git fetch`,
+  and cascaded through `watch` requisites (e.g. service restarts every
+  highstate). Symbolic revs are now resolved locally via
+  `git rev-parse --verify <rev>^{commit}` (annotated tags peeled, no
+  network) and compared by commit id; sha-prefix revs keep the direct
+  match. `git.cloned` `branch: <tag>` (documented) converges the same way
+  when `refs/heads/<tag>` does not exist.
+- **`locale.present` Check now verifies the `/etc/locale.gen` enabling line
+  that Apply writes**, not just `locale -a` membership. A locale generated
+  out-of-band (image bakery) or whose line was later commented out reported
+  compliant forever, and the next external `locale-gen` run (e.g. a
+  `locales` package upgrade) silently dropped it. Also, an unreadable
+  `locale.gen` (non-not-exist error) now fails the phase instead of being
+  rewritten from scratch.
 - **`pkg.latest` now refreshes the package cache BEFORE checking
   upgradability** (Salt parity). Refresh (default on) previously ran only in
   Apply, but Check consulted the stale on-disk index and short-circuited

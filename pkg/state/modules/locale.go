@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -12,7 +14,10 @@ import (
 const localeGenPath = "/etc/locale.gen"
 
 // LocalePresent implements the locale.present state.
-// It ensures a locale is enabled in /etc/locale.gen and generated via locale-gen.
+// It ensures a locale is enabled in /etc/locale.gen and generated via
+// locale-gen. Check verifies BOTH halves — `locale -a` membership and the
+// uncommented /etc/locale.gen line (when a file provider is available) — so
+// a locale generated out-of-band still converges the file half.
 type LocalePresent struct {
 	id   string
 	reqs state.Requisites
@@ -59,17 +64,58 @@ func (l *LocalePresent) Check(ctx context.Context) (state.CheckResult, error) {
 		return state.CheckResult{}, fmt.Errorf("locale.present: list locales: %w", err)
 	}
 
-	if localeInOutput(result.Stdout, l.Locale) {
+	if !localeInOutput(result.Stdout, l.Locale) {
 		return state.CheckResult{
-			NeedsChange: false,
-			Diff:        fmt.Sprintf("locale %s is already generated", l.Locale),
+			NeedsChange: true,
+			Diff:        fmt.Sprintf("locale %s is not generated", l.Locale),
 		}, nil
 	}
 
+	// Generated — also verify the enabling line in /etc/locale.gen, the other
+	// half of what Apply enforces. A locale generated out-of-band (localedef,
+	// image bakery) or whose line was later commented out would otherwise
+	// report compliant forever, and the next external locale-gen run (e.g. a
+	// locales package upgrade) would silently drop it.
+	if l.file != nil {
+		enabled, err := l.localeGenEnabled(ctx)
+		if err != nil {
+			return state.CheckResult{}, err
+		}
+		if !enabled {
+			return state.CheckResult{
+				NeedsChange: true,
+				Diff:        fmt.Sprintf("locale %s is generated but not enabled in %s", l.Locale, localeGenPath),
+			}, nil
+		}
+	}
+
 	return state.CheckResult{
-		NeedsChange: true,
-		Diff:        fmt.Sprintf("locale %s is not generated", l.Locale),
+		NeedsChange: false,
+		Diff:        fmt.Sprintf("locale %s is already generated", l.Locale),
 	}, nil
+}
+
+// localeGenEnabled reports whether /etc/locale.gen contains an uncommented
+// line enabling the locale (the line Apply writes). A missing file counts as
+// not enabled — Apply creates it; any other read error fails the check.
+func (l *LocalePresent) localeGenEnabled(ctx context.Context) (bool, error) {
+	data, err := l.file.ReadFile(ctx, localeGenPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("locale.present: read %s: %w", localeGenPath, err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, l.Locale) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (l *LocalePresent) Apply(ctx context.Context) (state.ApplyResult, error) {
@@ -118,7 +164,12 @@ func (l *LocalePresent) Revert(ctx context.Context) (state.ApplyResult, error) {
 func (l *LocalePresent) enableLocaleInFile(ctx context.Context, comment bool) error {
 	data, err := l.file.ReadFile(ctx, localeGenPath)
 	if err != nil {
-		// File doesn't exist — create it with the locale line.
+		// Only a genuinely absent file may be (re)created; any other read
+		// error must fail the phase — overwriting an unreadable locale.gen
+		// would silently drop every other enabled locale.
+		if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("locale.present: read %s: %w", localeGenPath, err)
+		}
 		if !comment {
 			return l.file.WriteFile(ctx, localeGenPath, []byte(l.Locale+" UTF-8\n"), 0644)
 		}
