@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 
@@ -39,6 +40,11 @@ type FileCopy struct {
 
 	backup    []byte
 	backupSet bool
+
+	// wasCreated records that Apply created the destination (it did not
+	// pre-exist), so a same-instance Revert removes it. With neither memo
+	// set, Revert is a clean no-op.
+	wasCreated bool
 }
 
 // NewFileCopyBuilder returns a state.Builder that creates FileCopy states.
@@ -80,6 +86,11 @@ func (f *FileCopy) Check(ctx context.Context) (state.CheckResult, error) {
 
 	dst, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
+		// Only a genuine not-exist means "destination absent"; any other
+		// read error fails the check rather than risking a blind overwrite.
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("file.copy: read %s: %w", f.Path, err)
+		}
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("destination %s does not exist", f.Path),
@@ -129,12 +140,23 @@ func (f *FileCopy) Apply(ctx context.Context) (state.ApplyResult, error) {
 		return state.ApplyResult{}, fmt.Errorf("file.copy: read source %s: %w", f.Source, err)
 	}
 
-	if existing, err := f.file.ReadFile(ctx, f.Path); err == nil {
+	// Probe prior state for revert. Only a genuine not-exist means "will
+	// create"; any other read error fails the apply rather than overwriting
+	// a destination whose current content could not be captured.
+	preExisted := false
+	var priorContent []byte
+	existing, err := f.file.ReadFile(ctx, f.Path)
+	switch {
+	case err == nil:
 		if !f.Force {
 			return state.ApplyResult{Changed: false}, nil
 		}
-		f.backup = existing
-		f.backupSet = true
+		preExisted = true
+		priorContent = existing
+	case errors.Is(err, fs.ErrNotExist):
+		// Will create.
+	default:
+		return state.ApplyResult{}, fmt.Errorf("file.copy: read %s: %w", f.Path, err)
 	}
 
 	if f.MakeDirs {
@@ -152,6 +174,14 @@ func (f *FileCopy) Apply(ctx context.Context) (state.ApplyResult, error) {
 
 	if err := f.file.WriteFile(ctx, f.Path, src, mode); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("file.copy: write %s: %w", f.Path, err)
+	}
+
+	// Record revert memos only after the write actually changed the system.
+	if preExisted {
+		f.backup = priorContent
+		f.backupSet = true
+	} else {
+		f.wasCreated = true
 	}
 
 	if f.Preserve {
@@ -172,5 +202,31 @@ func (f *FileCopy) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (f *FileCopy) Revert(ctx context.Context) (state.ApplyResult, error) {
-	return fsxRevert(ctx, f.file, f.Path, f.backup, f.backupSet, "file.copy")
+	switch {
+	case f.backupSet:
+		if err := f.file.WriteFile(ctx, f.Path, f.backup, fsModeDefault); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("file.copy: revert %s: %w", f.Path, err)
+		}
+		return state.ApplyResult{
+			Changed: true,
+			Diff:    fmt.Sprintf("reverted %s to previous content", f.Path),
+		}, nil
+
+	case f.wasCreated:
+		if err := f.file.Remove(ctx, f.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return state.ApplyResult{}, fmt.Errorf("file.copy: revert remove %s: %w", f.Path, err)
+		}
+		return state.ApplyResult{
+			Changed: true,
+			Diff:    fmt.Sprintf("removed %s (revert create)", f.Path),
+		}, nil
+
+	default:
+		// No apply recorded on this instance: never destroy a destination
+		// we did not write.
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    "nothing to revert (no apply recorded in this run)",
+		}, nil
+	}
 }

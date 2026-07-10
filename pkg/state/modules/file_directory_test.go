@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -320,3 +321,61 @@ func TestFileDirectoryCheckIsFile(t *testing.T) {
 
 // Verify the State interface is fully satisfied at compile time.
 var _ state.State = (*FileDirectory)(nil)
+
+func TestFileDirectoryCheckOwnershipDrift(t *testing.T) {
+	userName, uid, groupName, gid := testCurrentUserGroup(t)
+
+	ctx := context.Background()
+	fake := exectest.NewFakeFileExec()
+	if err := fake.MkdirAll(ctx, "/opt/data", 0755); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetOwner("/opt/data", uid+1, gid+1)
+
+	s, err := newFileDirectory("/opt/data", map[string]any{
+		"mode": "0755", "user": userName, "group": groupName,
+	}, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !cr.NeedsChange {
+		t.Fatal("expected NeedsChange when directory ownership drifts and mode matches")
+	}
+
+	fake.SetOwner("/opt/data", uid, gid)
+	cr, err = s.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check converged: %v", err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when ownership matches, diff: %s", cr.Diff)
+	}
+}
+
+func TestFileDirectoryCheckOwnershipUndeclared(t *testing.T) {
+	ctx := context.Background()
+	fake := exectest.NewFakeFileExec()
+	if err := fake.MkdirAll(ctx, "/opt/data", 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Arbitrary ownership: without user:/group: declared the facet never fires.
+	fake.SetOwner("/opt/data", 12345, 54321)
+
+	s, err := newFileDirectory("/opt/data", map[string]any{"mode": "0755"}, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("undeclared ownership must not cause churn, diff: %s", cr.Diff)
+	}
+}

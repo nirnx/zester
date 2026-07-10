@@ -7,6 +7,42 @@ All notable changes to Zester are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **File states now detect ownership drift.** `file.managed`,
+  `file.directory`, and `file.recurse` (files) compare the on-disk owner
+  against declared `user:`/`group:` in Check — previously ownership was only
+  ever set in Apply, so a converged file that got chowned away (backup
+  restore, package reinstall, or `user:`/`group:` added to an
+  already-converged state) was never re-converged and `--test` reported
+  clean. The facet fires only when `user:`/`group:` is declared; undeclared
+  ownership never causes churn.
+- **`file.recurse` Check now sees what Apply enforces.** With `clean: true`,
+  extra files in the destination (what `cleanDestination` would remove) now
+  count as drift — previously the clean feature's primary use case was a
+  silent permanent no-op once the managed set converged, since only Apply
+  ever looked at extras. Extra *directories* are ignored, matching Apply,
+  which never removes them. Check also verifies `dir_mode` on every managed
+  directory (default `0755`), including the destination root — exactly what
+  Apply chmods — so world-writable drift on managed dirs is converged
+  instead of ignored.
+- **`file.recurse` no longer bypasses the injected file provider.** Check,
+  Apply, and clean-up walked the REAL filesystem with `filepath.WalkDir`
+  while all reads/writes went through `exec.FileExec`; all walks now go
+  through the new `FileExec.Walk`, so the module is fully testable against
+  fakes and correct under any non-OS provider.
+- **Revert contract: a fresh instance never destroys state.**
+  `file.managed` and `file.copy` Revert with no Apply recorded on the
+  instance previously DELETED the target ("no prior state"); `file.copy`
+  additionally hard-errored when the destination was already absent. Revert
+  without an in-instance memo is now an explicit clean no-op
+  (`nothing to revert (no apply recorded in this run)`); a same-instance
+  revert of an Apply-created file still removes it (now tolerating an
+  already-missing file), and a captured backup still restores.
+- **File-absent vs read-error no longer conflated.** `file.managed`,
+  `file.copy`, and `file.recurse` treat only `fs.ErrNotExist` as "file
+  absent"; any other read/stat error (e.g. permissions) now fails the phase
+  instead of being misread as "missing" — which could overwrite a file whose
+  current content was never captured (Check reported "does not exist",
+  Apply skipped the backup and clobbered it).
 - **`pkg.latest` now refreshes the package cache BEFORE checking
   upgradability** (Salt parity). Refresh (default on) previously ran only in
   Apply, but Check consulted the stale on-disk index and short-circuited

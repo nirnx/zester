@@ -59,6 +59,11 @@ type FileManaged struct {
 	// backup stores original content for revert.
 	backup    []byte
 	backupSet bool
+
+	// wasCreated records that Apply created the file (it did not pre-exist),
+	// so a same-instance Revert removes it. With neither memo set, Revert is
+	// a clean no-op.
+	wasCreated bool
 }
 
 // NewFileManagedBuilder returns a state.Builder that creates FileManaged
@@ -172,7 +177,12 @@ func (f *FileManaged) Check(ctx context.Context) (state.CheckResult, error) {
 
 	current, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
-		// Treat any read error on the target as "file doesn't exist".
+		// Only a genuine not-exist means "file absent"; any other read error
+		// (permissions, I/O) fails the check rather than risking a blind
+		// overwrite in Apply.
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("file.managed: read %s: %w", f.Path, err)
+		}
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("file %s does not exist", f.Path),
@@ -201,14 +211,32 @@ func (f *FileManaged) Check(ctx context.Context) (state.CheckResult, error) {
 		}, nil
 	}
 
+	diff, drift, err := checkOwnershipDrift(ctx, f.file, "file.managed", f.Path, f.User, f.Group)
+	if err != nil {
+		return state.CheckResult{}, err
+	}
+	if drift {
+		return state.CheckResult{NeedsChange: true, Diff: diff}, nil
+	}
+
 	return state.CheckResult{NeedsChange: false}, nil
 }
 
 func (f *FileManaged) Apply(ctx context.Context) (state.ApplyResult, error) {
-	// Save backup for revert.
-	if existing, err := f.file.ReadFile(ctx, f.Path); err == nil {
-		f.backup = existing
-		f.backupSet = true
+	// Probe prior state for revert. Only a genuine not-exist means "will
+	// create"; any other read error fails the apply rather than overwriting
+	// a file whose current content could not be captured.
+	preExisted := false
+	var priorContent []byte
+	existing, err := f.file.ReadFile(ctx, f.Path)
+	switch {
+	case err == nil:
+		preExisted = true
+		priorContent = existing
+	case errors.Is(err, fs.ErrNotExist):
+		// Will create.
+	default:
+		return state.ApplyResult{}, fmt.Errorf("file.managed: read %s: %w", f.Path, err)
 	}
 
 	desired, err := f.desiredContent(ctx)
@@ -234,6 +262,14 @@ func (f *FileManaged) Apply(ctx context.Context) (state.ApplyResult, error) {
 		return state.ApplyResult{}, fmt.Errorf("file.managed: write %s: %w", f.Path, err)
 	}
 
+	// Record revert memos only after the write actually changed the system.
+	if preExisted {
+		f.backup = priorContent
+		f.backupSet = true
+	} else {
+		f.wasCreated = true
+	}
+
 	if err := f.setOwnership(ctx); err != nil {
 		return state.ApplyResult{}, err
 	}
@@ -250,25 +286,34 @@ func (f *FileManaged) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (f *FileManaged) Revert(ctx context.Context) (state.ApplyResult, error) {
-	if !f.backupSet {
+	switch {
+	case f.backupSet:
+		mode, _ := f.desiredMode()
+		if err := f.file.WriteFile(ctx, f.Path, f.backup, mode); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("file.managed: revert %s: %w", f.Path, err)
+		}
+		return state.ApplyResult{
+			Changed: true,
+			Diff:    fmt.Sprintf("reverted %s to previous content", f.Path),
+		}, nil
+
+	case f.wasCreated:
 		if err := f.file.Remove(ctx, f.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return state.ApplyResult{}, fmt.Errorf("file.managed: remove %s: %w", f.Path, err)
 		}
 		return state.ApplyResult{
 			Changed: true,
-			Diff:    fmt.Sprintf("removed %s (no prior state)", f.Path),
+			Diff:    fmt.Sprintf("removed %s (revert create)", f.Path),
+		}, nil
+
+	default:
+		// No apply recorded on this instance: never destroy a file we did
+		// not touch.
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    "nothing to revert (no apply recorded in this run)",
 		}, nil
 	}
-
-	mode, _ := f.desiredMode()
-	if err := f.file.WriteFile(ctx, f.Path, f.backup, mode); err != nil {
-		return state.ApplyResult{}, fmt.Errorf("file.managed: revert %s: %w", f.Path, err)
-	}
-
-	return state.ApplyResult{
-		Changed: true,
-		Diff:    fmt.Sprintf("reverted %s to previous content", f.Path),
-	}, nil
 }
 
 func (f *FileManaged) setOwnership(ctx context.Context) error {
@@ -276,29 +321,68 @@ func (f *FileManaged) setOwnership(ctx context.Context) error {
 		return nil
 	}
 
-	uid := -1
-	gid := -1
-
-	if f.User != "" {
-		u, err := user.Lookup(f.User)
-		if err != nil {
-			return fmt.Errorf("file.managed: lookup user %q: %w", f.User, err)
-		}
-		uid, _ = strconv.Atoi(u.Uid)
-	}
-
-	if f.Group != "" {
-		g, err := user.LookupGroup(f.Group)
-		if err != nil {
-			return fmt.Errorf("file.managed: lookup group %q: %w", f.Group, err)
-		}
-		gid, _ = strconv.Atoi(g.Gid)
+	uid, gid, err := resolveOwnerIDs("file.managed", f.User, f.Group)
+	if err != nil {
+		return err
 	}
 
 	if err := f.file.Chown(ctx, f.Path, uid, gid); err != nil {
 		return fmt.Errorf("file.managed: chown %s: %w", f.Path, err)
 	}
 	return nil
+}
+
+// resolveOwnerIDs resolves declared user/group names to numeric ids, the same
+// way the Apply-side ownership setters do. An undeclared (empty) name maps to
+// -1 ("don't care", matching os.Chown semantics).
+func resolveOwnerIDs(module, userName, groupName string) (uid, gid int, err error) {
+	uid, gid = -1, -1
+
+	if userName != "" {
+		u, err := user.Lookup(userName)
+		if err != nil {
+			return -1, -1, fmt.Errorf("%s: lookup user %q: %w", module, userName, err)
+		}
+		uid, _ = strconv.Atoi(u.Uid)
+	}
+
+	if groupName != "" {
+		g, err := user.LookupGroup(groupName)
+		if err != nil {
+			return -1, -1, fmt.Errorf("%s: lookup group %q: %w", module, groupName, err)
+		}
+		gid, _ = strconv.Atoi(g.Gid)
+	}
+
+	return uid, gid, nil
+}
+
+// checkOwnershipDrift compares path's current ownership against the declared
+// user/group names. The facet fires only for declared config: with neither
+// user nor group declared it never reports drift, and with only one declared
+// only that half is compared.
+func checkOwnershipDrift(ctx context.Context, file exec.FileExec, module, path, userName, groupName string) (diff string, drift bool, err error) {
+	if userName == "" && groupName == "" {
+		return "", false, nil
+	}
+
+	wantUID, wantGID, err := resolveOwnerIDs(module, userName, groupName)
+	if err != nil {
+		return "", false, err
+	}
+
+	uid, gid, err := file.Owner(ctx, path)
+	if err != nil {
+		return "", false, fmt.Errorf("%s: owner %s: %w", module, path, err)
+	}
+
+	if wantUID != -1 && uid != wantUID {
+		return fmt.Sprintf("owner uid %d != %d (%s) for %s", uid, wantUID, userName, path), true, nil
+	}
+	if wantGID != -1 && gid != wantGID {
+		return fmt.Sprintf("group gid %d != %d (%s) for %s", gid, wantGID, groupName, path), true, nil
+	}
+	return "", false, nil
 }
 
 // modeConfigToString converts a YAML-parsed mode value to a string.

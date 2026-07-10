@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"os/user"
 	"strconv"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -101,6 +100,14 @@ func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
 		}, nil
 	}
 
+	diff, drift, err := checkOwnershipDrift(ctx, d.file, "file.directory", d.Path, d.User, d.Group)
+	if err != nil {
+		return state.CheckResult{}, err
+	}
+	if drift {
+		return state.CheckResult{NeedsChange: true, Diff: diff}, nil
+	}
+
 	return state.CheckResult{NeedsChange: false}, nil
 }
 
@@ -157,23 +164,9 @@ func (d *FileDirectory) setOwnership(ctx context.Context) error {
 		return nil
 	}
 
-	uid := -1
-	gid := -1
-
-	if d.User != "" {
-		u, err := user.Lookup(d.User)
-		if err != nil {
-			return fmt.Errorf("file.directory: lookup user %q: %w", d.User, err)
-		}
-		uid, _ = strconv.Atoi(u.Uid)
-	}
-
-	if d.Group != "" {
-		g, err := user.LookupGroup(d.Group)
-		if err != nil {
-			return fmt.Errorf("file.directory: lookup group %q: %w", d.Group, err)
-		}
-		gid, _ = strconv.Atoi(g.Gid)
+	uid, gid, err := resolveOwnerIDs("file.directory", d.User, d.Group)
+	if err != nil {
+		return err
 	}
 
 	if err := d.file.Chown(ctx, d.Path, uid, gid); err != nil {
