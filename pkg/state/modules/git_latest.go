@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -88,7 +90,12 @@ func (g *GitLatest) Name() string           { return "git.latest:" + g.id }
 func (g *GitLatest) Reqs() state.Requisites { return g.reqs }
 
 func (g *GitLatest) Check(ctx context.Context) (state.CheckResult, error) {
+	// Only fs.ErrNotExist means absent; any other stat error fails the
+	// phase — see GitCloned.Check.
 	if _, err := g.file.Stat(ctx, g.Target); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("git.latest: stat %s: %w", g.Target, err)
+		}
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("target %s does not exist", g.Target),
@@ -155,8 +162,13 @@ func (g *GitLatest) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (g *GitLatest) Apply(ctx context.Context) (state.ApplyResult, error) {
+	// Same absence discrimination as Check: a non-not-exist stat error must
+	// fail the phase, not select the clone branch — see GitCloned.Apply.
 	_, statErr := g.file.Stat(ctx, g.Target)
 	if statErr != nil {
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			return state.ApplyResult{}, fmt.Errorf("git.latest: stat %s: %w", g.Target, statErr)
+		}
 		return g.clone(ctx)
 	}
 	return g.update(ctx)

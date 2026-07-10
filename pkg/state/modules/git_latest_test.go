@@ -103,6 +103,44 @@ func TestGitLatestMissingProvider(t *testing.T) {
 	}
 }
 
+func TestGitLatestStatErrorFailsPhases(t *testing.T) {
+	// Same discrimination as git.cloned: a non-not-exist stat error on an
+	// existing target must fail both phases instead of selecting the clone
+	// branch (which would run `git clone` over the existing checkout).
+	fakeCmd := exectest.NewFakeCommandExec()
+	file := &statErrFileExec{
+		FakeFileExec: exectest.NewFakeFileExec(),
+		path:         "/opt/repo",
+		err:          errors.New("permission denied"),
+	}
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: file}}
+	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+		"target": "/opt/repo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Check(context.Background()); err == nil {
+		t.Error("expected Check to fail on a non-not-exist stat error")
+	}
+	if _, err := s.Apply(context.Background()); err == nil {
+		t.Error("expected Apply to fail on a non-not-exist stat error")
+	}
+	if n := fakeCmd.CallCount(); n != 0 {
+		t.Errorf("no git command may run when the stat failed, got %d calls: %v", n, fakeCmd.Calls())
+	}
+
+	// No memo armed — Revert on the same instance stays a clean no-op.
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("Revert must be a no-op after a failed Apply")
+	}
+}
+
 func TestGitLatestCheckNeedsChangeWhenMissing(t *testing.T) {
 	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
 	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{

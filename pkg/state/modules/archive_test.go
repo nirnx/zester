@@ -377,6 +377,203 @@ func TestArchiveExtractedSourceHash(t *testing.T) {
 	})
 }
 
+func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
+	// A watch-forced apply bypasses Check and calls Apply directly on a
+	// FRESH instance. Apply must re-evaluate the extraction guard itself: a
+	// converged archive is a clean Changed:false no-op — never a
+	// re-download/re-extract over post-extraction local modifications.
+	ctx := context.Background()
+
+	t.Run("if_missing exists", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate("/opt/app/bin/app", []byte("binary"), 0755)
+
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+			"source":     "https://example.com/app.tar.gz",
+			"if_missing": "/opt/app/bin/app",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ar, err := s.Apply(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ar.Changed {
+			t.Error("expected Changed: false when if_missing path exists")
+		}
+		if !strings.Contains(ar.Diff, "nothing to do") {
+			t.Errorf("expected clean no-op diff, got %q", ar.Diff)
+		}
+		if n := fakeCmd.CallCount(); n != 0 {
+			t.Errorf("no download/extract may run for a converged archive, got %d calls: %v", n, fakeCmd.Calls())
+		}
+	})
+
+	t.Run("weak target-dir fallback", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate("/opt/app", []byte{}, 0755)
+
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+			"source": "/tmp/app.tar.gz",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ar, err := s.Apply(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ar.Changed {
+			t.Error("expected Changed: false when the target dir exists")
+		}
+		if fakeCmd.CallCount() != 0 {
+			t.Errorf("no extract may run, got %v", fakeCmd.Calls())
+		}
+	})
+
+	t.Run("matching source_hash marker", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		// Prior run: extracted and recorded the marker.
+		prior, err := NewArchiveExtractedBuilder(testArchiveMctx(exectest.NewFakeCommandExec(), fakeFile))("/opt/app", map[string]any{
+			"source":      "/tmp/app.tar.gz",
+			"source_hash": "sha256=aaa111",
+			"makedirs":    true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := prior.Apply(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		// Fresh instance, watch-forced: marker matches → no-op.
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+			"source":      "/tmp/app.tar.gz",
+			"source_hash": "sha256=aaa111",
+			"makedirs":    true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ar, err := s.Apply(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ar.Changed {
+			t.Error("expected Changed: false when the source_hash marker matches")
+		}
+		if fakeCmd.CallCount() != 0 {
+			t.Errorf("no extract may run, got %v", fakeCmd.Calls())
+		}
+	})
+
+	t.Run("changed source_hash still re-extracts", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate("/opt/app", []byte{}, 0755)
+		prior, err := NewArchiveExtractedBuilder(testArchiveMctx(exectest.NewFakeCommandExec(), fakeFile))("/opt/app", map[string]any{
+			"source":      "/tmp/app.tar.gz",
+			"source_hash": "sha256=aaa111",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := prior.Apply(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		// Version bump on a fresh watch-forced instance: guard unsatisfied.
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+			"source":      "/tmp/app.tar.gz",
+			"source_hash": "sha256=bbb222",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ar, err := s.Apply(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ar.Changed {
+			t.Error("expected re-extraction on a source_hash bump")
+		}
+		if fakeCmd.CallCount() == 0 {
+			t.Error("expected the extract command to run")
+		}
+	})
+
+	t.Run("guard stat error fails apply", func(t *testing.T) {
+		fakeCmd := exectest.NewFakeCommandExec()
+		file := &statErrFileExec{
+			FakeFileExec: exectest.NewFakeFileExec(),
+			path:         "/opt/app/bin/app",
+			err:          errors.New("input/output error"),
+		}
+		mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: file}}
+		s, err := NewArchiveExtractedBuilder(mctx)("/opt/app", map[string]any{
+			"source":     "/tmp/app.tar.gz",
+			"if_missing": "/opt/app/bin/app",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Apply(ctx); err == nil {
+			t.Error("expected Apply to fail on a non-not-exist guard stat error")
+		}
+		if fakeCmd.CallCount() != 0 {
+			t.Errorf("no extract may run on an unverifiable guard, got %v", fakeCmd.Calls())
+		}
+	})
+}
+
+func TestArchiveExtractedRetryAfterFailedApplyProceeds(t *testing.T) {
+	// retry: re-invokes Apply on the SAME instance after a failure. The
+	// Apply-side guard must not latch on the directory this instance's own
+	// makedirs created before the failed extraction.
+	ctx := context.Background()
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("tar", &exec.CommandResult{ExitCode: 2, Stderr: "corrupt archive"}, nil)
+	fakeFile := exectest.NewFakeFileExec()
+
+	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		"source":   "/tmp/app.tar.gz",
+		"makedirs": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(ctx); err == nil {
+		t.Fatal("expected first Apply to fail")
+	}
+
+	// The archive is fixed; the retried Apply must actually extract.
+	fakeCmd.SetResult("tar", &exec.CommandResult{ExitCode: 0}, nil)
+	before := fakeCmd.CallCount()
+	ar, err := s.Apply(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("retried Apply must extract, not no-op on its own makedirs directory")
+	}
+	if fakeCmd.CallCount() != before+1 {
+		t.Errorf("expected exactly one more extract call, got %v", fakeCmd.Calls())
+	}
+
+	// Converged after the successful retry — same-instance Check agrees.
+	cr, err := s.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected convergence after a successful retry, diff: %s", cr.Diff)
+	}
+}
+
 func TestArchiveExtractedExtractFailure(t *testing.T) {
 	ctx := context.Background()
 

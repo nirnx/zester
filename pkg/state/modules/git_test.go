@@ -409,6 +409,42 @@ func TestGitClonedCheckBranchStillMatchesLocalRef(t *testing.T) {
 	}
 }
 
+func TestGitClonedStatErrorFailsPhases(t *testing.T) {
+	// A transient non-not-exist stat error (ESTALE/EACCES/EIO) on an
+	// EXISTING checkout must fail both phases — never report a bogus
+	// pending clone in --test, and never run `git clone` over the checkout.
+	fakeCmd := exectest.NewFakeCommandExec()
+	file := &statErrFileExec{
+		FakeFileExec: exectest.NewFakeFileExec(),
+		path:         "/opt/repo",
+		err:          errors.New("stale NFS file handle"),
+	}
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: file}}
+	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Check(context.Background()); err == nil {
+		t.Error("expected Check to fail on a non-not-exist stat error")
+	}
+	if _, err := s.Apply(context.Background()); err == nil {
+		t.Error("expected Apply to fail on a non-not-exist stat error")
+	}
+	if n := fakeCmd.CallCount(); n != 0 {
+		t.Errorf("no git command may run when the stat failed, got %d calls: %v", n, fakeCmd.Calls())
+	}
+
+	// And Revert on the same instance stays a clean no-op (nothing applied).
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("Revert must be a no-op after a failed Apply")
+	}
+}
+
 func TestGitClonedNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{
 		ProviderSet: exec.ProviderSet{
