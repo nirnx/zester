@@ -29,9 +29,28 @@ paths, and read errors conflated with "file absent" (data-loss paths).
 - **`pkg.installed` honors a declared `version:` pin in Check.** Any
   installed version used to satisfy a pinned state, so version drift was
   compliant forever. Check now compares the installed version against the
-  pin (got/want diff); apt Apply passes `--allow-downgrades` for pinned
-  installs so a pinned downgrade actually converges. Undeclared `version:`
+  pin (got/want diff). Pinned downgrades converge on every provider: apt
+  passes `--allow-downgrades`, yum verifies the pin landed and falls back
+  to `yum downgrade` (plain `yum install pkg-<older>` silently no-ops),
+  dnf handles explicit version downgrades natively. Undeclared `version:`
   is unchanged.
+- **`pkg.purged` treats a removed-but-not-purged Debian package (dpkg `rc`
+  state) as needing a purge** — converged only when no package record
+  exists at all; previously `rc` reported converged and leftover conffiles
+  were never removed. The apt probes also fail loudly when the probe never
+  ran (spawn failure/context death) instead of reporting "not installed",
+  and parse multi-arch dpkg output correctly.
+- **`cron.present`, `sysctl.present`, and `mount.mounted` now actually work
+  on real peels.** Their exec providers (crontab/procfs/fstab) were never
+  wired into provider detection — every real-peel run failed with "no
+  cron/sysctl/mount provider available" (unit tests wired providers
+  manually, masking it).
+- **`file.managed` enforces the `mode:` facet on pre-existing files.**
+  Apply wrote content via a create-time-perm-only write and never chmodded,
+  so mode drift on an existing file was reported by Check forever but never
+  fixed — permanent churn firing `watch` dependents every highstate. Apply
+  now chmods after writing; Revert restores the CAPTURED prior mode, not
+  the desired one.
 - **Debian `rc`-state packages (removed, conffiles remain) no longer count
   as installed.** The apt probe requires dpkg status `installed`
   (`dpkg-query -W -f='${db:Status-Status}'`) instead of the `dpkg -s` exit
@@ -62,17 +81,23 @@ paths, and read errors conflated with "file absent" (data-loss paths).
   `UserExec.PasswordHash`); a name-based `gid:`/`primary_group:` is compared
   and enforced on existing users via `usermod -g` — both facets were
   silently unenforced outside user creation.
-- **`mount.mounted` compares the LIVE mount** (device and fstype exactly,
-  declared options as a subset of the active set — no churn on kernel
-  defaults) and remounts on mismatch; the fstab comparison now includes
-  `dump`/`pass`. A wrong device serving the mountpoint was compliant forever.
+- **`mount.mounted` fstab comparison now includes `dump`/`pass`**, Apply
+  no-ops honestly when converged, and Revert no longer claims an unmount it
+  never performed. (Comparing the LIVE mount — a wrong device/options
+  serving the mountpoint — is deferred: it needs Salt-style
+  option/fstype/device normalization to avoid remount churn on
+  kernel-normalized values; that audit finding stays open on the backlog.)
 - **`sysctl.present` with `persist: true` verifies the drop-in file entry**,
   not just the runtime value — a manual `sysctl -w` match silently died at
   the next reboot.
 - **`cron.present` entries are keyed on the label** (identifier comment,
   Salt semantics) instead of the exact command string — editing a state's
   command replaces the old line instead of orphaning it to run forever.
-  Label-less pre-existing lines with the same command are adopted.
+  Managed entries carry a `# ZESTER_CRON_ID: <label>` marker; pre-existing
+  same-command lines are adopted (a human descriptive comment neither
+  blocks adoption nor duplicates the job) and stamped on the next apply.
+  Converged Apply is a no-op, so watch-forced runs no longer rewrite the
+  crontab.
 - **`git.cloned`/`git.latest` with a symbolic `rev:` (tag) converge** —
   the rev was compared against the HEAD sha by string prefix, which never
   matches a tag name, so every run re-applied (needless fetches, `watch`
@@ -82,7 +107,10 @@ paths, and read errors conflated with "file absent" (data-loss paths).
 - **`locale.present` verifies the `/etc/locale.gen` enabling line** that
   Apply writes, not just `locale -a` membership — an out-of-band-generated
   locale was compliant until the next `locales` package upgrade silently
-  dropped it.
+  dropped it. The facet applies only where `/etc/locale.gen` exists
+  (Debian-family); RHEL/musl systems stay satisfied by `locale -a`, no
+  stray `locale.gen` is created, and charmap spellings are normalized
+  (`en_US.utf8` == `en_US.UTF-8`).
 - **Read errors are no longer conflated with "file absent" anywhere.**
   `host.present`, `ssh_auth.present`, every text-editing file state
   (`file.line`/`append`/`blockreplace`/`comment`/`keyvalue`/`replace`),
@@ -102,7 +130,7 @@ paths, and read errors conflated with "file absent" (data-loss paths).
   ("nothing to revert (no apply recorded in this run)"); same-instance
   Apply→Revert still restores backups (with canonical permissions —
   `authorized_keys` restores 0600) and still removes files the same
-  instance created. Related honesty fixes: `sysctl.present` Revert no
+  instance created. (tolerating an already-externally-removed file). Related honesty fixes: `sysctl.present` Revert no
   longer writes an EMPTY value into the kernel and persist file;
   `mount.mounted` Revert no longer claims an unmount it never performed;
   `group.present` Revert really restores membership (it only restored the
@@ -113,6 +141,9 @@ paths, and read errors conflated with "file absent" (data-loss paths).
   Apply no-op cleanly when already absent instead of failing `userdel`/
   `groupdel`; `service.dead`/`mount.mounted`/`sysctl.present`/`user.present`
   Apply can now honestly report `changed: false` when converged.
+  `archive.extracted` Apply re-evaluates its `if_missing`/`source_hash`
+  guard itself, so a watch trigger no longer re-downloads and re-extracts a
+  converged archive.
 
 ### Added
 - **`archive.extracted` gains `source_hash`**: recorded in a marker after a
