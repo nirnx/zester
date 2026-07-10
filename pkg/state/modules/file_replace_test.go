@@ -165,6 +165,33 @@ func TestFileReplaceRevert(t *testing.T) {
 	}
 }
 
+func TestFileReplaceRevertCreatedToleratesMissing(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "new.conf")
+	s, err := NewFileReplaceBuilder(testFileReplaceMctx())(path, map[string]any{
+		"pattern": `level=\w+`, "repl": "level=debug", "append_if_not_found": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Apply on a missing file creates it via append_if_not_found.
+	if _, err := s.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected Apply to create the file: %v", err)
+	}
+
+	// The created file vanished externally; revert must tolerate it —
+	// file-absent already IS the reverted state (same semantics as file.copy).
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Revert(ctx); err != nil {
+		t.Fatalf("Revert must tolerate an already-missing created file: %v", err)
+	}
+}
+
 func TestFileReplaceFreshInstanceRevertIsNoOp(t *testing.T) {
 	ctx := context.Background()
 	original := "level=info\nother=1\n"
