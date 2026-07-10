@@ -35,23 +35,19 @@ func (p *CrontabProvider) List(ctx context.Context, user string) ([]CronEntry, e
 	return parseCrontab(res.Stdout), nil
 }
 
-// Set adds or replaces a cron entry identified by its Command field.
-// If an entry with the same Command already exists it is replaced in-place.
+// Set adds or replaces a cron entry. Identity is resolved by FindCronEntry:
+// the Comment (state label / identifier) when present — so editing a managed
+// entry's command replaces the old line in-place instead of orphaning it —
+// with a Command fallback for comment-less entries.
 func (p *CrontabProvider) Set(ctx context.Context, user string, entry CronEntry) error {
 	existing, err := p.List(ctx, user)
 	if err != nil {
 		return err
 	}
 
-	replaced := false
-	for i, e := range existing {
-		if e.Command == entry.Command {
-			existing[i] = entry
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
+	if i := FindCronEntry(existing, entry); i >= 0 {
+		existing[i] = entry
+	} else {
 		existing = append(existing, entry)
 	}
 

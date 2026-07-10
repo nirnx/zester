@@ -170,6 +170,152 @@ func TestSvcRunning_Revert(t *testing.T) {
 	}
 }
 
+func TestSvcRunning_CheckEnableDrift(t *testing.T) {
+	// Running but disabled at boot with enable:true declared — the classic
+	// RHEL case: reported compliant before, so the unit never got enabled
+	// and the service stayed down after every reboot.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, false)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	result, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NeedsChange {
+		t.Error("expected NeedsChange=true when running but not enabled with enable:true")
+	}
+}
+
+func TestSvcRunning_CheckEnableUndeclaredNoChurn(t *testing.T) {
+	// No enable declared: the enable facet must not be compared at all.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, false)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	result, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NeedsChange {
+		t.Error("expected NeedsChange=false when enable is undeclared")
+	}
+}
+
+func TestSvcRunning_CheckEnableFalseDrift(t *testing.T) {
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": false})
+	result, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NeedsChange {
+		t.Error("expected NeedsChange=true when enabled but enable:false declared")
+	}
+}
+
+func TestSvcRunning_CheckEnableSatisfiedNoChange(t *testing.T) {
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	result, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NeedsChange {
+		t.Error("expected NeedsChange=false when running and enabled")
+	}
+}
+
+func TestSvcRunning_ApplyEnableOnlyDoesNotRestart(t *testing.T) {
+	// Apply reached because only the enable facet drifted: it must enable
+	// the unit without restarting the (healthy, running) service.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, false)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	result, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed {
+		t.Error("expected Changed=true")
+	}
+	if result.Details["action"] != "enabled" {
+		t.Errorf("action = %q, want %q (no restart for enable-only drift)", result.Details["action"], "enabled")
+	}
+	if !fake.IsEnabledSync("nginx") {
+		t.Error("expected nginx enabled after Apply")
+	}
+}
+
+func TestSvcRunning_ApplyDisableWhenEnableFalse(t *testing.T) {
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": false})
+	result, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed {
+		t.Error("expected Changed=true")
+	}
+	if fake.IsEnabledSync("nginx") {
+		t.Error("expected nginx disabled after Apply with enable:false")
+	}
+	if !fake.IsRunningSync("nginx") {
+		t.Error("expected nginx still running")
+	}
+}
+
+func TestSvcRunning_RevertFreshInstanceNoOp(t *testing.T) {
+	// A fresh instance (standalone ModeRevert) has no apply memo: Revert
+	// must be an explicit clean no-op, never touching the service.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	result, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed {
+		t.Error("expected Changed=false on fresh-instance Revert")
+	}
+	if result.Diff != "nothing to revert (no apply recorded in this run)" {
+		t.Errorf("Diff = %q, want the explicit no-op explanation", result.Diff)
+	}
+	if !fake.IsRunningSync("nginx") || !fake.IsEnabledSync("nginx") {
+		t.Error("fresh-instance Revert must not touch the service")
+	}
+}
+
+func TestSvcRunning_RevertEnableOnlyReportsChanged(t *testing.T) {
+	// Apply that only enabled (service already running) must revert the
+	// enable and report Changed=true — not the old lying Changed=false.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", true, false)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed {
+		t.Error("expected Changed=true when Revert disabled the service")
+	}
+	if fake.IsEnabledSync("nginx") {
+		t.Error("expected nginx disabled again after Revert")
+	}
+}
+
 func TestSvcRunning_NilProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Service: nil}}
 	_, err := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
@@ -404,6 +550,68 @@ func TestSvcDead_Revert(t *testing.T) {
 	}
 	if !fake.IsRunningSync("nginx") {
 		t.Error("expected nginx to be running after Revert")
+	}
+}
+
+func TestSvcDead_CheckDisableDrift(t *testing.T) {
+	// Stopped but still enabled at boot with enable:false declared: the unit
+	// resurrects at the next reboot — must be flagged as drift, not compliant.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", false, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	result, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NeedsChange {
+		t.Error("expected NeedsChange=true when stopped-but-enabled with enable:false")
+	}
+}
+
+func TestSvcDead_CheckStoppedEnableUndeclaredNoChurn(t *testing.T) {
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", false, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	result, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NeedsChange {
+		t.Error("expected NeedsChange=false when stopped and enable undeclared")
+	}
+}
+
+func TestSvcDead_ApplyAlreadyStoppedDisables(t *testing.T) {
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", false, true)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	result, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed {
+		t.Error("expected Changed=true (disable performed)")
+	}
+	if fake.IsEnabledSync("nginx") {
+		t.Error("expected nginx disabled")
+	}
+}
+
+func TestSvcDead_ApplyConvergedNoOp(t *testing.T) {
+	// Watch-forced Apply on an already stopped+disabled service: clean no-op.
+	fake := exectest.NewFakeServiceExec("systemd")
+	fake.PreAdd("nginx", false, false)
+	mctx := testSvcMctx(fake)
+	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	result, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed {
+		t.Error("expected Changed=false when already converged")
 	}
 }
 

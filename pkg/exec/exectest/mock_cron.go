@@ -45,12 +45,12 @@ func (f *FakeCronExec) Set(_ context.Context, user string, entry exec.CronEntry)
 		return f.SetErr
 	}
 	entries := f.entries[user]
-	for i, e := range entries {
-		if e.Command == entry.Command {
-			entries[i] = entry
-			f.entries[user] = entries
-			return nil
-		}
+	// Same identity semantics as CrontabProvider.Set: comment (label) when
+	// present, command fallback for comment-less entries.
+	if i := exec.FindCronEntry(entries, entry); i >= 0 {
+		entries[i] = entry
+		f.entries[user] = entries
+		return nil
 	}
 	f.entries[user] = append(entries, entry)
 	return nil

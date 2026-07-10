@@ -30,6 +30,9 @@ type UserPresent struct {
 	RemoveGroups   bool
 
 	user exec.UserExec
+	// group resolves a name-based primary group to its GID for drift
+	// comparison; required only when PrimaryGroup is declared.
+	group exec.GroupExec
 
 	// backup stores original user info for revert.
 	original   *exec.UserInfo
@@ -42,12 +45,12 @@ func NewUserPresentBuilder(mctx *exec.ModuleContext) state.Builder {
 		if mctx.User == nil {
 			return nil, fmt.Errorf("user.present: no user provider available")
 		}
-		return newUserPresent(id, config, mctx.User)
+		return newUserPresent(id, config, mctx.User, mctx.Group)
 	}
 }
 
-func newUserPresent(id string, config map[string]any, user exec.UserExec) (state.State, error) {
-	u := &UserPresent{id: id, user: user}
+func newUserPresent(id string, config map[string]any, user exec.UserExec, group exec.GroupExec) (state.State, error) {
+	u := &UserPresent{id: id, user: user, group: group}
 
 	u.UserName, _ = config["name"].(string)
 	if u.UserName == "" {
@@ -76,9 +79,28 @@ func newUserPresent(id string, config map[string]any, user exec.UserExec) (state
 	u.FullName, _ = config["fullname"].(string)
 	u.RemoveGroups, _ = config["remove_groups"].(bool)
 
+	if u.PrimaryGroup != "" && group == nil {
+		return nil, fmt.Errorf("user.present: %s: no group provider available (required to verify primary group %q)", id, u.PrimaryGroup)
+	}
+
 	u.reqs = state.ParseRequisites(config)
 
 	return u, nil
+}
+
+// primaryGroupDrift reports whether the user's primary group differs from the
+// declared name-based PrimaryGroup, by resolving the group name to its GID.
+// A declared group that does not exist counts as drift (Check reports it;
+// Apply fails loudly before attempting a usermod that cannot succeed).
+func (u *UserPresent) primaryGroupDrift(ctx context.Context, info *exec.UserInfo) (drift bool, groupMissing bool, err error) {
+	ginfo, err := u.group.Lookup(ctx, u.PrimaryGroup)
+	if err != nil {
+		return false, false, fmt.Errorf("user.present: lookup group %s: %w", u.PrimaryGroup, err)
+	}
+	if ginfo == nil {
+		return true, true, nil
+	}
+	return info.GID != ginfo.GID, false, nil
 }
 
 func (u *UserPresent) Name() string           { return "user.present:" + u.id }
@@ -102,7 +124,20 @@ func (u *UserPresent) Check(ctx context.Context) (state.CheckResult, error) {
 	if u.UID != 0 && info.UID != u.UID {
 		diffs = append(diffs, fmt.Sprintf("uid %d != %d", info.UID, u.UID))
 	}
-	if u.GID != 0 && info.GID != u.GID {
+	// A declared name-based primary group takes precedence over a numeric
+	// gid (mirroring UserCreateOpts, where PrimaryGroup overrides GID).
+	if u.PrimaryGroup != "" {
+		drift, missing, err := u.primaryGroupDrift(ctx, info)
+		if err != nil {
+			return state.CheckResult{}, err
+		}
+		switch {
+		case missing:
+			diffs = append(diffs, fmt.Sprintf("primary group %q does not exist", u.PrimaryGroup))
+		case drift:
+			diffs = append(diffs, fmt.Sprintf("primary group is not %q", u.PrimaryGroup))
+		}
+	} else if u.GID != 0 && info.GID != u.GID {
 		diffs = append(diffs, fmt.Sprintf("gid %d != %d", info.GID, u.GID))
 	}
 	if u.Home != "" && info.Home != u.Home {
@@ -113,6 +148,18 @@ func (u *UserPresent) Check(ctx context.Context) (state.CheckResult, error) {
 	}
 	if u.FullName != "" && info.FullName != u.FullName {
 		diffs = append(diffs, fmt.Sprintf("fullname %q != %q", info.FullName, u.FullName))
+	}
+	if u.Password != "" {
+		hash, err := u.user.PasswordHash(ctx, u.UserName)
+		if err != nil {
+			return state.CheckResult{}, fmt.Errorf("user.present: password hash %s: %w", u.UserName, err)
+		}
+		// "" from the provider means none/cannot-verify — with a password
+		// declared that is drift, and Apply's usermod -p is idempotent.
+		// Hash values never appear in the diff.
+		if hash != u.Password {
+			diffs = append(diffs, "password hash differs from declared")
+		}
 	}
 	if len(u.Groups) > 0 {
 		desiredGroups := u.desiredGroups(info)
@@ -183,7 +230,21 @@ func (u *UserPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 		opts.UID = &u.UID
 		changed = true
 	}
-	if u.GID != 0 && info.GID != u.GID {
+	// A declared name-based primary group takes precedence over a numeric
+	// gid (mirroring UserCreateOpts, where PrimaryGroup overrides GID).
+	if u.PrimaryGroup != "" {
+		drift, missing, err := u.primaryGroupDrift(ctx, info)
+		if err != nil {
+			return state.ApplyResult{}, err
+		}
+		if missing {
+			return state.ApplyResult{}, fmt.Errorf("user.present: primary group %q does not exist", u.PrimaryGroup)
+		}
+		if drift {
+			opts.PrimaryGroup = &u.PrimaryGroup
+			changed = true
+		}
+	} else if u.GID != 0 && info.GID != u.GID {
 		opts.GID = &u.GID
 		changed = true
 	}
@@ -196,8 +257,16 @@ func (u *UserPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 		changed = true
 	}
 	if u.Password != "" {
-		opts.Password = &u.Password
-		changed = true
+		// Compare the shadow hash so an in-sync password is a no-op — a
+		// watch-forced Apply must not report a change it did not make.
+		hash, err := u.user.PasswordHash(ctx, u.UserName)
+		if err != nil {
+			return state.ApplyResult{}, fmt.Errorf("user.present: password hash %s: %w", u.UserName, err)
+		}
+		if hash != u.Password {
+			opts.Password = &u.Password
+			changed = true
+		}
 	}
 	if u.FullName != "" && info.FullName != u.FullName {
 		opts.FullName = &u.FullName
@@ -255,7 +324,10 @@ func (u *UserPresent) Revert(ctx context.Context) (state.ApplyResult, error) {
 		}, nil
 	}
 
-	return state.ApplyResult{Changed: false}, nil
+	return state.ApplyResult{
+		Changed: false,
+		Diff:    "nothing to revert (no apply recorded in this run)",
+	}, nil
 }
 
 // desiredGroups computes the desired supplementary group list.
@@ -342,6 +414,20 @@ func (u *UserAbsent) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (u *UserAbsent) Apply(ctx context.Context) (state.ApplyResult, error) {
+	// Self-contained full flow: a watch-forced Apply bypasses Check, and
+	// userdel on a nonexistent user exits non-zero — re-verify existence so
+	// an already-absent user is a clean no-op, not a failure.
+	info, err := u.user.Lookup(ctx, u.UserName)
+	if err != nil {
+		return state.ApplyResult{}, fmt.Errorf("user.absent: lookup %s: %w", u.UserName, err)
+	}
+	if info == nil {
+		return state.ApplyResult{
+			Changed: false,
+			Diff:    fmt.Sprintf("user %s already absent", u.UserName),
+		}, nil
+	}
+
 	if err := u.user.Delete(ctx, u.UserName, u.Purge); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("user.absent: delete %s: %w", u.UserName, err)
 	}

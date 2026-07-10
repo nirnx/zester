@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/state"
@@ -82,31 +83,12 @@ func newCronPresent(id string, config map[string]any, cron exec.CronExec) (state
 func (c *CronPresent) Name() string           { return "cron.present:" + c.id }
 func (c *CronPresent) Reqs() state.Requisites { return c.reqs }
 
-func (c *CronPresent) Check(ctx context.Context) (state.CheckResult, error) {
-	entries, err := c.cron.List(ctx, c.User)
-	if err != nil {
-		return state.CheckResult{}, fmt.Errorf("cron.present: list %s: %w", c.User, err)
-	}
-	for _, e := range entries {
-		if e.Command == c.Command {
-			if e.Minute == c.Minute && e.Hour == c.Hour &&
-				e.DayOfMonth == c.DayMonth && e.Month == c.Month && e.DayOfWeek == c.DayWeek {
-				return state.CheckResult{NeedsChange: false}, nil
-			}
-			return state.CheckResult{
-				NeedsChange: true,
-				Diff:        fmt.Sprintf("cron entry for %q exists but schedule differs", c.Command),
-			}, nil
-		}
-	}
-	return state.CheckResult{
-		NeedsChange: true,
-		Diff:        fmt.Sprintf("cron entry for %q does not exist", c.Command),
-	}, nil
-}
-
-func (c *CronPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
-	entry := exec.CronEntry{
+// desiredEntry builds the CronEntry this state manages. The Label rides in
+// the Comment field — it is the entry's IDENTITY (Salt identifier semantics),
+// so editing the command in the state replaces the old line instead of
+// orphaning it in the crontab.
+func (c *CronPresent) desiredEntry() exec.CronEntry {
+	return exec.CronEntry{
 		Minute:     c.Minute,
 		Hour:       c.Hour,
 		DayOfMonth: c.DayMonth,
@@ -115,6 +97,49 @@ func (c *CronPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
 		Command:    c.Command,
 		Comment:    c.Label,
 	}
+}
+
+func (c *CronPresent) Check(ctx context.Context) (state.CheckResult, error) {
+	entries, err := c.cron.List(ctx, c.User)
+	if err != nil {
+		return state.CheckResult{}, fmt.Errorf("cron.present: list %s: %w", c.User, err)
+	}
+
+	desired := c.desiredEntry()
+	i := exec.FindCronEntry(entries, desired)
+	if i < 0 {
+		return state.CheckResult{
+			NeedsChange: true,
+			Diff:        fmt.Sprintf("cron entry %q does not exist", c.Label),
+		}, nil
+	}
+
+	e := entries[i]
+	var diffs []string
+	if e.Command != c.Command {
+		diffs = append(diffs, fmt.Sprintf("command %q != %q", e.Command, c.Command))
+	}
+	if e.Minute != c.Minute || e.Hour != c.Hour ||
+		e.DayOfMonth != c.DayMonth || e.Month != c.Month || e.DayOfWeek != c.DayWeek {
+		diffs = append(diffs, "schedule differs")
+	}
+	if e.Comment != c.Label {
+		// A comment-less entry matched by command (adoption fallback): apply
+		// stamps the identifier so future command edits replace, not orphan.
+		diffs = append(diffs, fmt.Sprintf("entry is missing identifier comment %q", c.Label))
+	}
+
+	if len(diffs) > 0 {
+		return state.CheckResult{
+			NeedsChange: true,
+			Diff:        fmt.Sprintf("cron entry %q: %s", c.Label, strings.Join(diffs, "; ")),
+		}, nil
+	}
+	return state.CheckResult{NeedsChange: false}, nil
+}
+
+func (c *CronPresent) Apply(ctx context.Context) (state.ApplyResult, error) {
+	entry := c.desiredEntry()
 	if err := c.cron.Set(ctx, c.User, entry); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("cron.present: set %s: %w", c.Command, err)
 	}

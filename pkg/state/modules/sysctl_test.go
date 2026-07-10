@@ -2,25 +2,33 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
 )
 
-func testSysctlMctx(sysctl *exectest.FakeSysctlExec) *exec.ModuleContext {
+// testSysctlMctx wires the sysctl fake plus a file fake the module verifies
+// the persist drop-in (exec.SysctlConfPath) from.
+func testSysctlMctx(sysctl *exectest.FakeSysctlExec, file *exectest.FakeFileExec) *exec.ModuleContext {
 	return &exec.ModuleContext{
 		ProviderSet: exec.ProviderSet{
 			Sysctl:  sysctl,
 			Package: exectest.NewFakePackageExec("apt"),
-			File:    exectest.NewFakeFileExec(),
+			File:    file,
 			Command: exectest.NewFakeCommandExec(),
 		},
 	}
 }
 
+// seedSysctlConf writes the persist drop-in into the fake filesystem.
+func seedSysctlConf(file *exectest.FakeFileExec, content string) {
+	file.PreCreate(exec.SysctlConfPath, []byte(content), 0644)
+}
+
 func TestSysctlPresentName(t *testing.T) {
-	mctx := testSysctlMctx(exectest.NewFakeSysctlExec())
+	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
 	s, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
@@ -33,7 +41,7 @@ func TestSysctlPresentName(t *testing.T) {
 }
 
 func TestSysctlPresentDefaultKey(t *testing.T) {
-	mctx := testSysctlMctx(exectest.NewFakeSysctlExec())
+	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
 	s, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
@@ -47,7 +55,7 @@ func TestSysctlPresentDefaultKey(t *testing.T) {
 }
 
 func TestSysctlPresentValueRequired(t *testing.T) {
-	mctx := testSysctlMctx(exectest.NewFakeSysctlExec())
+	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
 	_, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when value is missing")
@@ -57,7 +65,7 @@ func TestSysctlPresentValueRequired(t *testing.T) {
 func TestSysctlPresentCheckNeedsChange(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "0")
-	mctx := testSysctlMctx(fake)
+	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
 	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
@@ -71,22 +79,99 @@ func TestSysctlPresentCheckNeedsChange(t *testing.T) {
 }
 
 func TestSysctlPresentCheckNoChange(t *testing.T) {
+	// persist defaults to true, so the no-change case needs BOTH the runtime
+	// value and the drop-in entry in place.
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "1")
-	mctx := testSysctlMctx(fake)
+	file := exectest.NewFakeFileExec()
+	seedSysctlConf(file, "net.ipv4.ip_forward = 1\n")
+	mctx := testSysctlMctx(fake, file)
 	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	cr, _ := s.Check(context.Background())
 	if cr.NeedsChange {
-		t.Error("expected NeedsChange=false when value matches")
+		t.Errorf("expected NeedsChange=false when value and persist entry match, diff: %s", cr.Diff)
+	}
+}
+
+func TestSysctlPresentCheckPersistMissing(t *testing.T) {
+	// The finding: a manual `sysctl -w` matches at runtime, but with
+	// persist:true (the default) and no drop-in entry the value dies at the
+	// next reboot — that is drift, not compliance.
+	fake := exectest.NewFakeSysctlExec()
+	fake.PreSet("net.ipv4.ip_forward", "1")
+	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec()) // no conf file
+	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+		"value": "1",
+	})
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange=true when runtime matches but nothing is persisted")
+	}
+}
+
+func TestSysctlPresentCheckPersistValueDrift(t *testing.T) {
+	fake := exectest.NewFakeSysctlExec()
+	fake.PreSet("net.ipv4.ip_forward", "1")
+	file := exectest.NewFakeFileExec()
+	seedSysctlConf(file, "net.ipv4.ip_forward = 0\n")
+	mctx := testSysctlMctx(fake, file)
+	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+		"value": "1",
+	})
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange=true when the persisted value differs")
+	}
+}
+
+func TestSysctlPresentCheckNoPersistIgnoresFile(t *testing.T) {
+	fake := exectest.NewFakeSysctlExec()
+	fake.PreSet("net.ipv4.ip_forward", "1")
+	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
+	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+		"value":   "1",
+		"persist": false,
+	})
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Error("expected NeedsChange=false with persist:false and matching runtime value")
+	}
+}
+
+func TestSysctlPresentCheckPersistReadErrorFails(t *testing.T) {
+	// A non-not-exist read error on the drop-in fails the phase — it is
+	// never treated as "no entry".
+	fake := exectest.NewFakeSysctlExec()
+	fake.PreSet("net.ipv4.ip_forward", "1")
+	file := exectest.NewFakeFileExec()
+	file.SetReadError(exec.SysctlConfPath, errors.New("permission denied"))
+	mctx := testSysctlMctx(fake, file)
+	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+		"value": "1",
+	})
+	if _, err := s.Check(context.Background()); err == nil {
+		t.Error("expected Check error when the drop-in is unreadable")
+	}
+	if _, err := s.Apply(context.Background()); err == nil {
+		t.Error("expected Apply error when the drop-in is unreadable")
 	}
 }
 
 func TestSysctlPresentApply(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "0")
-	mctx := testSysctlMctx(fake)
+	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
 	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
 		"value":   "1",
 		"persist": true,
@@ -109,7 +194,7 @@ func TestSysctlPresentApply(t *testing.T) {
 func TestSysctlPresentApplyNoPersist(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "0")
-	mctx := testSysctlMctx(fake)
+	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
 	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
 		"value":   "1",
 		"persist": false,
@@ -123,10 +208,50 @@ func TestSysctlPresentApplyNoPersist(t *testing.T) {
 	}
 }
 
+func TestSysctlPresentApplyPersistsRuntimeMatch(t *testing.T) {
+	// Runtime already matches but nothing is persisted: Apply must write the
+	// drop-in entry (and may skip the redundant runtime Set).
+	fake := exectest.NewFakeSysctlExec()
+	fake.PreSet("net.ipv4.ip_forward", "1")
+	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
+	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+		"value": "1",
+	})
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed=true (persist entry written)")
+	}
+	if !fake.IsPersisted("net.ipv4.ip_forward") {
+		t.Error("expected value persisted")
+	}
+}
+
+func TestSysctlPresentApplyConvergedNoOp(t *testing.T) {
+	// Watch-forced Apply on a converged key: clean no-op.
+	fake := exectest.NewFakeSysctlExec()
+	fake.PreSet("net.ipv4.ip_forward", "1")
+	file := exectest.NewFakeFileExec()
+	seedSysctlConf(file, "net.ipv4.ip_forward = 1\n")
+	mctx := testSysctlMctx(fake, file)
+	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+		"value": "1",
+	})
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Errorf("expected Changed=false when converged, diff: %s", ar.Diff)
+	}
+}
+
 func TestSysctlPresentRevert(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "0")
-	mctx := testSysctlMctx(fake)
+	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
 	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
@@ -140,6 +265,34 @@ func TestSysctlPresentRevert(t *testing.T) {
 	}
 }
 
+func TestSysctlPresentRevertFreshInstanceNoOp(t *testing.T) {
+	// A fresh instance (standalone ModeRevert) has no captured original: the
+	// old code Set (and Persisted!) the empty string — kernel-parameter
+	// corruption. Revert must be an explicit clean no-op.
+	fake := exectest.NewFakeSysctlExec()
+	fake.PreSet("net.ipv4.ip_forward", "1")
+	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
+	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+		"value": "1",
+	})
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected Changed=false on fresh-instance Revert")
+	}
+	if ar.Diff != "nothing to revert (no apply recorded in this run)" {
+		t.Errorf("Diff = %q, want the explicit no-op explanation", ar.Diff)
+	}
+	if fake.GetSync("net.ipv4.ip_forward") != "1" {
+		t.Errorf("fresh-instance Revert must not touch the value, got %q", fake.GetSync("net.ipv4.ip_forward"))
+	}
+	if fake.IsPersisted("net.ipv4.ip_forward") {
+		t.Error("fresh-instance Revert must not persist anything")
+	}
+}
+
 func TestSysctlPresentNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Sysctl: nil}}
 	_, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{"value": "1"})
@@ -148,8 +301,23 @@ func TestSysctlPresentNoProvider(t *testing.T) {
 	}
 }
 
+func TestSysctlPresentPersistRequiresFileProvider(t *testing.T) {
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Sysctl: exectest.NewFakeSysctlExec()}}
+	_, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{"value": "1"})
+	if err == nil {
+		t.Fatal("expected error when persist is enabled but no file provider is available")
+	}
+	// persist:false does not need the file provider.
+	if _, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+		"value":   "1",
+		"persist": false,
+	}); err != nil {
+		t.Fatalf("persist:false should not require a file provider: %v", err)
+	}
+}
+
 func TestSysctlPresentRequisites(t *testing.T) {
-	mctx := testSysctlMctx(exectest.NewFakeSysctlExec())
+	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
 	s, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
 		"value":   "1",
 		"require": []any{"pkg.installed:procps"},

@@ -293,6 +293,106 @@ func TestGroupPresentRevertModified(t *testing.T) {
 	}
 }
 
+func TestGroupPresentRevertFreshInstanceNoOp(t *testing.T) {
+	// A fresh instance (standalone ModeRevert) has no apply memo: Revert
+	// must be an explicit clean no-op, never touching the group.
+	fakeGroup := exectest.NewFakeGroupExec()
+	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 998})
+	mctx := testGroupMctx(fakeGroup)
+	builder := NewGroupPresentBuilder(mctx)
+
+	s, err := builder("docker", map[string]any{"gid": 999})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("expected Changed=false on fresh-instance Revert")
+	}
+	if ar.Diff != "nothing to revert (no apply recorded in this run)" {
+		t.Errorf("Diff = %q, want the explicit no-op explanation", ar.Diff)
+	}
+	g, _ := fakeGroup.GetGroup("docker")
+	if g.GID != 998 {
+		t.Error("fresh-instance Revert must not touch the group")
+	}
+}
+
+func TestGroupPresentRevertRestoresMembership(t *testing.T) {
+	// Apply added a member; Revert must restore the ORIGINAL membership,
+	// not just the GID (the old code stored original.Members but never used
+	// it while claiming "reverted to original state").
+	fakeGroup := exectest.NewFakeGroupExec()
+	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999, Members: []string{"alice"}})
+	mctx := testGroupMctx(fakeGroup)
+	builder := NewGroupPresentBuilder(mctx)
+
+	s, err := builder("docker", map[string]any{
+		"addusers": []any{"bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	g, _ := fakeGroup.GetGroup("docker")
+	if !containsString(g.Members, "bob") {
+		t.Fatal("expected bob added by Apply")
+	}
+
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed=true on membership revert")
+	}
+	g, _ = fakeGroup.GetGroup("docker")
+	if containsString(g.Members, "bob") {
+		t.Error("expected bob removed by Revert")
+	}
+	if !containsString(g.Members, "alice") {
+		t.Error("expected alice preserved by Revert")
+	}
+}
+
+func TestGroupPresentRevertNoDriftReportsNoChange(t *testing.T) {
+	// If the group already matches the memoized original, Revert must not
+	// claim Changed=true (the old code did whenever original was set).
+	fakeGroup := exectest.NewFakeGroupExec()
+	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999})
+	mctx := testGroupMctx(fakeGroup)
+	builder := NewGroupPresentBuilder(mctx)
+
+	s, err := builder("docker", map[string]any{"gid": 999})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Apply memoizes original but changes nothing (already converged).
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Fatal("expected converged Apply to be a no-op")
+	}
+
+	rr, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr.Changed {
+		t.Errorf("expected Changed=false when nothing drifted from original, diff: %s", rr.Diff)
+	}
+}
+
 func TestGroupPresentNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{
 		ProviderSet: exec.ProviderSet{
@@ -430,8 +530,32 @@ func TestGroupAbsentRequisites(t *testing.T) {
 	}
 }
 
+func TestGroupAbsentApplyAlreadyAbsentNoOp(t *testing.T) {
+	// Watch-forced Apply bypasses Check: an already-absent group must be a
+	// clean no-op, never a groupdel failure. DeleteErr proves Delete is
+	// not even attempted.
+	fakeGroup := exectest.NewFakeGroupExec()
+	fakeGroup.DeleteErr = fmt.Errorf("groupdel: group does not exist (exit 6)")
+	mctx := testGroupMctx(fakeGroup)
+	builder := NewGroupAbsentBuilder(mctx)
+
+	s, err := builder("ghost", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatalf("expected clean no-op for absent group, got error: %v", err)
+	}
+	if ar.Changed {
+		t.Error("expected Changed=false for already-absent group")
+	}
+}
+
 func TestGroupAbsentApplyError(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
+	fakeGroup.PreCreate(&exec.GroupInfo{Name: "oldgroup"}) // exists, so Delete IS attempted
 	fakeGroup.DeleteErr = fmt.Errorf("group in use")
 	mctx := testGroupMctx(fakeGroup)
 	builder := NewGroupAbsentBuilder(mctx)
