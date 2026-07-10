@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -40,9 +42,11 @@ type FileBlockReplace struct {
 
 	file exec.FileExec
 
-	// backup stores original content for revert.
+	// backup stores original content for revert; created records that Apply
+	// created the file in this instance.
 	backup    []byte
 	backupSet bool
+	created   bool
 }
 
 // NewFileBlockReplaceBuilder returns a state.Builder that creates FileBlockReplace states.
@@ -111,6 +115,9 @@ func findBlock(lines []string, markerStart, markerEnd string) (startIdx, endIdx 
 func (f *FileBlockReplace) Check(ctx context.Context) (state.CheckResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("file.blockreplace: read %s: %w", f.Path, err)
+		}
 		if f.AppendIfNotFound {
 			return state.CheckResult{
 				NeedsChange: true,
@@ -152,9 +159,15 @@ func (f *FileBlockReplace) Check(ctx context.Context) (state.CheckResult, error)
 }
 
 func (f *FileBlockReplace) Apply(ctx context.Context) (state.ApplyResult, error) {
-	// Save backup for revert.
+	// Fresh read: existence is decided per invocation from this read alone,
+	// never from instance fields a previous invocation may have set.
 	existing, err := f.file.ReadFile(ctx, f.Path)
-	if err == nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return state.ApplyResult{}, fmt.Errorf("file.blockreplace: read %s: %w", f.Path, err)
+	}
+	existed := err == nil
+	if existed && !f.backupSet {
+		// Save backup for revert.
 		f.backup = existing
 		f.backupSet = true
 	}
@@ -164,7 +177,7 @@ func (f *FileBlockReplace) Apply(ctx context.Context) (state.ApplyResult, error)
 		desiredContent += "\n"
 	}
 
-	if !f.backupSet {
+	if !existed {
 		// File doesn't exist — create it with the block if append_if_not_found.
 		if !f.AppendIfNotFound {
 			return state.ApplyResult{Changed: false}, nil
@@ -173,6 +186,7 @@ func (f *FileBlockReplace) Apply(ctx context.Context) (state.ApplyResult, error)
 		if err := f.file.WriteFile(ctx, f.Path, []byte(newContent), 0644); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("file.blockreplace: write %s: %w", f.Path, err)
 		}
+		f.created = true
 		return state.ApplyResult{
 			Changed: true,
 			Diff:    fmt.Sprintf("created %s with managed block", f.Path),
@@ -226,22 +240,5 @@ func (f *FileBlockReplace) Apply(ctx context.Context) (state.ApplyResult, error)
 }
 
 func (f *FileBlockReplace) Revert(ctx context.Context) (state.ApplyResult, error) {
-	if !f.backupSet {
-		if err := f.file.Remove(ctx, f.Path); err != nil {
-			return state.ApplyResult{}, fmt.Errorf("file.blockreplace: revert remove %s: %w", f.Path, err)
-		}
-		return state.ApplyResult{
-			Changed: true,
-			Diff:    fmt.Sprintf("removed %s (revert block replace to new file)", f.Path),
-		}, nil
-	}
-
-	if err := f.file.WriteFile(ctx, f.Path, f.backup, 0644); err != nil {
-		return state.ApplyResult{}, fmt.Errorf("file.blockreplace: revert %s: %w", f.Path, err)
-	}
-
-	return state.ApplyResult{
-		Changed: true,
-		Diff:    fmt.Sprintf("reverted %s to previous content", f.Path),
-	}, nil
+	return fsxRevertWithCreate(ctx, f.file, f.Path, f.backup, f.backupSet, f.created, "file.blockreplace")
 }

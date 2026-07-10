@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"sort"
 
@@ -31,6 +33,7 @@ type FileKeyValue struct {
 
 	backup    []byte
 	backupSet bool
+	created   bool
 }
 
 // NewFileKeyValueBuilder returns a state.Builder that creates FileKeyValue states.
@@ -152,6 +155,9 @@ func (f *FileKeyValue) compute(lines []string) ([]string, bool) {
 func (f *FileKeyValue) Check(ctx context.Context) (state.CheckResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("file.keyvalue: read %s: %w", f.Path, err)
+		}
 		return state.CheckResult{
 			NeedsChange: true,
 			Diff:        fmt.Sprintf("file %s does not exist", f.Path),
@@ -171,11 +177,17 @@ func (f *FileKeyValue) Check(ctx context.Context) (state.CheckResult, error) {
 
 func (f *FileKeyValue) Apply(ctx context.Context) (state.ApplyResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return state.ApplyResult{}, fmt.Errorf("file.keyvalue: read %s: %w", f.Path, err)
+	}
+	existed := err == nil
 	var lines []string
 	trailingNL := true
-	if err == nil {
-		f.backup = data
-		f.backupSet = true
+	if existed {
+		if !f.backupSet {
+			f.backup = data
+			f.backupSet = true
+		}
 		lines, trailingNL = fsxSplitLines(string(data))
 	}
 
@@ -188,6 +200,9 @@ func (f *FileKeyValue) Apply(ctx context.Context) (state.ApplyResult, error) {
 	if err := f.file.WriteFile(ctx, f.Path, []byte(out), 0644); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("file.keyvalue: write %s: %w", f.Path, err)
 	}
+	if !existed {
+		f.created = true
+	}
 
 	return state.ApplyResult{
 		Changed: true,
@@ -197,5 +212,5 @@ func (f *FileKeyValue) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (f *FileKeyValue) Revert(ctx context.Context) (state.ApplyResult, error) {
-	return fsxRevert(ctx, f.file, f.Path, f.backup, f.backupSet, "file.keyvalue")
+	return fsxRevertWithCreate(ctx, f.file, f.Path, f.backup, f.backupSet, f.created, "file.keyvalue")
 }

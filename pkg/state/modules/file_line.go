@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -44,6 +46,7 @@ type FileLine struct {
 
 	backup    []byte
 	backupSet bool
+	created   bool
 }
 
 // NewFileLineBuilder returns a state.Builder that creates FileLine states.
@@ -181,6 +184,9 @@ func (f *FileLine) insert(lines []string) []string {
 func (f *FileLine) Check(ctx context.Context) (state.CheckResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.CheckResult{}, fmt.Errorf("file.line: read %s: %w", f.Path, err)
+		}
 		if f.createsOnMissing() {
 			return state.CheckResult{
 				NeedsChange: true,
@@ -204,14 +210,17 @@ func (f *FileLine) Check(ctx context.Context) (state.CheckResult, error) {
 func (f *FileLine) Apply(ctx context.Context) (state.ApplyResult, error) {
 	existing, err := f.file.ReadFile(ctx, f.Path)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return state.ApplyResult{}, fmt.Errorf("file.line: read %s: %w", f.Path, err)
+		}
 		if !f.createsOnMissing() {
 			return state.ApplyResult{Changed: false}, nil
 		}
-		f.backupSet = false
 		content := f.Content + "\n"
 		if err := f.file.WriteFile(ctx, f.Path, []byte(content), 0644); err != nil {
 			return state.ApplyResult{}, fmt.Errorf("file.line: write %s: %w", f.Path, err)
 		}
+		f.created = true
 		return state.ApplyResult{
 			Changed: true,
 			Diff:    fmt.Sprintf("created %s with line %q", f.Path, f.Content),
@@ -219,8 +228,10 @@ func (f *FileLine) Apply(ctx context.Context) (state.ApplyResult, error) {
 		}, nil
 	}
 
-	f.backup = existing
-	f.backupSet = true
+	if !f.backupSet {
+		f.backup = existing
+		f.backupSet = true
+	}
 
 	lines, trailingNL := fsxSplitLines(string(existing))
 	newLines, changed := f.compute(lines)
@@ -241,7 +252,7 @@ func (f *FileLine) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (f *FileLine) Revert(ctx context.Context) (state.ApplyResult, error) {
-	return fsxRevert(ctx, f.file, f.Path, f.backup, f.backupSet, "file.line")
+	return fsxRevertWithCreate(ctx, f.file, f.Path, f.backup, f.backupSet, f.created, "file.line")
 }
 
 // ---- shared file-surgery helpers (fsx*) ----
@@ -329,16 +340,23 @@ func fsxToInt(v any) int {
 	return 0
 }
 
-// fsxRevert restores a file from a backup taken during Apply, or removes it
-// when no prior state existed.
+// fsxNothingToRevert is the diff reported when Revert runs on an instance
+// whose Apply never recorded a backup — a fresh instance must be a clean
+// no-op, never destructive.
+const fsxNothingToRevert = "nothing to revert (no apply recorded in this run)"
+
+// fsxRevert restores a file from a backup captured by a same-instance Apply.
+// When no backup was recorded (backupSet false — Apply never ran in this
+// instance, or ran without touching an existing file), it is an explicit
+// clean no-op: the flag cannot distinguish "file was absent before Apply"
+// from "Apply never ran here", so removing the file would destroy
+// pre-existing state on a fresh instance. Modules whose Apply may CREATE the
+// file track that separately and use fsxRevertWithCreate.
 func fsxRevert(ctx context.Context, file exec.FileExec, path string, backup []byte, backupSet bool, module string) (state.ApplyResult, error) {
 	if !backupSet {
-		if err := file.Remove(ctx, path); err != nil {
-			return state.ApplyResult{}, fmt.Errorf("%s: revert remove %s: %w", module, path, err)
-		}
 		return state.ApplyResult{
-			Changed: true,
-			Diff:    fmt.Sprintf("removed %s (revert to nonexistent)", path),
+			Changed: false,
+			Diff:    fsxNothingToRevert,
 		}, nil
 	}
 	if err := file.WriteFile(ctx, path, backup, 0644); err != nil {
@@ -348,4 +366,21 @@ func fsxRevert(ctx context.Context, file exec.FileExec, path string, backup []by
 		Changed: true,
 		Diff:    fmt.Sprintf("reverted %s to previous content", path),
 	}, nil
+}
+
+// fsxRevertWithCreate is fsxRevert for modules whose Apply may create the
+// managed file: when this instance's Apply created it (created true) and no
+// pre-existing content was captured, removing the file is the exact inverse.
+// A captured backup takes precedence — it is genuine pre-apply content.
+func fsxRevertWithCreate(ctx context.Context, file exec.FileExec, path string, backup []byte, backupSet, created bool, module string) (state.ApplyResult, error) {
+	if !backupSet && created {
+		if err := file.Remove(ctx, path); err != nil {
+			return state.ApplyResult{}, fmt.Errorf("%s: revert remove %s: %w", module, path, err)
+		}
+		return state.ApplyResult{
+			Changed: true,
+			Diff:    fmt.Sprintf("removed %s (revert to nonexistent)", path),
+		}, nil
+	}
+	return fsxRevert(ctx, file, path, backup, backupSet, module)
 }

@@ -2,7 +2,9 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"strings"
 
@@ -44,6 +46,7 @@ type FileReplace struct {
 
 	backup    []byte
 	backupSet bool
+	created   bool
 }
 
 // NewFileReplaceBuilder returns a state.Builder that creates FileReplace states.
@@ -145,6 +148,9 @@ func (f *FileReplace) transform(content string, existed bool) (string, bool) {
 
 func (f *FileReplace) Check(ctx context.Context) (state.CheckResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return state.CheckResult{}, fmt.Errorf("file.replace: read %s: %w", f.Path, err)
+	}
 	existed := err == nil
 	content := ""
 	if existed {
@@ -163,12 +169,17 @@ func (f *FileReplace) Check(ctx context.Context) (state.CheckResult, error) {
 
 func (f *FileReplace) Apply(ctx context.Context) (state.ApplyResult, error) {
 	data, err := f.file.ReadFile(ctx, f.Path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return state.ApplyResult{}, fmt.Errorf("file.replace: read %s: %w", f.Path, err)
+	}
 	existed := err == nil
 	content := ""
 	if existed {
 		content = string(data)
-		f.backup = data
-		f.backupSet = true
+		if !f.backupSet {
+			f.backup = data
+			f.backupSet = true
+		}
 	}
 
 	out, changed := f.transform(content, existed)
@@ -179,6 +190,9 @@ func (f *FileReplace) Apply(ctx context.Context) (state.ApplyResult, error) {
 	if err := f.file.WriteFile(ctx, f.Path, []byte(out), 0644); err != nil {
 		return state.ApplyResult{}, fmt.Errorf("file.replace: write %s: %w", f.Path, err)
 	}
+	if !existed {
+		f.created = true
+	}
 
 	return state.ApplyResult{
 		Changed: true,
@@ -188,7 +202,7 @@ func (f *FileReplace) Apply(ctx context.Context) (state.ApplyResult, error) {
 }
 
 func (f *FileReplace) Revert(ctx context.Context) (state.ApplyResult, error) {
-	return fsxRevert(ctx, f.file, f.Path, f.backup, f.backupSet, "file.replace")
+	return fsxRevertWithCreate(ctx, f.file, f.Path, f.backup, f.backupSet, f.created, "file.replace")
 }
 
 // fsxRegexpReplace replaces matches of re in src with repl, expanding
