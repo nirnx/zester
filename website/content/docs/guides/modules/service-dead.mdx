@@ -1,9 +1,15 @@
 ---
 title: "service.dead"
-description: "Ensures a service is stopped on the target system. Optionally also disables the service at boot when enable: false is set."
+description: "Ensure a service is stopped, optionally disabling it at boot."
 ---
 
-**Source**: `pkg/state/modules/service.go`
+{/* zester-docgen:managed module="service.dead" */}
+
+**Source**: `pkg/state/modules/service_dead.go`
+
+---
+
+`service.dead` ensures the named service is stopped. The service name defaults to the state ID. Its `enable` parameter inverts service.running's default: omitting it (or `enable: true`) stops the service but leaves its boot enablement untouched, while `enable: false` ALSO disables it at boot — the common case for retiring a unit so it does not resurrect on the next reboot.
 
 ---
 
@@ -11,56 +17,53 @@ description: "Ensures a service is stopped on the target system. Optionally also
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | The service name. If omitted, the state ID is used. |
-| `enable` | `bool` | No | `true` | When set to `false`, also disables the service at boot during Apply. |
+| `name` | `string` | No | State ID | service unit name (defaults to the state ID) |
+| `enable` | `TriState` | No | *(none)* | boot-enablement intent: enable:false also disables the unit; unset or true leaves it alone |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Parameter Types
 
-- Calls `systemctl is-active --quiet <service>` (via the injected ServiceExec).
-- Reports no changes needed if the service is already stopped.
-- Reports `NeedsChange: true` if the service is running.
+### TriState
 
----
+A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell "not specified" apart from an explicit false.
 
-## Apply Behavior
-
-1. Calls `Stop` on the service.
-2. If `enable: false` and the service is currently enabled: calls `Disable` and records the action (for Revert).
-3. Returns `Changed: true`.
 
 ---
 
-## Revert Behavior
+## Effects
 
-- If Apply disabled the service: calls `Enable`.
-- Calls `Start` to restore the service to a running state.
-- Returns `Changed: true`.
+### Check
 
----
+Reports a change when the service is running. When `enable: false` is declared, it also reports a stopped-but-still-enabled unit as drift (it would resurrect at the next boot); an unset or true enable never compares boot state.
 
-## Details Returned
+### Apply
 
-| Key | Description |
-|---|---|
-| `service` | The service name |
-| `manager` | The service manager name (e.g., `"systemd"`) |
+Stops the service if it is running. When `enable: false` is declared and the unit is still enabled, it also disables it at boot. An already stopped-and-converged service is a clean no-op. Reports the service manager in its details.
+
+### Revert
+
+Undoes only the actions this run's Apply recorded: it re-enables a unit it disabled and restarts one it stopped. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never starts the very service the state declares dead.
+
 
 ---
 
 ## Examples
 
-### Stop a service (leave boot configuration unchanged)
+### Stop a service, leave boot state alone
+
+With enable unset, only the running state is managed.
 
 ```yaml
 apache2:
   service.dead: []
 ```
 
-### Stop and disable a service at boot
+### Stop and disable at boot
+
+enable: false is service.dead's inversion — it also disables the unit so it does not resurrect on reboot.
 
 ```yaml
 apache2:
@@ -68,25 +71,47 @@ apache2:
     - enable: false
 ```
 
-### Stop a conflicting service before starting another
+### Stop a conflicting service before starting a replacement
+
+require_in orders this service.dead ahead of the replacement's service.running: apache2 is stopped and disabled at boot before nginx starts, so the two never contend for the same port.
 
 ```yaml
 apache2:
   service.dead:
     - enable: false
-
-nginx:
-  service.running:
-    - enable: true
-    - require:
-      - service.dead:apache2
+    - require_in:
+      - "service.running:nginx"
 ```
 
-### Explicit name
+### Stop a service ad hoc
 
-```yaml
-disable-telnet:
-  service.dead:
-    - name: telnet
-    - enable: false
+The bare positional argument is the service name.
+
+```bash
+zester '*' service.dead apache2
 ```
+
+
+---
+
+## Notes
+
+> **Inverted enable default**
+>
+> Unlike service.running, service.dead leaves boot enablement alone by default. Only an explicit enable: false disables the unit at boot.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [service.running](/docs/guides/modules/service-running)
+- [service.enabled](/docs/guides/modules/service-enabled)
