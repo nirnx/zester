@@ -1,0 +1,145 @@
+module: pkg.removed
+# Permanent differential contract for the pkg.removed migration (pilot #1).
+# These cases were approved by the legacy-vs-new equivalence comparison while the
+# legacy constructor still existed; after its deletion RunContract replays them as
+# the permanent regression guard. Accepting cases pin the decoded Package
+# projection; rejecting cases pin the error kind. BD-tagged cases pin the flagged
+# behavioral difference (§11 BD-6): a non-string `name` is now coerced (scalar) or
+# rejected (composite) instead of legacy's silent fallback to the state ID.
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+    want:
+      Package: nginx
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: nginx
+    want:
+      Package: nginx
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: nginx
+    want:
+      Package: nginx
+
+  # --- parity: no name key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: nginx
+    input: {}
+    want:
+      Package: nginx
+  - label: primary-fallback-cli
+    universe: cli
+    id: nginx
+    input: {}
+    want:
+      Package: nginx
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1 amendment,
+  # matching the legacy `if x == "" { x = id }` idiom — NOT a BD divergence) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: nginx
+    input:
+      name: ""
+    want:
+      Package: nginx
+  - label: empty-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: nginx
+    input:
+      name: ""
+    want:
+      Package: nginx
+  - label: empty-name-falls-back-to-id-cli
+    universe: cli
+    id: nginx
+    input:
+      name: ""
+    want:
+      Package: nginx
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent for the param
+  # and falls back to the state ID (§2.1 amendment — NOT a BD divergence). Nil has
+  # no faithful CLI spelling, so only the yaml/msgpack legs are pinned. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: nginx
+    input:
+      name:
+    want:
+      Package: nginx
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: nginx
+    input:
+      name:
+    want:
+      Package: nginx
+
+  # --- parity: an ignored reserved/unknown key does not break the decode ---
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+      require:
+        - cmd.run:stop
+    want:
+      Package: nginx
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Package: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Package: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy; it pins
+  # the CLI behavior alongside the divergent YAML/msgpack legs.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      Package: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type

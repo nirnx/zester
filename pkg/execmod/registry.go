@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 // Func is a single remote-execution function. It receives the request context,
@@ -29,15 +30,23 @@ var ErrUnknownFunction = fmt.Errorf("execmod: unknown function")
 
 // Registry maps remote-execution function names (e.g. "pkg.version") to their
 // implementations. It is safe for concurrent use.
+//
+// A function may additionally register a modschema.Spec (RegisterSpec) — its
+// compiled parameter schema plus documentation metadata — which powers Describe
+// and SpecNames alongside the plain Call path.
 type Registry struct {
 	mu    sync.RWMutex
 	funcs map[string]Func
+	specs map[string]*modschema.Spec
 }
 
 // NewRegistry returns an empty Registry. Use DefaultRegistry for the built-in
 // starter set.
 func NewRegistry() *Registry {
-	return &Registry{funcs: make(map[string]Func)}
+	return &Registry{
+		funcs: make(map[string]Func),
+		specs: make(map[string]*modschema.Spec),
+	}
 }
 
 // Register adds or replaces the function registered under name. A nil fn is
