@@ -4,6 +4,108 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Added
+- **Generated JSON Schema artifact for module parameters**
+  (`website/public/schema/zester-modules.schema.json`, JSON Schema draft
+  2020-12) — machine-readable parameter schemas for every state module that
+  has a migrated self-documenting schema (`pkg.removed`, `service.running`,
+  and `service.dead`, the last two also contributing the shared `TriState`
+  semantic-type `$def`; a module without a schema is left unconstrained, so
+  the artifact grows automatically as more modules migrate, never breaking
+  existing consumers). Generated deterministically by the new
+  `cmd/zester-docgen` tool from the live module registries.
+
+### Changed
+- **`service.running` and `service.dead` migrated to the self-documenting
+  module-schema framework (semantic-type pilot).** Their `enable` parameter is
+  now a named semantic type, `paramtypes.TriState` — a three-valued
+  unset/true/false whose "declared" bit replaces the ad-hoc `Enable bool +
+  hasEnable bool` pair. Behavior is unchanged for every realistic YAML/msgpack
+  input: an omitted `enable` still leaves boot enablement untouched, `enable:
+  true` enables (and, on `service.running`, converges an enable-only drift
+  WITHOUT restarting a healthy service), and `enable: false` disables (the
+  inverted default that `service.dead` keys off). Both modules moved to their
+  own files (`service_running.go`, `service_dead.go`) per the per-module
+  file-naming convention, and their reference pages
+  (`service-running.mdx`, `service-dead.mdx`) are now generated from the
+  registered schema + documentation metadata — drift-corrected against the
+  live tri-state Check/Apply/Revert behavior. The permanent differential
+  contracts at `pkg/state/modules/testdata/contract/service.running.yaml` and
+  `service.dead.yaml` guard the decode behavior.
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** A CLI
+  `enable=<truthy/falsy string>` is now honored instead of silently dropped.
+  The CLI delivers every value as a string, so the legacy
+  `config["enable"].(bool)` assertion failed and left `enable` UNDECLARED —
+  `zester '*' service.running nginx enable=true` did not manage boot
+  enablement at all, and `zester '*' service.dead nginx enable=false` did not
+  disable the unit. Under TriState the string is coerced (the same
+  true/yes/1/on ∥ false/no/0/off set the framework uses), so the operator's
+  intent is now applied. This activates the §11 BD-2 class for both modules'
+  `enable`; pinned by the `enable-*-cli` contract fixtures.
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** As with
+  `pkg.removed`, the `name` parameter is now a compiled primary string: a
+  *non-string* `name` (for example `name: 123` in YAML/msgpack) is coerced to
+  its string form instead of silently falling back to the state ID, and a
+  *composite* `name` (a list/map) is now rejected with a typed error instead
+  of being silently ignored. This activates the §11 BD-6 class for both
+  modules; pinned by the `numeric-name-*` and `composite-name-*` contract
+  fixtures. (A wrong-typed `enable` integer belongs to BD-7 below.)
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** A `service.running` /
+  `service.dead` `enable` given as an INTEGER is now coerced explicitly: `1` is
+  declared-true and `0` is declared-false — across every signed/unsigned integer
+  kind, so a msgpack-delivered `enable` (which arrives as a sized kind such as
+  `int8`) is honored rather than silently ignored by the legacy `.(bool)`
+  assertion. ANY other integer (for example `2`) is rejected with a typed
+  `value_invalid` error rather than being dropped. The rule is documented on the
+  `TriState` semantic type — its `Doc()` (and thus the generated Parameter Types
+  section) states the 1/0 semantics explicitly, and its JSON Schema constrains the
+  integer form to `enum: [0, 1]` — and pinned across all three universes (YAML,
+  CLI, msgpack) at both the type level (the `TriState` `int-one` / `int-zero` /
+  `reject-two` type fixtures) and the module level (the `enable-int-one-*` /
+  `enable-int-zero-*` contract fixtures for `service.running` and
+  `service.dead`). Approved conditionally by the maintainer on 2026-07-12
+  (keystone spec §11).
+
+- **`pkg.removed`'s reference page is now generated**
+  (`website/content/docs/guides/modules/pkg-removed.mdx`), from its
+  registered schema and documentation metadata rather than hand-maintained.
+  All prior content is preserved (the apt/dnf/yum/brew package-manager list,
+  the dpkg `rc`-state convergence note) and reorganized under the new
+  Source/Parameters/Effects/Examples/Notes/Divergences page anatomy shared by
+  every future self-documenting module page.
+
+  This tranche (documentation infrastructure only) activates no new
+  behavioral differences itself — it introduces no Decode/coercion changes.
+  Sign-off status (keystone spec §11, 2026-07-12): **BD-2, BD-6, and BD-7 are
+  APPROVED**; BD-1/BD-3/BD-4/BD-5 remain pending and are presented for
+  sign-off in the Phase-1 PRs that activate them.
+
+- **`pkg.removed` migrated to the self-documenting module-schema framework
+  (pilot #1).** Its constructor now decodes through a single compiled schema
+  (`modschema.Spec`) plus registered documentation metadata, instead of a
+  hand-written `config["name"].(string)` extraction. Behavior is unchanged for
+  every realistic input (a string `name`, or none — falling back to the state
+  ID). The permanent differential contract at
+  `pkg/state/modules/testdata/contract/pkg.removed.yaml` guards this.
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** A *non-string*
+  `name` value is no longer silently dropped in favor of the state ID. Under the
+  uniform coercion framework a numeric `name` (for example `name: 123` in YAML or
+  over msgpack) is now coerced to its string form (`"123"`), and a *composite*
+  `name` (a list/map) is now rejected with a typed `wrong_type` error instead of
+  falling back to the ID. This activates the §11 BD-6 class ("wrong-typed values
+  are handled deterministically instead of a silent zero") for `pkg.removed`'s
+  `name` parameter; it is pinned by the contract fixtures (approved 2026-07-12).
+
 ## [0.5.0] - 2026-07-10
 
 ### Added
