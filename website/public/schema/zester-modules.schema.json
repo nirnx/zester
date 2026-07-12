@@ -1,0 +1,144 @@
+{
+  "$defs": {
+    "modules": {
+      "pkg.removed": {
+        "additionalProperties": true,
+        "description": "Ensure a system package is not installed.",
+        "properties": {
+          "name": {
+            "description": "package to remove (defaults to the state ID)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "service.dead": {
+        "additionalProperties": true,
+        "description": "Ensure a service is stopped, optionally disabling it at boot.",
+        "properties": {
+          "enable": {
+            "$ref": "#/$defs/semanticTypes/TriState",
+            "description": "boot-enablement intent: enable:false also disables the unit; unset or true leaves it alone"
+          },
+          "name": {
+            "description": "service unit name (defaults to the state ID)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "service.running": {
+        "additionalProperties": true,
+        "description": "Ensure a service is running, optionally managing its boot enablement.",
+        "properties": {
+          "enable": {
+            "$ref": "#/$defs/semanticTypes/TriState",
+            "description": "boot-enablement intent: unset leaves it alone, true enables, false disables"
+          },
+          "name": {
+            "description": "service unit name (defaults to the state ID)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "semanticTypes": {
+      "TriState": {
+        "description": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false.",
+        "oneOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "enum": [
+              "true",
+              "yes",
+              "1",
+              "on",
+              "false",
+              "no",
+              "0",
+              "off"
+            ],
+            "type": "string"
+          },
+          {
+            "enum": [
+              0,
+              1
+            ],
+            "type": "integer"
+          }
+        ]
+      }
+    }
+  },
+  "$id": "https://zester.cc/schema/zester-modules.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "maxProperties": 1,
+    "minProperties": 1,
+    "oneOf": [
+      {
+        "properties": {
+          "pkg.removed": {
+            "$ref": "#/$defs/modules/pkg.removed"
+          }
+        },
+        "required": [
+          "pkg.removed"
+        ]
+      },
+      {
+        "properties": {
+          "service.dead": {
+            "$ref": "#/$defs/modules/service.dead"
+          }
+        },
+        "required": [
+          "service.dead"
+        ]
+      },
+      {
+        "properties": {
+          "service.running": {
+            "$ref": "#/$defs/modules/service.running"
+          }
+        },
+        "required": [
+          "service.running"
+        ]
+      },
+      {
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "pkg.removed"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "service.dead"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "service.running"
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "type": "object"
+  },
+  "description": "A Zester state file (state ID -> exactly one module name -> parameters), generated from each module's self-documenting schema (keystone spec). Only migrated modules are constrained via $defs.modules; a module absent from it has no schema yet and is left unconstrained.",
+  "title": "Zester module parameters",
+  "type": "object"
+}

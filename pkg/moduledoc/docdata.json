@@ -1,0 +1,376 @@
+[
+  {
+    "Module": "pkg.removed",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a system package is not installed.",
+      "Description": "`pkg.removed` ensures the named package is absent from the target, removing it through the host's detected package manager (apt, dnf, yum, or brew). The package name defaults to the state ID, so a bare `pkg.removed` under an `nginx:` key removes `nginx`.",
+      "Effects": {
+        "Check": "Queries the package provider whether the named package is installed and needs a change only when it is. The provider's probe is status-aware, so a Debian package left in the config-files (\"rc\") state after removal reads as not installed and does not re-trigger removal.",
+        "Apply": "Removes the package through the detected package manager. Reports Changed with the package name and the manager in its details.",
+        "Revert": "Cannot restore the package: the version that was removed is not recorded and cannot be re-derived, so Revert is an explicit no-op rather than a guessed reinstall — reinstall explicitly with pkg.installed.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Remove a package by name",
+          "Kind": "state",
+          "Explanation": "The name parameter selects the package to remove.",
+          "Code": "remove-telnet:\n  pkg.removed:\n    - name: telnet\n"
+        },
+        {
+          "Title": "Remove a package ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the package name.",
+          "Code": "zester '*' pkg.removed nginx"
+        },
+        {
+          "Title": "Stop dependent services before removing",
+          "Kind": "state",
+          "Explanation": "Use require to ensure a dependent service is stopped before its package is removed.",
+          "Code": "remove-old-client:\n  pkg.removed:\n    - name: curl\n    - require:\n      - \"cmd.run:stop-service\"\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Revert does not reinstall",
+          "Body": "Because the removed version is never recorded, Revert cannot be Apply's inverse. It is an honest no-op; reinstall with pkg.installed."
+        },
+        {
+          "Level": "info",
+          "Title": "Stop dependent services first",
+          "Body": "Use `require` to ensure dependent services are stopped before removal."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "package to remove (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "service.dead",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a service is stopped, optionally disabling it at boot.",
+      "Description": "`service.dead` ensures the named service is stopped. The service name defaults to the state ID. Its `enable` parameter inverts service.running's default: omitting it (or `enable: true`) stops the service but leaves its boot enablement untouched, while `enable: false` ALSO disables it at boot — the common case for retiring a unit so it does not resurrect on the next reboot.",
+      "Effects": {
+        "Check": "Reports a change when the service is running. When `enable: false` is declared, it also reports a stopped-but-still-enabled unit as drift (it would resurrect at the next boot); an unset or true enable never compares boot state.",
+        "Apply": "Stops the service if it is running. When `enable: false` is declared and the unit is still enabled, it also disables it at boot. An already stopped-and-converged service is a clean no-op. Reports the service manager in its details.",
+        "Revert": "Undoes only the actions this run's Apply recorded: it re-enables a unit it disabled and restarts one it stopped. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never starts the very service the state declares dead.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Stop a service, leave boot state alone",
+          "Kind": "state",
+          "Explanation": "With enable unset, only the running state is managed.",
+          "Code": "apache2:\n  service.dead: []\n"
+        },
+        {
+          "Title": "Stop and disable at boot",
+          "Kind": "state",
+          "Explanation": "enable: false is service.dead's inversion — it also disables the unit so it does not resurrect on reboot.",
+          "Code": "apache2:\n  service.dead:\n    - enable: false\n"
+        },
+        {
+          "Title": "Stop a conflicting service before starting a replacement",
+          "Kind": "state",
+          "Explanation": "require_in orders this service.dead ahead of the replacement's service.running: apache2 is stopped and disabled at boot before nginx starts, so the two never contend for the same port.",
+          "Code": "apache2:\n  service.dead:\n    - enable: false\n    - require_in:\n      - \"service.running:nginx\"\n"
+        },
+        {
+          "Title": "Stop a service ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the service name.",
+          "Code": "zester '*' service.dead apache2"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Inverted enable default",
+          "Body": "Unlike service.running, service.dead leaves boot enablement alone by default. Only an explicit enable: false disables the unit at boot."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "service.running",
+        "service.enabled"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "service unit name (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "enable",
+        "Aliases": null,
+        "GoType": "paramtypes.TriState",
+        "SemanticType": "TriState",
+        "Usage": "boot-enablement intent: enable:false also disables the unit; unset or true leaves it alone",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "true",
+                "yes",
+                "1",
+                "on",
+                "false",
+                "no",
+                "0",
+                "off"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "TriState",
+        "Doc": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "true",
+                "yes",
+                "1",
+                "on",
+                "false",
+                "no",
+                "0",
+                "off"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "service.running",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a service is running, optionally managing its boot enablement.",
+      "Description": "`service.running` ensures the named service is started, and — when a watch requisite force-applies it — restarts it instead. The service name defaults to the state ID. The `enable` parameter is three-valued: omit it to leave the unit's boot enablement untouched, set `enable: true` to also enable it at boot, or `enable: false` to actively disable it. Converging an enable-only drift on an already-running service does NOT restart it.",
+      "Effects": {
+        "Check": "Reports a change when the service is not running. When `enable` is declared, it also compares boot enablement and reports drift (not-enabled under `enable: true`, or still-enabled under `enable: false`); an undeclared `enable` is never compared, so a running service never churns over boot state it does not manage.",
+        "Apply": "Converges the declared `enable` facet first (enabling or disabling at boot as declared). Then, if the service is not running, it starts it; if it is already running and only the enable facet drifted, it enables/disables WITHOUT restarting; otherwise (a watch-forced apply on a healthy service) it restarts. Reports the action taken and the service manager in its details.",
+        "Revert": "Undoes only the actions this run's Apply recorded: it re-disables a service it enabled, re-enables one it disabled, and stops one it started. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never stops a service it did not start.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Ensure a service is running",
+          "Kind": "state",
+          "Explanation": "The service name defaults to the state ID.",
+          "Code": "nginx:\n  service.running: []\n"
+        },
+        {
+          "Title": "Run and enable at boot",
+          "Kind": "state",
+          "Explanation": "enable: true also enables the unit at boot; an enable-only drift converges without restarting.",
+          "Code": "sshd:\n  service.running:\n    - enable: true\n"
+        },
+        {
+          "Title": "Restart on config change",
+          "Kind": "state",
+          "Explanation": "A watch requisite force-applies the state, which restarts (rather than starts) the running service.",
+          "Code": "nginx:\n  service.running:\n    - watch:\n      - \"file.managed:/etc/nginx/nginx.conf\"\n"
+        },
+        {
+          "Title": "Ensure running ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the service name.",
+          "Code": "zester '*' service.running nginx"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Enable-only drift does not restart",
+          "Body": "When a running service's only drift is boot enablement, Apply enables or disables it in place — it never restarts a healthy service just to fix boot state."
+        },
+        {
+          "Level": "info",
+          "Title": "enable is three-valued",
+          "Body": "Omitting enable leaves the unit's boot enablement untouched; enable: false actively disables it. This is the tri-state semantic — \"not specified\" is distinct from an explicit false."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "service.dead",
+        "service.enabled"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "service unit name (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "enable",
+        "Aliases": null,
+        "GoType": "paramtypes.TriState",
+        "SemanticType": "TriState",
+        "Usage": "boot-enablement intent: unset leaves it alone, true enables, false disables",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "true",
+                "yes",
+                "1",
+                "on",
+                "false",
+                "no",
+                "0",
+                "off"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "TriState",
+        "Doc": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "true",
+                "yes",
+                "1",
+                "on",
+                "false",
+                "no",
+                "0",
+                "off"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  }
+]

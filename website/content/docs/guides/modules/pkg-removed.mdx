@@ -1,26 +1,70 @@
 ---
 title: "pkg.removed"
-description: "Ensures that a system package is not installed. Inverse of pkg.installed."
+description: "Ensure a system package is not installed."
 ---
 
-Uses the same package provider as `pkg.installed` (apt, dnf, yum, brew), selected at peel startup based on OS family.
+{/* zester-docgen:managed module="pkg.removed" */}
+
+**Source**: `pkg/state/modules/pkg_removed.go`
+
+---
+
+`pkg.removed` ensures the named package is absent from the target, removing it through the host's detected package manager (apt, dnf, yum, or brew). The package name defaults to the state ID, so a bare `pkg.removed` under an `nginx:` key removes `nginx`.
 
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Name of the package to remove |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | package to remove (defaults to the state ID) |
 
-## Example
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Queries the package provider whether the named package is installed and needs a change only when it is. The provider's probe is status-aware, so a Debian package left in the config-files ("rc") state after removal reads as not installed and does not re-trigger removal.
+
+### Apply
+
+Removes the package through the detected package manager. Reports Changed with the package name and the manager in its details.
+
+### Revert
+
+Cannot restore the package: the version that was removed is not recorded and cannot be re-derived, so Revert is an explicit no-op rather than a guessed reinstall — reinstall explicitly with pkg.installed.
+
+
+---
+
+## Examples
+
+### Remove a package by name
+
+The name parameter selects the package to remove.
 
 ```yaml
-# Remove using the state ID as the package name.
-wget:
-  pkg.removed: []
+remove-telnet:
+  pkg.removed:
+    - name: telnet
+```
 
-# Remove using an explicit name.
+### Remove a package ad hoc
+
+The bare positional argument is the package name.
+
+```bash
+zester '*' pkg.removed nginx
+```
+
+### Stop dependent services before removing
+
+Use require to ensure a dependent service is stopped before its package is removed.
+
+```yaml
 remove-old-client:
   pkg.removed:
     - name: curl
@@ -28,17 +72,22 @@ remove-old-client:
       - "cmd.run:stop-service"
 ```
 
-## Behavior
 
-| Phase | Action |
-|-|-|
-| Check | `IsInstalled` — returns `NeedsChange: true` if the package is installed |
-| Apply | `Remove` — uninstalls the package via the package manager |
-| Revert | Clean no-op (`Changed: false`) — the removed version is not recorded and cannot be reconstructed |
+---
 
 ## Notes
 
-- Revert is an explicit no-op: nothing records which version was removed, so reinstalling would install whatever the repo's latest candidate happens to be — not the inverse of Apply. Reinstall explicitly with `pkg.installed` instead.
-- The module reports `NeedsChange: false` (already correct) when the package is not installed, making it safe to run repeatedly.
-- On Debian the installed-probe is dpkg-status-aware: a package in `rc` state (removed, conffiles remain — what `apt-get remove` leaves behind) counts as **not installed**, so the state converges after the first removal instead of reporting a change on every run.
-- Use `require` to ensure dependent services are stopped before removal.
+> **Revert does not reinstall**
+>
+> Because the removed version is never recorded, Revert cannot be Apply's inverse. It is an honest no-op; reinstall with pkg.installed.
+
+> **Stop dependent services first**
+>
+> Use `require` to ensure dependent services are stopped before removal.
+
+
+---
+
+## Divergences
+
+- BD-6
