@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 // Requisites holds the dependency declarations for a state.
@@ -54,12 +56,17 @@ func (r Requisites) AllDeps() []string {
 // It replaces the manual config["require"].([]any) boilerplate in modules.
 // Supports both Zester string format ("pkg.installed:nginx") and Salt-style
 // dict format ({"pkg": "nginx"} → "pkg.installed:nginx").
+//
+// The consumed key set IS requisiteKeys (see reserved.go): the keys are read
+// from that slice, positionally paired with the output fields it documents
+// (Require, Watch, OnChanges, OnFail). A drift between the slice and the
+// fields is caught by TestParseRequisites_ConsumesRequisiteKeys.
 func ParseRequisites(config map[string]any) Requisites {
 	var r Requisites
-	r.Require = parseReqList(config, "require")
-	r.Watch = parseReqList(config, "watch")
-	r.OnChanges = parseReqList(config, "onchanges")
-	r.OnFail = parseReqList(config, "onfail")
+	dests := [...]*[]string{&r.Require, &r.Watch, &r.OnChanges, &r.OnFail}
+	for i, key := range requisiteKeys {
+		*dests[i] = parseReqList(config, key)
+	}
 	return r
 }
 
@@ -191,9 +198,15 @@ type StateResult struct {
 // Registry is a thread-safe store for state constructors.
 // Modules register themselves at init time, and the runner uses the registry
 // to instantiate states from configuration data.
+//
+// A module may additionally register a modschema.Spec (RegisterSpec) — its
+// compiled parameter schema plus documentation metadata — which powers Describe,
+// SpecNames, and Parse alongside the plain Build path. Legacy and Starlark
+// modules keep using Register with no spec.
 type Registry struct {
 	mu       sync.RWMutex
 	builders map[string]Builder
+	specs    map[string]*modschema.Spec
 }
 
 // Builder constructs a State from a config map.
@@ -204,6 +217,7 @@ type Builder func(id string, config map[string]any) (State, error)
 func NewRegistry() *Registry {
 	return &Registry{
 		builders: make(map[string]Builder),
+		specs:    make(map[string]*modschema.Spec),
 	}
 }
 

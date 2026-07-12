@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/template"
@@ -172,7 +173,7 @@ func (c *Compiler) CompileMultiple(refs []StateRef) (*CompileResult, error) {
 			if names, ok := expandNames(cfg); ok {
 				for _, name := range names {
 					inst := cloneConfig(cfg)
-					delete(inst, "names")
+					delete(inst, namesKey)
 					inst["name"] = name
 					s, err := c.buildOne(module, name, inst)
 					if err != nil {
@@ -208,9 +209,28 @@ func (c *Compiler) buildOne(module, id string, cfg map[string]any) (state.State,
 	return state.WrapAttributes(s, attrs, c.config.Guards), nil
 }
 
+// namesKey is the `names:` expansion directive. It is DERIVED from
+// state.CompilerKeys() — the sole compiler directive that is neither an "_in"
+// inverse form nor a same-state alias source — so the key string lives only in
+// pkg/state/reserved.go. Pinned to "names" by TestCompilerConsumedKeysAreReserved.
+var namesKey = deriveNamesKey()
+
+func deriveNamesKey() string {
+	for _, k := range state.CompilerKeys() {
+		if strings.HasSuffix(k, inSuffix) {
+			continue
+		}
+		if _, isAlias := sameStateAlias[k]; isAlias {
+			continue
+		}
+		return k
+	}
+	return ""
+}
+
 // expandNames returns the `names:` list from a config map, if present.
 func expandNames(cfg map[string]any) ([]string, bool) {
-	v, ok := cfg["names"]
+	v, ok := cfg[namesKey]
 	if !ok {
 		return nil, false
 	}

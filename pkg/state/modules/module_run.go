@@ -93,17 +93,24 @@ func resolveModuleRunTarget(config map[string]any) (string, map[string]any, erro
 	return "", nil, fmt.Errorf("no target module: set `name:` or a `<module.func>:` key")
 }
 
-// isReservedStateKey reports whether a key is a generic state attribute or
-// requisite rather than a module target.
+// reservedModuleRunKeys is the set of config keys module.run treats as
+// directives (generic attributes, requisites, compiler directives) rather than
+// a target module. It is the fleet-wide reserved union (state.ReservedKeySet)
+// PLUS module.run's own local "name": "name" is a legitimate module parameter
+// elsewhere (hence excluded from ReservedKeySet), but here it is the classic
+// target selector and must never be mistaken for a "<module.func>:" key.
+var reservedModuleRunKeys = func() map[string]struct{} {
+	set := state.ReservedKeySet() // fresh copy; safe to extend locally
+	set["name"] = struct{}{}
+	return set
+}()
+
+// isReservedStateKey reports whether a key is a generic state attribute,
+// requisite, compiler directive, or module.run's "name" selector — i.e. not a
+// target module reference.
 func isReservedStateKey(k string) bool {
-	switch k {
-	case "require", "watch", "onchanges", "onfail", "prereq",
-		"require_in", "watch_in", "onchanges_in", "onfail_in", "prereq_in",
-		"listen", "listen_in", "onlyif", "unless", "order", "retry",
-		"failhard", "names", "name":
-		return true
-	}
-	return false
+	_, ok := reservedModuleRunKeys[k]
+	return ok
 }
 
 // Name returns the state identifier.
