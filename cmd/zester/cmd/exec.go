@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nirnx/zester/pkg/bus"
+	"github.com/nirnx/zester/pkg/cliargs"
 	"github.com/nirnx/zester/pkg/enroll"
 	"github.com/nirnx/zester/pkg/job"
 	"github.com/nirnx/zester/pkg/proto"
@@ -318,15 +319,15 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 			return "", nil, fmt.Errorf("cmd.run requires a command argument")
 		}
 		args["command"] = remaining[0]
-		parseKeyValues(remaining[1:], args)
+		cliargs.ParseKeyValues(remaining[1:], args)
 		return "ad-hoc", args, nil
 
 	case "test.ping":
-		parseKeyValues(remaining, args)
+		cliargs.ParseKeyValues(remaining, args)
 		return "ping", args, nil
 
 	case "facts.items":
-		parseKeyValues(remaining, args)
+		cliargs.ParseKeyValues(remaining, args)
 		return "items", args, nil
 
 	case "facts.get":
@@ -334,11 +335,11 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 			return "", nil, fmt.Errorf("facts.get requires a key argument")
 		}
 		args["key"] = remaining[0]
-		parseKeyValues(remaining[1:], args)
+		cliargs.ParseKeyValues(remaining[1:], args)
 		return remaining[0], args, nil
 
 	case "facts.keys":
-		parseKeyValues(remaining, args)
+		cliargs.ParseKeyValues(remaining, args)
 		return "keys", args, nil
 
 	case "facts.set":
@@ -347,11 +348,11 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		}
 		args["key"] = remaining[0]
 		args["value"] = remaining[1]
-		parseKeyValues(remaining[2:], args)
+		cliargs.ParseKeyValues(remaining[2:], args)
 		return remaining[0], args, nil
 
 	case "settings.items":
-		parseKeyValues(remaining, args)
+		cliargs.ParseKeyValues(remaining, args)
 		return "items", args, nil
 
 	case "settings.get":
@@ -359,11 +360,11 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 			return "", nil, fmt.Errorf("settings.get requires a key argument")
 		}
 		args["key"] = remaining[0]
-		parseKeyValues(remaining[1:], args)
+		cliargs.ParseKeyValues(remaining[1:], args)
 		return remaining[0], args, nil
 
 	case "settings.keys":
-		parseKeyValues(remaining, args)
+		cliargs.ParseKeyValues(remaining, args)
 		return "keys", args, nil
 
 	case "file.managed":
@@ -372,7 +373,7 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		}
 		path := remaining[0]
 		args["path"] = path
-		parseKeyValues(remaining[1:], args)
+		cliargs.ParseKeyValues(remaining[1:], args)
 		return path, args, nil
 
 	case "pkg.installed":
@@ -381,7 +382,7 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		}
 		name := remaining[0]
 		args["name"] = name
-		parseKeyValues(remaining[1:], args)
+		cliargs.ParseKeyValues(remaining[1:], args)
 		return name, args, nil
 
 	case "state.apply":
@@ -390,11 +391,11 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		}
 		state := remaining[0]
 		args["state"] = state
-		parseKeyValues(remaining[1:], args)
+		cliargs.ParseKeyValues(remaining[1:], args)
 		return state, args, nil
 
 	case "state.highstate":
-		parseKeyValues(remaining, args)
+		cliargs.ParseKeyValues(remaining, args)
 		return "highstate", args, nil
 
 	default:
@@ -402,17 +403,8 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		id := "ad-hoc"
 		if len(remaining) > 0 {
 			id = remaining[0]
-			parseKeyValues(remaining[1:], args)
+			cliargs.ParseKeyValues(remaining[1:], args)
 		}
 		return id, args, nil
-	}
-}
-
-// parseKeyValues parses key=value pairs from a slice and adds them to the args map.
-func parseKeyValues(pairs []string, args map[string]any) {
-	for _, pair := range pairs {
-		if k, v, ok := strings.Cut(pair, "="); ok {
-			args[k] = v
-		}
 	}
 }

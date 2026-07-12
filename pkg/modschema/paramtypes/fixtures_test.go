@@ -1,0 +1,121 @@
+package paramtypes_test
+
+// This is the ONE external-test file that carries the semantic-type fixture DATA
+// (spec §3). typeFixtures maps each type's Name() to its differential fixtures;
+// the conformance test pins keys(typeFixtures) == names(All()) so a new sealed
+// type cannot ship without fixtures, and TestTypeFixtures runs the full YAML /
+// auto-msgpack / CLI matrix for every type. It lives in package paramtypes_test
+// (external) because it imports schematest, which imports paramtypes — an internal
+// test would be an import cycle.
+
+import (
+	"io/fs"
+	"reflect"
+	"sort"
+	"testing"
+
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/paramtypes"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+)
+
+var typeFixtures = map[string][]schematest.TypeFixture{
+	"FileMode": {
+		// The octal-int case is the reproduced BD-1 shape: YAML `0644` parses to
+		// the integer 420, whose msgpack shadow is uint16(420); both must resolve
+		// to mode 0644. The CLI spells the same mode as the octal string "644".
+		{Label: "octal-int-644", YAML: 420, CLI: "644", Want: paramtypes.NewFileMode(0o644)},
+		{Label: "octal-string-0644", YAML: "0644", CLI: "0644", Want: paramtypes.NewFileMode(0o644)},
+		// "4755" (octal) = decimal 2541 = setuid + rwxr-xr-x. yaml.v3 quotes the
+		// numeric-looking string, so it stays a string through every leg.
+		{Label: "setuid-4755", YAML: "4755", CLI: "4755", Want: paramtypes.NewFileMode(0o755 | fs.ModeSetuid)},
+		{Label: "reject-nonoctal-string", YAML: "999", CLI: "999", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		{Label: "reject-out-of-range-int", YAML: 5000, CLISkip: true, CLISkipReason: "an out-of-range integer mode has no equivalent octal CLI string", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		{Label: "reject-list", YAML: []any{7, 5, 5}, CLISkip: true, CLISkipReason: "a list is not a file mode", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+	},
+	"TriState": {
+		{Label: "bool-true", YAML: true, CLI: "true", Want: paramtypes.NewTriState(true)},
+		{Label: "bool-false", YAML: false, CLI: "false", Want: paramtypes.NewTriState(false)},
+		{Label: "string-yes", YAML: "yes", CLI: "yes", Want: paramtypes.NewTriState(true)},
+		{Label: "int-one", YAML: 1, CLI: "1", Want: paramtypes.NewTriState(true)},
+		{Label: "int-zero", YAML: 0, CLI: "0", Want: paramtypes.NewTriState(false)},
+		{Label: "reject-two", YAML: 2, CLI: "2", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		{Label: "reject-word", YAML: "maybe", CLI: "maybe", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+	},
+	"GroupRef": {
+		// BD-4: an all-digit string resolves to the same numeric GID as the integer.
+		{Label: "int-gid", YAML: 1000, CLI: "1000", Want: paramtypes.NewGroupRefGID(1000)},
+		{Label: "name", YAML: "wheel", CLI: "wheel", Want: paramtypes.NewGroupRefName("wheel")},
+		{Label: "reject-bool", YAML: true, CLISkip: true, CLISkipReason: "a bool is not a group; its CLI string \"true\" is a valid group name", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+	},
+	"TemplateFlag": {
+		{Label: "bool-true", YAML: true, CLI: "true", Want: paramtypes.NewTemplateFlag(true)},
+		{Label: "bool-false", YAML: false, CLI: "false", Want: paramtypes.NewTemplateFlag(false)},
+		{Label: "jinja", YAML: "jinja", CLI: "jinja", Want: paramtypes.NewTemplateFlag(true)},
+		// BD-2: a truthy string enables rendering (the legacy `== "jinja"` dropped it).
+		{Label: "truthy-string", YAML: "yes", CLI: "yes", Want: paramtypes.NewTemplateFlag(true)},
+		{Label: "reject-number", YAML: 5, CLI: "5", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+	},
+	"StringList": {
+		{Label: "single-string", YAML: "nginx", CLI: "nginx", Want: paramtypes.StringList{"nginx"}},
+		{Label: "list-of-strings", YAML: []any{"a", "b"}, CLISkip: true, CLISkipReason: "a multi-element list is not a single CLI value", Want: paramtypes.StringList{"a", "b"}},
+		// BD-5 companion: scalars are stringified rather than dropped.
+		{Label: "mixed-scalars", YAML: []any{"a", 2, true}, CLISkip: true, CLISkipReason: "a list is not a single CLI value", Want: paramtypes.StringList{"a", "2", "true"}},
+		// BD-5: a nested element is a hard error, not a silent drop.
+		{Label: "reject-nested", YAML: []any{"a", []any{"b"}}, CLISkip: true, CLISkipReason: "a nested list is not CLI-expressible", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+	},
+	"StringMap": {
+		{Label: "scalar-values", YAML: map[string]any{"a": 1, "b": "two"}, CLISkip: true, CLISkipReason: "a map is not a single CLI key=value argument", Want: paramtypes.StringMap{"a": "1", "b": "two"}},
+		{Label: "reject-composite-value", YAML: map[string]any{"a": []any{"x"}}, CLISkip: true, CLISkipReason: "a map is not CLI-expressible", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+	},
+}
+
+// TestParamtypesConformance pins the seal walls: exactly VocabularySize types,
+// unique names and Go types, and complete fixture coverage.
+func TestParamtypesConformance(t *testing.T) {
+	all := paramtypes.All()
+	if len(all) != paramtypes.VocabularySize {
+		t.Fatalf("All() returned %d types, want VocabularySize=%d", len(all), paramtypes.VocabularySize)
+	}
+
+	seenName := map[string]bool{}
+	seenType := map[reflect.Type]bool{}
+	var names []string
+	for _, st := range all {
+		if seenName[st.Name()] {
+			t.Errorf("duplicate semantic-type Name %q", st.Name())
+		}
+		seenName[st.Name()] = true
+		if seenType[st.GoType()] {
+			t.Errorf("duplicate semantic-type GoType %s (name %q)", st.GoType(), st.Name())
+		}
+		seenType[st.GoType()] = true
+		names = append(names, st.Name())
+	}
+	sort.Strings(names)
+
+	var fxKeys []string
+	for k := range typeFixtures {
+		fxKeys = append(fxKeys, k)
+	}
+	sort.Strings(fxKeys)
+
+	if !reflect.DeepEqual(fxKeys, names) {
+		t.Fatalf("fixture keys %v != registered type names %v", fxKeys, names)
+	}
+}
+
+// TestTypeFixtures runs the full differential matrix (YAML, auto-derived msgpack,
+// CLI) for every registered semantic type.
+func TestTypeFixtures(t *testing.T) {
+	for _, st := range paramtypes.All() {
+		st := st
+		fx, ok := typeFixtures[st.Name()]
+		if !ok {
+			t.Fatalf("no fixtures for type %q", st.Name())
+		}
+		t.Run(st.Name(), func(t *testing.T) {
+			schematest.RunTypeFixtures(t, st, fx)
+		})
+	}
+}

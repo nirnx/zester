@@ -1,0 +1,34 @@
+module: toymod
+cases:
+  - label: strings-yaml
+    universe: yaml
+    id: web
+    input:
+      path: /etc/nginx.conf
+    want:
+      Name: web
+      Path: /etc/nginx.conf
+  - label: count-msgpack-sized-int
+    universe: msgpack
+    id: web
+    bd: BD-1
+    input:
+      name: web
+      count: 3
+    want:
+      Name: web
+      Count: 3
+  - label: count-cli-string
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: web
+      count: 7
+    want:
+      Count: 7
+  - label: bad-count-value-invalid
+    universe: yaml
+    input:
+      count: notanumber
+    want_error: value_invalid
