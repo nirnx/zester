@@ -32,6 +32,11 @@ func (t TemplateFlag) Declared() bool { return t.declared }
 // Enabled reports whether template rendering is requested.
 func (t TemplateFlag) Enabled() bool { return t.enabled }
 
+// TemplateFlagStringPattern is the JSON-Schema regex for the exact string set
+// TemplateFlag.Decode accepts: "jinja" in any casing, or a boolish word, both
+// whitespace-trimmed (EqualFold/TrimSpace + parseBoolishString semantics).
+const TemplateFlagStringPattern = `^\s*([jJ][iI][nN][jJ][aA]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\s*$`
+
 // templateFlagType is the sealed SemanticType descriptor for TemplateFlag.
 type templateFlagType struct{}
 
@@ -43,10 +48,13 @@ func (templateFlagType) Doc() string {
 		"with Jinja, so any enabling value means \"render with Jinja\"."
 }
 func (templateFlagType) JSONSchema() map[string]any {
+	// The string arm mirrors Decode exactly: "jinja" (any casing, trimmed) or
+	// a boolish word; an unconstrained string accepted runtime-invalid values
+	// like "mako" (review finding).
 	return map[string]any{
-		"oneOf": []any{
+		"anyOf": []any{
 			map[string]any{"type": "boolean"},
-			map[string]any{"type": "string"},
+			map[string]any{"type": "string", "pattern": TemplateFlagStringPattern},
 		},
 	}
 }

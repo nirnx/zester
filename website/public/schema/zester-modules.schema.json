@@ -5,6 +5,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "source": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "source"
               ]
@@ -173,6 +183,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "command": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "command"
               ]
@@ -234,6 +254,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "command": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "command"
               ]
@@ -521,6 +551,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "regex": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "regex"
               ]
@@ -582,6 +622,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "source": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "source"
               ]
@@ -1156,6 +1206,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "pattern": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "pattern"
               ]
@@ -1400,6 +1460,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "regex": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "regex"
               ]
@@ -1461,6 +1531,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "url": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "url"
               ]
@@ -1567,6 +1647,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "target": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "target"
               ]
@@ -1790,6 +1880,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "ip": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "ip"
               ]
@@ -1884,6 +1984,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "device": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "device"
               ]
@@ -2579,6 +2689,16 @@
         "allOf": [
           {
             "contains": {
+              "properties": {
+                "value": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
               "required": [
                 "value"
               ]
@@ -3079,64 +3199,65 @@
         ]
       },
       "StringList": {
-        "description": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
-        "oneOf": [
+        "anyOf": [
           {
             "type": "string"
           },
           {
             "items": {
-              "type": [
-                "string",
-                "integer",
-                "number",
-                "boolean"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
               ]
             },
             "type": "array"
           }
-        ]
+        ],
+        "description": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped."
       },
       "StringMap": {
         "additionalProperties": {
-          "type": [
-            "string",
-            "integer",
-            "number",
-            "boolean"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
           ]
         },
         "description": "A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.",
         "type": "object"
       },
       "TemplateFlag": {
-        "description": "A template-rendering flag. Accepts a bool, the string \"jinja\", or any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders with Jinja, so any enabling value means \"render with Jinja\".",
-        "oneOf": [
+        "anyOf": [
           {
             "type": "boolean"
           },
           {
+            "pattern": "^\\s*([jJ][iI][nN][jJ][aA]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
             "type": "string"
           }
-        ]
+        ],
+        "description": "A template-rendering flag. Accepts a bool, the string \"jinja\", or any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders with Jinja, so any enabling value means \"render with Jinja\"."
       },
       "TriState": {
-        "description": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false.",
-        "oneOf": [
+        "anyOf": [
           {
             "type": "boolean"
           },
           {
-            "enum": [
-              "true",
-              "yes",
-              "1",
-              "on",
-              "false",
-              "no",
-              "0",
-              "off"
-            ],
+            "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
             "type": "string"
           },
           {
@@ -3146,7 +3267,8 @@
             ],
             "type": "integer"
           }
-        ]
+        ],
+        "description": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false."
       }
     }
   },

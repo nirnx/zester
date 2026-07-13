@@ -33,6 +33,9 @@ func TestSchemaAcceptsEveryRuntimeValidPrimitiveRepresentation(t *testing.T) {
 		{"flag": "true"}, {"flag": " TRUE "}, {"flag": "Off"}, {"flag": "  no\t"},
 		{"count": 5}, {"count": 5.0}, {"count": "-42"}, {"count": " 42 "},
 		{"ratio": 1.5}, {"ratio": 3}, {"ratio": " 2.5 "}, {"ratio": "1e3"},
+		// strconv.ParseFloat forms (review round 3): trailing dot, hex float,
+		// underscore separators.
+		{"ratio": "1."}, {"ratio": "0x1p2"}, {"ratio": "1_0.5"}, {"ratio": ".5"},
 		{"label": "x"}, {"label": 12345}, {"label": true},
 	}
 	for _, params := range accept {
@@ -46,6 +49,8 @@ func TestSchemaAcceptsEveryRuntimeValidPrimitiveRepresentation(t *testing.T) {
 		{"flag": 2}, {"flag": "banana"},
 		{"count": "0x1f"}, {"count": 1.5}, {"count": []any{1}},
 		{"ratio": "not-a-number"},
+		// floatValue rejects non-finite results even though ParseFloat parses them.
+		{"ratio": "inf"}, {"ratio": "NaN"},
 		{"label": []any{"a"}},
 	}
 	for _, params := range reject {

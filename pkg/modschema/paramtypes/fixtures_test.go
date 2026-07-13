@@ -39,6 +39,10 @@ var typeFixtures = map[string][]schematest.TypeFixture{
 		{Label: "bool-true", YAML: true, CLI: "true", Want: paramtypes.NewTriState(true)},
 		{Label: "bool-false", YAML: false, CLI: "false", Want: paramtypes.NewTriState(false)},
 		{Label: "string-yes", YAML: "yes", CLI: "yes", Want: paramtypes.NewTriState(true)},
+		// Decode lowercases + trims (parseBoolishString): any casing and
+		// surrounding whitespace are valid — and the schema's shared boolish
+		// pattern must agree (review round 3).
+		{Label: "string-upper-trimmed", YAML: " TRUE ", CLI: " TRUE ", Want: paramtypes.NewTriState(true)},
 		{Label: "int-one", YAML: 1, CLI: "1", Want: paramtypes.NewTriState(true)},
 		{Label: "int-zero", YAML: 0, CLI: "0", Want: paramtypes.NewTriState(false)},
 		{Label: "reject-two", YAML: 2, CLI: "2", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
@@ -65,6 +69,12 @@ var typeFixtures = map[string][]schematest.TypeFixture{
 		{Label: "jinja", YAML: "jinja", CLI: "jinja", Want: paramtypes.NewTemplateFlag(true)},
 		// BD-2: a truthy string enables rendering (the legacy `== "jinja"` dropped it).
 		{Label: "truthy-string", YAML: "yes", CLI: "yes", Want: paramtypes.NewTemplateFlag(true)},
+		// "jinja" matches case-insensitively and trimmed (EqualFold/TrimSpace).
+		{Label: "jinja-upper-trimmed", YAML: " JINJA ", CLI: " JINJA ", Want: paramtypes.NewTemplateFlag(true)},
+		// A non-jinja, non-boolish string is a hard error — and with the
+		// pattern-constrained string arm the schema now rejects it too
+		// (review round 3: the unconstrained arm accepted "mako").
+		{Label: "reject-mako", YAML: "mako", CLI: "mako", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
 		{Label: "reject-number", YAML: 5, CLI: "5", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
 		// EMPTY-STRING RULE (§3): "" decodes to the undeclared zero value, not an error.
 		{Label: "empty-string-undeclared", YAML: "", CLISkip: true, CLISkipReason: emptyStringCLISkip, Want: paramtypes.TemplateFlag{}},

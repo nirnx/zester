@@ -8,11 +8,34 @@ import (
 	"sort"
 
 	"github.com/nirnx/zester/pkg/modschema"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // schemaID is the artifact's canonical $id, matching the site domain (see
 // docs-fumadocs-migration memory: https://zester.cc).
 const schemaID = "https://zester.cc/schema/zester-modules.schema.json"
+
+// compileArtifactSchema compiles the rendered artifact bytes into a validator.
+// docgen uses it to exercise every self-contained state example against the
+// ARTIFACT ITSELF (not only the compiled plan): the plan-only check let two
+// rounds of artifact-shape bugs ship (object-form module values, the oneOf
+// integer trap) because the generated schema was never executed at build time
+// (review finding).
+func compileArtifactSchema(raw []byte) (*jsonschema.Schema, error) {
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("docgen: parse schema artifact: %w", err)
+	}
+	c := jsonschema.NewCompiler()
+	if err := c.AddResource(schemaID, doc); err != nil {
+		return nil, fmt.Errorf("docgen: add schema resource: %w", err)
+	}
+	sch, err := c.Compile(schemaID)
+	if err != nil {
+		return nil, fmt.Errorf("docgen: compile schema artifact: %w", err)
+	}
+	return sch, nil
+}
 
 // renderModuleSchemaArtifact renders the ONE combined JSON Schema artifact
 // (§8, draft 2020-12) for every module in infos (already filtered to
@@ -153,8 +176,17 @@ func moduleParamSchema(mi modschema.ModuleInfo) map[string]any {
 		sort.Strings(required)
 		conts := make([]any, 0, len(required))
 		for _, name := range required {
+			// Key presence alone is not enough: the runtime treats an
+			// empty-string or null value as ABSENT (source fall-through /
+			// YAML-null rules), so a required param with source: "" still
+			// missing-required errors — the schema must agree (review finding).
 			conts = append(conts, map[string]any{
-				"contains": map[string]any{"required": []string{name}},
+				"contains": map[string]any{
+					"required": []string{name},
+					"properties": map[string]any{
+						name: map[string]any{"not": map[string]any{"enum": []any{"", nil}}},
+					},
+				},
 			})
 		}
 		def["allOf"] = conts

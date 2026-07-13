@@ -56,6 +56,15 @@ func parseBoolish(raw any) (bool, error) {
 }
 
 // parseBoolishString applies the boolean string set to a single string.
+// BoolishStringPattern is the JSON-Schema (ECMA) regex for the EXACT set of
+// strings parseBoolishString accepts: the truthy/falsy words in any casing,
+// surrounded by optional whitespace (ToLower + TrimSpace semantics — ECMA
+// regex in JSON Schema has no reliable inline case flag, so the classes are
+// spelled out). Shared by TriState, TemplateFlag, and the framework's
+// primitive bool fragment so the three schema surfaces cannot drift from the
+// one decoder.
+const BoolishStringPattern = `^\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\s*$`
+
 func parseBoolishString(s string) (bool, error) {
 	low := strings.ToLower(strings.TrimSpace(s))
 	if truthyStrings[low] {

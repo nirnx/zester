@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/nirnx/zester/pkg/cliargs"
 	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,7 +40,7 @@ type exampleSkip struct {
 // (canonical name + aliases) that decode into a sensitive parameter (F2, §8:
 // "Sensitive params never appear in examples or rendered defaults") — build
 // it via sensitiveExampleKeys(mi.Params).
-func validateModuleExamples(reg *state.Registry, module string, examples []modschema.Example, sensitive map[string]struct{}) ([]exampleSkip, error) {
+func validateModuleExamples(reg *state.Registry, artifact *jsonschema.Schema, module string, examples []modschema.Example, sensitive map[string]struct{}) ([]exampleSkip, error) {
 	var skips []exampleSkip
 	for _, ex := range examples {
 		if ex.Kind == "cli" {
@@ -67,6 +69,21 @@ func validateModuleExamples(reg *state.Registry, module string, examples []modsc
 
 		if _, err := reg.Parse(module, id, params); err != nil {
 			return nil, fmt.Errorf("docgen: module %s: example %q does not decode against its own schema: %w", module, ex.Title, err)
+		}
+
+		// The example must ALSO validate against the EMITTED artifact, not
+		// only the compiled plan: the artifact is what editors consume, and
+		// exercising it here is what catches artifact-shape regressions the
+		// plan cannot see (review finding: two rounds of shape bugs shipped
+		// because generated examples never touched the generated schema).
+		if artifact != nil {
+			inst, err := exampleJSONInstance(ex.Code)
+			if err != nil {
+				return nil, fmt.Errorf("docgen: module %s: example %q: %w", module, ex.Title, err)
+			}
+			if err := artifact.Validate(inst); err != nil {
+				return nil, fmt.Errorf("docgen: module %s: example %q is rejected by the generated JSON Schema artifact: %w", module, ex.Title, err)
+			}
 		}
 
 		if hasRequisiteKeys(params) {
@@ -250,4 +267,23 @@ func hasRequisiteKeys(params map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// exampleJSONInstance parses a state example's YAML and round-trips it through
+// JSON so the schema validator sees exactly the value shapes an editor's JSON
+// Schema engine sees.
+func exampleJSONInstance(code string) (any, error) {
+	var doc any
+	if err := yaml.Unmarshal([]byte(code), &doc); err != nil {
+		return nil, fmt.Errorf("parse example YAML: %w", err)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("encode example for schema validation: %w", err)
+	}
+	var inst any
+	if err := json.Unmarshal(raw, &inst); err != nil {
+		return nil, err
+	}
+	return inst, nil
 }

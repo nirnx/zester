@@ -344,17 +344,22 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -402,11 +407,16 @@
         "Default": "",
         "JSONSchema": {
           "additionalProperties": {
-            "type": [
-              "string",
-              "integer",
-              "number",
-              "boolean"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
             ]
           },
           "type": "object"
@@ -444,17 +454,22 @@
         "Name": "StringList",
         "Doc": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -467,11 +482,16 @@
         "Doc": "A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.",
         "JSONSchema": {
           "additionalProperties": {
-            "type": [
-              "string",
-              "integer",
-              "number",
-              "boolean"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
             ]
           },
           "type": "object"
@@ -1256,17 +1276,22 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -1280,17 +1305,22 @@
         "Name": "StringList",
         "Doc": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -2223,11 +2253,16 @@
         "Default": "",
         "JSONSchema": {
           "additionalProperties": {
-            "type": [
-              "string",
-              "integer",
-              "number",
-              "boolean"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
             ]
           },
           "type": "object"
@@ -2247,11 +2282,16 @@
         "Default": "",
         "JSONSchema": {
           "additionalProperties": {
-            "type": [
-              "string",
-              "integer",
-              "number",
-              "boolean"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
             ]
           },
           "type": "object"
@@ -2316,11 +2356,16 @@
         "Doc": "A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.",
         "JSONSchema": {
           "additionalProperties": {
-            "type": [
-              "string",
-              "integer",
-              "number",
-              "boolean"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
             ]
           },
           "type": "object"
@@ -2741,11 +2786,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
             {
+              "pattern": "^\\s*([jJ][iI][nN][jJ][aA]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -2897,11 +2943,12 @@
         "Name": "TemplateFlag",
         "Doc": "A template-rendering flag. Accepts a bool, the string \"jinja\", or any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders with Jinja, so any enabling value means \"render with Jinja\".",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
             {
+              "pattern": "^\\s*([jJ][iI][nN][jJ][aA]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -4683,17 +4730,22 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -4714,17 +4766,22 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -4745,17 +4802,22 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -4769,17 +4831,22 @@
         "Name": "StringList",
         "Doc": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -6634,21 +6701,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
             {
-              "enum": [
-                "true",
-                "yes",
-                "1",
-                "on",
-                "false",
-                "no",
-                "0",
-                "off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             },
             {
@@ -6667,21 +6725,12 @@
         "Name": "TriState",
         "Doc": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
             {
-              "enum": [
-                "true",
-                "yes",
-                "1",
-                "on",
-                "false",
-                "no",
-                "0",
-                "off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             },
             {
@@ -6937,21 +6986,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
             {
-              "enum": [
-                "true",
-                "yes",
-                "1",
-                "on",
-                "false",
-                "no",
-                "0",
-                "off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             },
             {
@@ -6970,21 +7010,12 @@
         "Name": "TriState",
         "Doc": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
             {
-              "enum": [
-                "true",
-                "yes",
-                "1",
-                "on",
-                "false",
-                "no",
-                "0",
-                "off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             },
             {
@@ -8835,17 +8866,22 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -8866,17 +8902,22 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"
@@ -9104,17 +9145,22 @@
         "Name": "StringList",
         "Doc": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
             {
               "items": {
-                "type": [
-                  "string",
-                  "integer",
-                  "number",
-                  "boolean"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "type": "array"

@@ -112,8 +112,20 @@ func run(root string, claimed map[string]bool) error {
 	}
 
 	// Example/SeeAlso validation (§8) before writing anything.
+	// Render + compile the artifact BEFORE example validation so every
+	// self-contained state example is exercised against the schema editors
+	// will actually consume (review finding).
+	schemaJSON, err := renderModuleSchemaArtifact(stateSpecd)
+	if err != nil {
+		return err
+	}
+	artifactSchema, err := compileArtifactSchema(schemaJSON)
+	if err != nil {
+		return err
+	}
+
 	for _, mi := range stateSpecd {
-		skips, err := validateModuleExamples(reg, mi.Module, mi.Doc.Examples, sensitiveExampleKeys(mi.Params))
+		skips, err := validateModuleExamples(reg, artifactSchema, mi.Module, mi.Doc.Examples, sensitiveExampleKeys(mi.Params))
 		if err != nil {
 			return err
 		}
@@ -178,10 +190,7 @@ func run(root string, claimed map[string]bool) error {
 
 	// Combined JSON Schema artifact (state-file schema): gated on spec presence,
 	// STATE modules only (execution functions have no state-file representation).
-	schemaJSON, err := renderModuleSchemaArtifact(stateSpecd)
-	if err != nil {
-		return err
-	}
+	// schemaJSON was rendered above (and exercised by example validation).
 	schemaDir := filepath.Join(root, "website", "public", "schema")
 	if err := os.MkdirAll(schemaDir, 0755); err != nil {
 		return fmt.Errorf("docgen: mkdir %s: %w", schemaDir, err)

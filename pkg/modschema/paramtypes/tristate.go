@@ -55,13 +55,13 @@ func (triStateType) Doc() string {
 		"state lets a module tell \"not specified\" apart from an explicit false."
 }
 func (triStateType) JSONSchema() map[string]any {
+	// anyOf (representation union); the string arm is the SHARED boolish
+	// pattern: Decode lowercases and trims, so " TRUE " is valid and the
+	// schema must agree (review finding).
 	return map[string]any{
-		"oneOf": []any{
+		"anyOf": []any{
 			map[string]any{"type": "boolean"},
-			map[string]any{
-				"type": "string",
-				"enum": []any{"true", "yes", "1", "on", "false", "no", "0", "off"},
-			},
+			map[string]any{"type": "string", "pattern": BoolishStringPattern},
 			// BD-7: only 0 and 1 are meaningful integers — 0 is declared-false,
 			// 1 is declared-true, any other integer is rejected.
 			map[string]any{"type": "integer", "enum": []any{0, 1}},

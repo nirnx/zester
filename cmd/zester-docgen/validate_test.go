@@ -13,7 +13,7 @@ func TestValidateModuleExamples_PkgRemoved(t *testing.T) {
 	if !ok {
 		t.Fatal("pkg.removed has no registered spec")
 	}
-	skips, err := validateModuleExamples(reg, mi.Module, mi.Doc.Examples, sensitiveExampleKeys(mi.Params))
+	skips, err := validateModuleExamples(reg, nil, mi.Module, mi.Doc.Examples, sensitiveExampleKeys(mi.Params))
 	if err != nil {
 		t.Fatalf("validateModuleExamples: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestValidateModuleExamples_TemplatedExampleIsRecordedSkipped(t *testing.T) 
 		},
 	}
 	reg := registerTestSpec(t, "demo.templated", doc)
-	skips, err := validateModuleExamples(reg, "demo.templated", doc.Examples, nil)
+	skips, err := validateModuleExamples(reg, nil, "demo.templated", doc.Examples, nil)
 	if err != nil {
 		t.Fatalf("validateModuleExamples: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestValidateModuleExamples_NonSelfContainedIsRecordedSkipped(t *testing.T) 
 		},
 	}
 	reg := registerTestSpec(t, "demo.needsreq", doc)
-	skips, err := validateModuleExamples(reg, "demo.needsreq", doc.Examples, nil)
+	skips, err := validateModuleExamples(reg, nil, "demo.needsreq", doc.Examples, nil)
 	if err != nil {
 		t.Fatalf("validateModuleExamples: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestValidateModuleExamples_DecodeFailureFailsGeneration(t *testing.T) {
 	if err := reg.RegisterSpec(spec, builder); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := validateModuleExamples(reg, "demo.badexample", doc.Examples, nil); err == nil {
+	if _, err := validateModuleExamples(reg, nil, "demo.badexample", doc.Examples, nil); err == nil {
 		t.Fatal("expected a decode failure to fail generation")
 	}
 }
@@ -138,7 +138,7 @@ func TestValidateModuleExamples_UnknownExampleKindErrors(t *testing.T) {
 		Examples: []modschema.Example{{Title: "bad", Kind: "yaml", Code: "x: 1"}},
 	}
 	reg := registerTestSpec(t, "demo.badkind", doc)
-	if _, err := validateModuleExamples(reg, "demo.badkind", doc.Examples, nil); err == nil {
+	if _, err := validateModuleExamples(reg, nil, "demo.badkind", doc.Examples, nil); err == nil {
 		t.Fatal("expected an error for an unknown example kind")
 	}
 }
@@ -205,7 +205,7 @@ func TestValidateModuleExamples_SensitiveParamInStateExampleErrors(t *testing.T)
 		},
 	}
 	reg, mi := registerSensitiveSpec(t, doc)
-	if _, err := validateModuleExamples(reg, mi.Module, doc.Examples, sensitiveExampleKeys(mi.Params)); err == nil {
+	if _, err := validateModuleExamples(reg, nil, mi.Module, doc.Examples, sensitiveExampleKeys(mi.Params)); err == nil {
 		t.Fatal("expected an error for a sensitive parameter set in a state example")
 	}
 }
@@ -225,7 +225,7 @@ func TestValidateModuleExamples_SensitiveParamInCLIExampleErrors(t *testing.T) {
 		},
 	}
 	reg, mi := registerSensitiveSpec(t, doc)
-	if _, err := validateModuleExamples(reg, mi.Module, doc.Examples, sensitiveExampleKeys(mi.Params)); err == nil {
+	if _, err := validateModuleExamples(reg, nil, mi.Module, doc.Examples, sensitiveExampleKeys(mi.Params)); err == nil {
 		t.Fatal("expected an error for a sensitive parameter set in a cli example")
 	}
 }

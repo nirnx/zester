@@ -31,13 +31,18 @@ func (stringListType) Doc() string {
 		"strings. A nested list or map element is rejected rather than dropped."
 }
 func (stringListType) JSONSchema() map[string]any {
+	// Elements mirror Decode: scalar list elements (numbers, booleans) are
+	// rendered via fmt.Sprint (BD-5), so [80, 443] is runtime-valid and the
+	// schema must agree; nested composites stay invalid (review-round-3 class).
+	scalar := map[string]any{"anyOf": []any{
+		map[string]any{"type": "string"},
+		map[string]any{"type": "number"},
+		map[string]any{"type": "boolean"},
+	}}
 	return map[string]any{
-		"oneOf": []any{
+		"anyOf": []any{
 			map[string]any{"type": "string"},
-			map[string]any{
-				"type":  "array",
-				"items": map[string]any{"type": []any{"string", "integer", "number", "boolean"}},
-			},
+			map[string]any{"type": "array", "items": scalar},
 		},
 	}
 }

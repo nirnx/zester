@@ -301,3 +301,38 @@ func TestModuleParamSchema_SemanticTypeRefsSharedDefs(t *testing.T) {
 		t.Error("expected an array enable to fail validation (TriState accepts bool/string/integer only)")
 	}
 }
+
+// TestRenderModuleSchemaArtifact_RequiredRejectsEmptyAndNull pins review
+// round 3: the runtime treats an empty-string or null value as ABSENT (source
+// fall-through / YAML-null rules), so a required param present with source:
+// "" still missing-required errors — the contains clause must demand a
+// NON-empty, non-null value, not mere key presence.
+func TestRenderModuleSchemaArtifact_RequiredRejectsEmptyAndNull(t *testing.T) {
+	type proto struct {
+		Name   string `zester:"name,primary" usage:"n"`
+		Source string `zester:"source,required" usage:"s"`
+	}
+	mi := fakeSpec(t, "demo.req", proto{}, modschema.Doc{Summary: "demo"})
+	raw, err := renderModuleSchemaArtifact([]modschema.ModuleInfo{mi})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sch := compileArtifact(t, raw)
+
+	valid := map[string]any{"id": map[string]any{"demo.req": []any{map[string]any{"source": "/x"}}}}
+	if err := sch.Validate(jsonInstance(t, valid)); err != nil {
+		t.Errorf("real source value must satisfy required: %v", err)
+	}
+	empty := map[string]any{"id": map[string]any{"demo.req": []any{map[string]any{"source": ""}}}}
+	if err := sch.Validate(jsonInstance(t, empty)); err == nil {
+		t.Error("source: \"\" must NOT satisfy required (runtime treats it as absent)")
+	}
+	null := map[string]any{"id": map[string]any{"demo.req": []any{map[string]any{"source": nil}}}}
+	if err := sch.Validate(jsonInstance(t, null)); err == nil {
+		t.Error("source: null must NOT satisfy required (runtime treats it as absent)")
+	}
+	missing := map[string]any{"id": map[string]any{"demo.req": []any{map[string]any{"name": "x"}}}}
+	if err := sch.Validate(jsonInstance(t, missing)); err == nil {
+		t.Error("an absent source must fail required")
+	}
+}

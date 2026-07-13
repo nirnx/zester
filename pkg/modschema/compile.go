@@ -420,8 +420,7 @@ func primitiveJSONSchema(pk primKind, t reflect.Type) map[string]any {
 		return map[string]any{"anyOf": []any{
 			map[string]any{"type": "boolean"},
 			map[string]any{"type": "integer", "enum": []any{0, 1}},
-			map[string]any{"type": "string",
-				"pattern": `^\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\s*$`},
+			map[string]any{"type": "string", "pattern": paramtypes.BoolishStringPattern},
 		}}
 	case primInt:
 		// JSON Schema "integer" already accepts integral numbers (5.0), which
@@ -434,7 +433,11 @@ func primitiveJSONSchema(pk primKind, t reflect.Type) map[string]any {
 	case primFloat:
 		return map[string]any{"anyOf": []any{
 			map[string]any{"type": "number"},
-			map[string]any{"type": "string", "pattern": `^\s*[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?\s*$`},
+			// Mirrors strconv.ParseFloat's accepted grammar (minus inf/nan,
+			// which floatValue rejects): decimal forms incl. trailing/leading
+			// dots ("1.", ".5"), exponents, underscore separators, and hex
+			// floats ("0x1p2") — review finding.
+			map[string]any{"type": "string", "pattern": `^\s*[+-]?(([0-9][0-9_]*(\.[0-9_]*)?|\.[0-9][0-9_]*)([eE][+-]?[0-9]+)?|0[xX][0-9a-fA-F_]*\.?[0-9a-fA-F_]*[pP][+-]?[0-9]+)\s*$`},
 		}}
 	case primMapAny:
 		return map[string]any{"type": "object"}

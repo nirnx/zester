@@ -27,9 +27,16 @@ func (stringMapType) Doc() string {
 		"key=value argument."
 }
 func (stringMapType) JSONSchema() map[string]any {
+	// Values mirror Decode: scalar values are rendered via fmt.Sprint, so
+	// {port: 8080} is runtime-valid and the schema must agree; composite
+	// values stay invalid (review-round-3 class).
 	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": map[string]any{"type": []any{"string", "integer", "number", "boolean"}},
+		"type": "object",
+		"additionalProperties": map[string]any{"anyOf": []any{
+			map[string]any{"type": "string"},
+			map[string]any{"type": "number"},
+			map[string]any{"type": "boolean"},
+		}},
 	}
 }
 func (stringMapType) sealed() {}
