@@ -1,87 +1,193 @@
 ---
 title: "file.comment / file.uncomment"
-description: "Comments or uncomments lines matching a regular expression by prefixing or removing a comment character. Modeled after Salt's file.comment and file.uncomment modules. Both states share one implementation."
+description: "Comment out lines matching a regular expression. Uncomment lines matching a regular expression."
 ---
+
+{/* zester-docgen:managed module="file.comment" */}
+{/* zester-docgen:managed module="file.uncomment" */}
 
 **Source**: `pkg/state/modules/file_comment.go`
 
 ---
 
-## Parameters
+`file.comment` and `file.uncomment` share the same parameters and implementation.
 
-Both `file.comment` and `file.uncomment` accept the same parameters:
+---
+
+## Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Absolute path to the target file. `path` is accepted as an alias. |
-| `regex` | `string` | **Yes** | — | Go regular expression matched against the *uncommented* line content. |
-| `char` | `string` | No | `#` | The comment prefix added or stripped. |
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `char` | `string` | No | `#` | comment prefix added (file.comment) or stripped (file.uncomment); defaults to # |
+| `regex` | `string` | Yes | *(none)* | Go regular expression matched against the uncommented line content |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## `file.comment`
 
-- If the file does not exist, the state reports no changes needed (missing files are a no-op).
-- Otherwise the transformation is computed in memory and the state reports changes only if any line would be modified.
-
-**file.comment** — a line needs commenting when it is *not* already commented (optional leading whitespace followed by `char`) and it matches `regex`.
-
-**file.uncomment** — a line needs uncommenting when it *is* commented and its text with the comment character stripped matches `regex`.
+`file.comment` prefixes every line matching `regex` with a comment character (`#` by default), skipping lines that are already commented. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). `regex` is matched against the UNCOMMENTED line content and is required. A missing file is a clean no-op.
 
 ---
 
-## Apply Behavior
+## Effects
 
-1. Reads the file (stored as a backup for revert). A missing file is a no-op (`Changed: false`).
-2. `file.comment` prefixes every matching uncommented line with `char`. `file.uncomment` removes a single leading `char` (after optional whitespace, preserving indentation) from every commented line whose uncommented text matches `regex`.
-3. Writes the result back with mode `0644`, preserving the trailing newline.
+### Check
 
----
+Reads the file (a missing file needs no change; any other read error fails the check) and computes the result in memory: a change is needed when any uncommented line matching `regex` would be prefixed with the comment character.
 
-## Revert Behavior
+### Apply
 
-- Restores the original content from the backup taken during Apply.
-- If no backup exists (the file was absent), the file is removed.
+Reads the file (capturing the original for revert). Prefixes every uncommented line matching `regex` with `char`, leaving already-commented lines untouched, and writes the result with mode 0644, preserving the trailing newline. A missing file is a no-op.
+
+### Revert
+
+Restores the file's captured prior content from this run's Apply. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Disable a directive by commenting it
 
-```bash
-# Comment out swap entries in fstab
-zester 'web-01' file.comment /etc/fstab regex='\sswap\s'
-
-# Re-enable a repo line
-zester 'web-01' file.uncomment /etc/apt/sources.list regex='deb-src'
-```
-
-### State File
-
-**Disable a setting by commenting it out:**
+Lines matching regex are prefixed with the comment character.
 
 ```yaml
-/etc/fstab:
+/etc/ssh/sshd_config:
   file.comment:
-    - regex: '\sswap\s'
+    - regex: "^PermitRootLogin"
 ```
 
-**Uncomment a directive with a custom comment character:**
+### Comment with a custom character
+
+char overrides the default # prefix (here a semicolon for an INI file).
+
+```yaml
+/etc/php.ini:
+  file.comment:
+    - regex: "^expose_php"
+    - char: ";"
+```
+
+### Comment a line ad hoc
+
+The bare positional is the path; regex is a key=value arg.
+
+```bash
+zester 'web*' file.comment /etc/fstab regex='\sswap\s'
+```
+
+
+---
+
+## Notes
+
+> **regex matches the uncommented line**
+>
+> `regex` is always matched against the line WITHOUT its comment character, so the same expression selects a line whether or not it is currently commented.
+
+> **Divergences from Salt**
+>
+> `regex` must be a valid Go (RE2) regular expression (the builder fails otherwise). Unlike Salt — which strips a leading `^` and trailing `$` before wrapping the pattern — Zester uses the expression as-is (an unanchored substring match unless you anchor it). Salt's `backup` parameter is not supported; Revert uses an in-memory backup instead.
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [file.uncomment](/docs/guides/modules/file-comment)
+- [file.line](/docs/guides/modules/file-line)
+- [file.replace](/docs/guides/modules/file-replace)
+
+---
+
+## `file.uncomment`
+
+`file.uncomment` strips a single leading comment character (`#` by default, after optional indentation) from every commented line whose UNCOMMENTED content matches `regex`. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). `regex` is required and is matched against the line WITHOUT its comment prefix. A missing file is a clean no-op.
+
+---
+
+## Effects
+
+### Check
+
+Reads the file (a missing file needs no change; any other read error fails the check) and computes the result in memory: a change is needed when a commented line, once its comment character is stripped, matches `regex`.
+
+### Apply
+
+Reads the file (capturing the original for revert). Removes a single leading `char` (after optional whitespace, preserving indentation) from every commented line whose uncommented text matches `regex`, and writes the result with mode 0644, preserving the trailing newline. A missing file is a no-op.
+
+### Revert
+
+Restores the file's captured prior content from this run's Apply. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+## Examples
+
+### Re-enable a commented directive
+
+regex is matched against the uncommented text, so the leading # is stripped from the matching line.
+
+```yaml
+/etc/sysctl.conf:
+  file.uncomment:
+    - regex: "net.ipv4.ip_forward"
+```
+
+### Uncomment with a custom character
+
+char selects which comment prefix to strip (a semicolon here).
 
 ```yaml
 /etc/samba/smb.conf:
   file.uncomment:
-    - regex: 'load printers'
-    - char: ';'
+    - regex: "load printers"
+    - char: ";"
 ```
+
+### Uncomment a line ad hoc
+
+The bare positional is the path; regex is a key=value arg.
+
+```bash
+zester 'web*' file.uncomment /etc/apt/sources.list regex='deb-src'
+```
+
 
 ---
 
-## Divergences from Salt
+## Notes
 
-- `regex` must be a valid Go (RE2) regular expression; the builder fails otherwise.
-- Salt strips a leading `^` and trailing `$` from the pattern before wrapping it; Zester uses the regex as-is (unanchored substring match unless you anchor it).
-- Salt's `backup` parameter is not supported (Revert uses an in-memory backup instead).
+> **regex matches the uncommented line**
+>
+> `regex` is always matched against the line WITHOUT its comment character, so the same expression selects a line whether or not it is currently commented.
+
+> **Divergences from Salt**
+>
+> `regex` must be a valid Go (RE2) regular expression (the builder fails otherwise). Unlike Salt — which strips a leading `^` and trailing `$` before wrapping the pattern — Zester uses the expression as-is (an unanchored substring match unless you anchor it). Salt's `backup` parameter is not supported; Revert uses an in-memory backup instead.
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [file.comment](/docs/guides/modules/file-comment)
+- [file.line](/docs/guides/modules/file-line)
+- [file.replace](/docs/guides/modules/file-replace)

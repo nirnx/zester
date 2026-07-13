@@ -9,6 +9,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -22,7 +24,7 @@ func testFileAbsentMctx() *exec.ModuleContext {
 
 func TestFileAbsentName(t *testing.T) {
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/tmp/gone.txt", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +36,7 @@ func TestFileAbsentName(t *testing.T) {
 
 func TestFileAbsentPrimaryParamDefault(t *testing.T) {
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/var/log/old.log", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +49,7 @@ func TestFileAbsentPrimaryParamDefault(t *testing.T) {
 
 func TestFileAbsentRequisites(t *testing.T) {
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"cmd.run:stop-service"},
 		"watch":     []any{"file.managed:/etc/conf"},
@@ -77,7 +79,7 @@ func TestFileAbsentCheckFileNotExists(t *testing.T) {
 	filePath := filepath.Join(tmp, "nonexistent.txt")
 
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +102,7 @@ func TestFileAbsentCheckFileExists(t *testing.T) {
 	}
 
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +125,7 @@ func TestFileAbsentApplyRemovesFile(t *testing.T) {
 	}
 
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +155,7 @@ func TestFileAbsentApplyRemovesDirectoryTree(t *testing.T) {
 	}
 
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dirPath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +176,7 @@ func TestFileAbsentApplyRemovesDirectoryTree(t *testing.T) {
 
 func TestFileAbsentNameFromConfig(t *testing.T) {
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("remove-old", map[string]any{
 		"name": "/var/tmp/old",
 	})
@@ -195,7 +197,7 @@ func TestFileAbsentApplyError(t *testing.T) {
 			File: fakeFile,
 		},
 	}
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("/some/protected/path", map[string]any{})
 	if err != nil {
@@ -210,7 +212,7 @@ func TestFileAbsentApplyError(t *testing.T) {
 
 func TestFileAbsentRevert(t *testing.T) {
 	mctx := testFileAbsentMctx()
-	builder := NewFileAbsentBuilder(mctx)
+	builder := NewFileAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("/some/path", map[string]any{})
 	if err != nil {
@@ -228,3 +230,21 @@ func TestFileAbsentRevert(t *testing.T) {
 
 // Verify the State interface is fully satisfied at compile time.
 var _ state.State = (*FileAbsent)(nil)
+
+// TestFileAbsentContract replays the permanent differential contract fixtures
+// against the migrated fileAbsentSpec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is the
+// permanent regression guard for file.absent's decode behavior — including the
+// flagged BD-6 divergence (a non-string `name` is now coerced, or rejected for
+// composites, instead of silently falling back to the state ID).
+func TestFileAbsentContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileAbsent
+		if _, err := fileAbsentSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.absent.yaml")
+}

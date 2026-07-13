@@ -9,6 +9,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -17,7 +19,7 @@ func testFileReplaceMctx() *exec.ModuleContext {
 }
 
 func TestFileReplaceName(t *testing.T) {
-	s, err := NewFileReplaceBuilder(testFileReplaceMctx())("/etc/x", map[string]any{
+	s, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})("/etc/x", map[string]any{
 		"pattern": "a", "repl": "b",
 	})
 	if err != nil {
@@ -29,7 +31,7 @@ func TestFileReplaceName(t *testing.T) {
 }
 
 func TestFileReplaceInvalidPattern(t *testing.T) {
-	_, err := NewFileReplaceBuilder(testFileReplaceMctx())("x", map[string]any{
+	_, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})("x", map[string]any{
 		"pattern": "(unclosed", "repl": "b",
 	})
 	if err == nil {
@@ -38,7 +40,7 @@ func TestFileReplaceInvalidPattern(t *testing.T) {
 }
 
 func TestFileReplaceMissingPattern(t *testing.T) {
-	_, err := NewFileReplaceBuilder(testFileReplaceMctx())("x", map[string]any{"repl": "b"})
+	_, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})("x", map[string]any{"repl": "b"})
 	if err == nil {
 		t.Fatal("expected error for missing pattern")
 	}
@@ -94,7 +96,7 @@ func TestFileReplaceOps(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeTempFile(t, "f.txt", tc.initial)
-			s, err := NewFileReplaceBuilder(testFileReplaceMctx())(path, tc.config)
+			s, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})(path, tc.config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -129,7 +131,7 @@ func TestFileReplaceOps(t *testing.T) {
 func TestFileReplaceCreatesMissingWithAppend(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileReplaceBuilder(testFileReplaceMctx())(path, map[string]any{
+	s, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"pattern": "^enabled$", "repl": "enabled", "append_if_not_found": true,
 	})
 	if err != nil {
@@ -147,7 +149,7 @@ func TestFileReplaceCreatesMissingWithAppend(t *testing.T) {
 func TestFileReplaceRevert(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "r.txt", "level=info\n")
-	s, err := NewFileReplaceBuilder(testFileReplaceMctx())(path, map[string]any{
+	s, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"pattern": `level=\w+`, "repl": "level=debug",
 	})
 	if err != nil {
@@ -168,7 +170,7 @@ func TestFileReplaceRevert(t *testing.T) {
 func TestFileReplaceRevertCreatedToleratesMissing(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileReplaceBuilder(testFileReplaceMctx())(path, map[string]any{
+	s, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"pattern": `level=\w+`, "repl": "level=debug", "append_if_not_found": true,
 	})
 	if err != nil {
@@ -196,7 +198,7 @@ func TestFileReplaceFreshInstanceRevertIsNoOp(t *testing.T) {
 	ctx := context.Background()
 	original := "level=info\nother=1\n"
 	path := writeTempFile(t, "app.conf", original)
-	s, err := NewFileReplaceBuilder(testFileReplaceMctx())(path, map[string]any{
+	s, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"pattern": `level=\w+`, "repl": "level=debug",
 	})
 	if err != nil {
@@ -224,7 +226,7 @@ func TestFileReplaceFreshInstanceRevertIsNoOp(t *testing.T) {
 func TestFileReplaceRevertRemovesCreatedFile(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileReplaceBuilder(testFileReplaceMctx())(path, map[string]any{
+	s, err := NewFileReplaceBuilder(testFileReplaceMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"pattern": "^level=.*$", "repl": "level=debug", "append_if_not_found": true,
 	})
 	if err != nil {
@@ -252,7 +254,7 @@ func TestFileReplaceReadErrorFailsCheckAndApply(t *testing.T) {
 	fake.PreCreate("/etc/app.conf", []byte(original), 0644)
 	fake.SetReadError("/etc/app.conf", errors.New("input/output error"))
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
-	s, err := NewFileReplaceBuilder(mctx)("/etc/app.conf", map[string]any{
+	s, err := NewFileReplaceBuilder(mctx, modschema.DecodeOptions{})("/etc/app.conf", map[string]any{
 		"pattern": `level=\w+`, "repl": "level=debug", "append_if_not_found": true,
 	})
 	if err != nil {
@@ -272,3 +274,19 @@ func TestFileReplaceReadErrorFailsCheckAndApply(t *testing.T) {
 }
 
 var _ state.State = (*FileReplace)(nil)
+
+// TestFileReplaceContract replays the permanent differential contract fixtures
+// against the migrated fileReplaceSpec decoder — including the flagged BD-1 (a
+// msgpack-delivered sized-int count is honored), BD-2 (a CLI numeric-string
+// count and bool-string append_if_not_found are honored), BD-6 (a wrong-typed
+// name is coerced/rejected), and BD-7 (integer bool coercion) divergences.
+func TestFileReplaceContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileReplace
+		if _, err := fileReplaceSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.replace.yaml")
+}

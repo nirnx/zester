@@ -1,9 +1,15 @@
 ---
 title: "file.replace"
-description: "Performs a regular-expression search-and-replace within a file, with optional append/prepend when the pattern is not found. Modeled after Salt's file.replace module."
+description: "Regular-expression search-and-replace within a file."
 ---
 
+{/* zester-docgen:managed module="file.replace" */}
+
 **Source**: `pkg/state/modules/file_replace.go`
+
+---
+
+`file.replace` rewrites every match of a regular expression in a file, expanding backreferences in the replacement. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). The pattern is anchored per line (Salt's `re.MULTILINE` default), so `^`/`$` bind to line boundaries. `count` caps the number of replacements (0 replaces all). When the pattern is not found, `append_if_not_found` or `prepend_if_not_found` adds `not_found_content` (falling back to `repl`) — and, on a missing file, creates it with that content.
 
 ---
 
@@ -11,79 +17,112 @@ description: "Performs a regular-expression search-and-replace within a file, wi
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Absolute path to the target file. `path` is accepted as an alias. |
-| `pattern` | `string` | **Yes** | — | Go regular expression to search for. Compiled with the `(?m)` flag, so `^` and `$` anchor per line (matching Salt's `re.MULTILINE` default). |
-| `repl` | `string` | No | `""` | Replacement text. Backreferences are expanded using Go syntax: `$1`, `${name}`. |
-| `count` | `int` | No | `0` | Maximum number of replacements. `0` replaces all matches. |
-| `append_if_not_found` | `bool` | No | `false` | Append `not_found_content` (or `repl`) at the end of the file when the pattern does not match. |
-| `prepend_if_not_found` | `bool` | No | `false` | Prepend `not_found_content` (or `repl`) at the start of the file when the pattern does not match. |
-| `not_found_content` | `string` | No | `repl` | Content used for append/prepend when the pattern is not found. |
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `pattern` | `string` | Yes | *(none)* | search regular expression (RE2); anchored per-line (Salt's re.MULTILINE default) |
+| `repl` | `string` | No | *(none)* | replacement text; $1/${name} backreferences are expanded |
+| `count` | `int` | No | *(none)* | maximum number of replacements to perform; 0 (the default) replaces every match |
+| `append_if_not_found` | `bool` | No | *(none)* | when the pattern is not found, append not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `prepend_if_not_found` | `bool` | No | *(none)* | when the pattern is not found, prepend not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `not_found_content` | `string` | No | *(none)* | text used for append_if_not_found/prepend_if_not_found; defaults to repl when empty |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-The replacement is computed in memory and the state reports changes only if the result would differ from the current content:
+### Check
 
-- **Pattern matches** — changes are needed when the replaced output differs from the file.
-- **Pattern does not match** — changes are needed only when `append_if_not_found` or `prepend_if_not_found` is set and the fallback content is not already present in the file.
-- **File does not exist** — changes are needed only when `append_if_not_found` or `prepend_if_not_found` is set (the file will be created with the fallback content).
+Reads the file (a not-exist read is treated as empty content; any other read error fails the check) and computes the transformed content in memory: it reports a change when a match would be rewritten, or when the pattern is absent and an append/prepend would add content that is not already present.
 
----
+### Apply
 
-## Apply Behavior
+Reads the file (capturing the original for revert on the first write). If the pattern matches, it performs up to `count` replacements. If the pattern is absent, it appends or prepends `not_found_content`/`repl` (creating a missing file with that content when append/prepend is enabled). Writes the result with mode 0644. Note the replacement is not guaranteed idempotent: if the replacement text still matches the pattern, a re-run replaces again.
 
-1. Reads the file (stored as a backup for revert).
-2. If the pattern matches, replaces matches (respecting `count`), expanding `$1`/`${name}` backreferences.
-3. If the pattern does not match and append/prepend is enabled, adds `not_found_content` (defaulting to `repl`) at the end/start, with newline separators ensured. If the content is already present verbatim, nothing is done.
-4. Writes the result back with mode `0644`.
+### Revert
 
----
+Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created (via append/prepend on a missing file) is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
 
-## Revert Behavior
-
-- If the file did not exist before Apply, it is removed.
-- Otherwise the original content is restored from the backup.
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Rewrite a config value
 
-```bash
-# Rewrite a config directive
-zester 'web-01' file.replace /etc/ssh/sshd_config pattern='^#?PasswordAuthentication.*' repl='PasswordAuthentication no'
-```
-
-### State File
-
-**Replace a directive, appending it when absent:**
+The pattern matches the whole line; repl replaces it.
 
 ```yaml
-/etc/ssh/sshd_config:
+/etc/rsyslog.conf:
   file.replace:
-    - pattern: "^#?PasswordAuthentication.*"
-    - repl: "PasswordAuthentication no"
+    - pattern: "^\\$ModLoad imudp"
+    - repl: "#$ModLoad imudp"
+```
+
+### Ensure a setting exists, appending if absent
+
+append_if_not_found adds the line when the pattern matches nothing; not_found_content is the text to add.
+
+```yaml
+/etc/security/limits.conf:
+  file.replace:
+    - pattern: "^\\* soft nofile"
+    - repl: "* soft nofile 65535"
     - append_if_not_found: true
+    - not_found_content: "* soft nofile 65535"
 ```
 
-**Limit to the first match, using a backreference:**
+### Replace only the first match
+
+count caps the number of replacements; here only the first occurrence is rewritten.
 
 ```yaml
-/etc/myapp.conf:
+/etc/hosts:
   file.replace:
-    - pattern: "listen_port = (\\d+)"
-    - repl: "listen_port = 8443  # was ${1}"
+    - pattern: "localhost"
+    - repl: "localhost.localdomain"
     - count: 1
 ```
 
+### Search-and-replace ad hoc
+
+The bare positional is the path; pattern/repl are key=value args.
+
+```bash
+zester 'web*' file.replace /etc/motd pattern='old text' repl='new text'
+```
+
+
 ---
 
-## Divergences from Salt
+## Notes
 
-- Backreferences in `repl` use Go's `$1` / `${name}` syntax, not Python's `\1` / `\g<name>`.
-- The pattern is a Go (RE2) regular expression — no lookaheads/lookbehinds.
-- Salt's `flags`, `ignore_if_missing`, `backup`, and `dry_run` parameters are not supported. The MULTILINE flag is always on (which is also Salt's default).
+> **Pattern is anchored per line**
+>
+> Zester wraps the pattern with `(?m)` to match Salt's `re.MULTILINE` default, so `^` and `$` anchor to line boundaries rather than the whole file.
+
+> **Replacement is not guaranteed idempotent**
+>
+> If the replacement text still matches the pattern (for example replacing `x` with `xy`), a subsequent run replaces again. This mirrors Salt's file.replace; anchor the pattern or use a replacement that no longer matches to converge.
+
+> **Divergences from Salt**
+>
+> Backreferences in `repl` use Go's `$1` / `${name}` syntax, not Python's `\1` / `\g<name>`. The pattern is a Go (RE2) regular expression, so lookaheads and lookbehinds are unavailable. Salt's `flags`, `ignore_if_missing`, `backup`, and `dry_run` parameters are not supported; the MULTILINE flag is always on (which is also Salt's default).
+
+
+---
+
+## Divergences
+
+- BD-1
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [file.line](/docs/guides/modules/file-line)
+- [file.blockreplace](/docs/guides/modules/file-blockreplace)
+- [file.managed](/docs/guides/modules/file-managed)

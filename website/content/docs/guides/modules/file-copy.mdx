@@ -1,9 +1,15 @@
 ---
 title: "file.copy"
-description: "Copies a source file that already exists on the peel to a destination path. Modeled after Salt's file.copy module."
+description: "Copy a source file that already exists on the peel to a destination path."
 ---
 
+{/* zester-docgen:managed module="file.copy" */}
+
 **Source**: `pkg/state/modules/file_copy.go`
+
+---
+
+`file.copy` copies `source` (a path local to the peel) to the destination. The destination path defaults to the state ID; `path` is accepted as an alias. Without `force`, an existing destination is left untouched (the copy is a one-time seed); with `force`, the destination is kept in sync with the source by content hash.
 
 ---
 
@@ -11,67 +17,48 @@ description: "Copies a source file that already exists on the peel to a destinat
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Destination path. `path` is accepted as an alias. |
-| `source` | `string` | **Yes** | — | Path of the file to copy from (local to the peel). |
-| `force` | `bool` | No | `false` | Overwrite the destination when it already exists. Without `force`, an existing destination is left untouched. |
-| `preserve` | `bool` | No | `false` | Copy the source file's permission mode to the destination (otherwise the destination is written with mode `0644`). |
-| `makedirs` | `bool` | No | `false` | Create parent directories of the destination (mode `0755`) if needed. |
+| `name` | `string` | No | State ID | destination path; the path alias is accepted for Salt compatibility (defaults to the state ID) |
+| `source` | `string` | Yes | *(none)* | local path (on the peel) to copy from |
+| `force` | `bool` | No | *(none)* | overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `preserve` | `bool` | No | *(none)* | copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | *(none)* | create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-1. Reads the source — a missing source is an **error**.
-2. If the destination does not exist, changes are needed.
-3. If the destination exists and `force` is not set, the state reports no changes needed (the existing file wins).
-4. With `force`, source and destination contents are compared by SHA-256 hash; a difference means changes are needed. With `preserve` additionally set, differing permission modes also trigger a change.
+### Check
 
----
+Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.
 
-## Apply Behavior
+### Apply
 
-1. Reads the source file.
-2. If the destination exists and `force` is not set, Apply is a no-op (`Changed: false`). With `force`, the existing content is backed up for revert.
-3. Creates parent directories when `makedirs` is set.
-4. Writes the destination with mode `0644`, or the source's permission mode when `preserve` is set (a `chmod` is issued to enforce it).
+Reads the source file. If the destination exists and `force` is not set, Apply is a no-op. With `force` on an existing destination, the current content is captured for revert (a non-not-exist read error fails the apply rather than overwriting content it could not capture) before it is overwritten. Creates missing parent directories when `makedirs` is set, then writes the destination with mode 0644, or the source's permission mode (via an explicit chmod) when `preserve` is set. Reports the byte count in its details.
 
----
+### Revert
 
-## Revert Behavior
+Restores what this run's Apply changed: a destination that pre-existed (and was overwritten under `force`) is rewritten with its captured prior content; a destination this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
 
-- If the destination did not exist before Apply, it is removed.
-- If it was overwritten (`force`), the original content is restored.
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Back up a config file before editing it
 
-```bash
-zester 'web-01' file.copy /etc/nginx/nginx.conf.bak source=/etc/nginx/nginx.conf
-```
-
-### State File
-
-**Back up a config file before editing it:**
+A one-time seed copy: without force, the backup is created once and never overwritten.
 
 ```yaml
 /etc/nginx/nginx.conf.bak:
   file.copy:
     - source: /etc/nginx/nginx.conf
-
-/etc/nginx/nginx.conf:
-  file.replace:
-    - pattern: "worker_processes .*"
-    - repl: "worker_processes auto;"
-    - require:
-      - "file.copy:/etc/nginx/nginx.conf.bak"
 ```
 
-**Deploy from a staging area, keeping it in sync:**
+### Deploy from a staging area, keeping it in sync
+
+force keeps the destination synced to the source; preserve copies the source's permission mode; makedirs creates missing parent directories.
 
 ```yaml
 /opt/app/config.yaml:
@@ -82,9 +69,39 @@ zester 'web-01' file.copy /etc/nginx/nginx.conf.bak source=/etc/nginx/nginx.conf
     - makedirs: true
 ```
 
+### Copy a file ad hoc
+
+The bare positional argument is the destination path; source is a key=value arg.
+
+```bash
+zester 'web-01' file.copy /etc/nginx/nginx.conf.bak source=/etc/nginx/nginx.conf
+```
+
+
 ---
 
-## Divergences from Salt
+## Notes
 
-- Only regular files are copied — Salt's recursive directory copy (`subdir`), `user`/`group` ownership, and `mode` parameters are not supported.
-- Ownership is not preserved; only the permission mode is (with `preserve`).
+> **Only regular files are copied**
+>
+> Salt's recursive directory copy (`subdir`), `user`/`group` ownership, and `mode` parameters are not supported.
+
+> **Ownership is not preserved**
+>
+> Only the permission mode is copied, and only when `preserve` is set.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [file.managed](/docs/guides/modules/file-managed)
+- [file.touch](/docs/guides/modules/file-touch)

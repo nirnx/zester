@@ -8,6 +8,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -19,9 +21,17 @@ func testFileDirMctx() *exec.ModuleContext {
 	}
 }
 
+// newFileDirectoryTest builds a FileDirectory state through the migrated builder
+// with a caller-supplied FileExec (used where the deleted legacy constructor
+// newFileDirectory took a fake). It threads an empty decode policy.
+func newFileDirectoryTest(id string, config map[string]any, file exec.FileExec) (state.State, error) {
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: file}}
+	return NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})(id, config)
+}
+
 func TestFileDirectoryName(t *testing.T) {
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/tmp/mydir", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +43,7 @@ func TestFileDirectoryName(t *testing.T) {
 
 func TestFileDirectoryRequisites(t *testing.T) {
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"pkg.installed:nginx"},
 		"watch":     []any{"file.managed:/etc/nginx"},
@@ -63,7 +73,7 @@ func TestFileDirectoryCheckNotExists(t *testing.T) {
 	dirPath := filepath.Join(tmp, "newdir")
 
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dirPath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +96,7 @@ func TestFileDirectoryCheckExistsCorrectMode(t *testing.T) {
 	}
 
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dirPath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +119,7 @@ func TestFileDirectoryCheckWrongMode(t *testing.T) {
 	}
 
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dirPath, map[string]any{
 		"mode": "0755",
 	})
@@ -131,7 +141,7 @@ func TestFileDirectoryApplyCreates(t *testing.T) {
 	dirPath := filepath.Join(tmp, "created")
 
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dirPath, map[string]any{
 		"mode": "0750",
 	})
@@ -167,7 +177,7 @@ func TestFileDirectoryApplySetsMode(t *testing.T) {
 	}
 
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dirPath, map[string]any{
 		"mode": "0755",
 	})
@@ -197,7 +207,7 @@ func TestFileDirectoryRevertCreated(t *testing.T) {
 	dirPath := filepath.Join(tmp, "revertdir")
 
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dirPath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +241,7 @@ func TestFileDirectoryRevertNoChange(t *testing.T) {
 	}
 
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dirPath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +264,7 @@ func TestFileDirectoryRevertNoChange(t *testing.T) {
 
 func TestFileDirectoryPrimaryParamDefault(t *testing.T) {
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/var/log/app", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +277,7 @@ func TestFileDirectoryPrimaryParamDefault(t *testing.T) {
 
 func TestFileDirectoryNameFromConfig(t *testing.T) {
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("data-dir", map[string]any{
 		"name": "/opt/data",
 	})
@@ -281,18 +291,15 @@ func TestFileDirectoryNameFromConfig(t *testing.T) {
 }
 
 func TestFileDirectoryApplyInvalidMode(t *testing.T) {
+	// An invalid octal mode is now rejected at DECODE time (paramtypes.FileMode),
+	// where the legacy string path carried it through and only failed later at
+	// apply. The builder now returns the error.
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
-	s, err := builder("/tmp/badmode", map[string]any{
+	_, err := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})("/tmp/badmode", map[string]any{
 		"mode": "not-octal",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = s.Apply(context.Background())
 	if err == nil {
-		t.Error("expected error from invalid mode string")
+		t.Error("expected a decode error from an invalid mode string")
 	}
 }
 
@@ -304,7 +311,7 @@ func TestFileDirectoryCheckIsFile(t *testing.T) {
 	}
 
 	mctx := testFileDirMctx()
-	builder := NewFileDirectoryBuilder(mctx)
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -352,7 +359,7 @@ func lockedParentDir(t *testing.T) string {
 func TestFileDirectoryCheckStatErrorFails(t *testing.T) {
 	target := lockedParentDir(t)
 
-	s, err := NewFileDirectoryBuilder(testFileDirMctx())(target, map[string]any{})
+	s, err := NewFileDirectoryBuilder(testFileDirMctx(), modschema.DecodeOptions{})(target, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +375,7 @@ func TestFileDirectoryCheckStatErrorFails(t *testing.T) {
 func TestFileDirectoryApplyStatErrorDoesNotPoisonRevert(t *testing.T) {
 	target := lockedParentDir(t)
 
-	s, err := NewFileDirectoryBuilder(testFileDirMctx())(target, map[string]any{})
+	s, err := NewFileDirectoryBuilder(testFileDirMctx(), modschema.DecodeOptions{})(target, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +409,7 @@ func TestFileDirectoryConvergence(t *testing.T) {
 
 	// Facet: creation.
 	created := filepath.Join(t.TempDir(), "newdir")
-	s, err := NewFileDirectoryBuilder(testFileDirMctx())(created, map[string]any{"mode": "0750"})
+	s, err := NewFileDirectoryBuilder(testFileDirMctx(), modschema.DecodeOptions{})(created, map[string]any{"mode": "0750"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +436,7 @@ func TestFileDirectoryConvergence(t *testing.T) {
 	if err := os.Mkdir(existing, 0700); err != nil {
 		t.Fatal(err)
 	}
-	s, err = NewFileDirectoryBuilder(testFileDirMctx())(existing, map[string]any{"mode": "0755"})
+	s, err = NewFileDirectoryBuilder(testFileDirMctx(), modschema.DecodeOptions{})(existing, map[string]any{"mode": "0755"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +469,7 @@ func TestFileDirectoryCheckOwnershipDrift(t *testing.T) {
 	}
 	fake.SetOwner("/opt/data", uid+1, gid+1)
 
-	s, err := newFileDirectory("/opt/data", map[string]any{
+	s, err := newFileDirectoryTest("/opt/data", map[string]any{
 		"mode": "0755", "user": userName, "group": groupName,
 	}, fake)
 	if err != nil {
@@ -496,7 +503,7 @@ func TestFileDirectoryCheckOwnershipUndeclared(t *testing.T) {
 	// Arbitrary ownership: without user:/group: declared the facet never fires.
 	fake.SetOwner("/opt/data", 12345, 54321)
 
-	s, err := newFileDirectory("/opt/data", map[string]any{"mode": "0755"}, fake)
+	s, err := newFileDirectoryTest("/opt/data", map[string]any{"mode": "0755"}, fake)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,4 +515,24 @@ func TestFileDirectoryCheckOwnershipUndeclared(t *testing.T) {
 	if cr.NeedsChange {
 		t.Errorf("undeclared ownership must not cause churn, diff: %s", cr.Diff)
 	}
+}
+
+// TestFileDirectoryContract replays the permanent differential contract fixtures
+// against the migrated fileDirectorySpec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still existed
+// (see the migration changelog); after its deletion this replay is the permanent
+// regression guard for file.directory's decode behavior — including the flagged
+// BD-1 (a msgpack-delivered sized-int mode is applied, not dropped to the 0755
+// default), BD-2 (a CLI makedirs string is honored), BD-6 (a wrong-typed value is
+// coerced or rejected), and BD-7 (makedirs accepts the integers 1/0) divergences,
+// plus the dir_mode fallback-alias parity.
+func TestFileDirectoryContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var d FileDirectory
+		if _, err := fileDirectorySpec.Decode(id, config, &d, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.directory.yaml")
 }

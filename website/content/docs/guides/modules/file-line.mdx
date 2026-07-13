@@ -1,9 +1,15 @@
 ---
 title: "file.line"
-description: "Manages a single line within a file: ensuring it is present, replacing it, inserting it at an anchor, or deleting it. Modeled after Salt's file.line module."
+description: "Ensure, replace, insert, or delete a single line in a file."
 ---
 
+{/* zester-docgen:managed module="file.line" */}
+
 **Source**: `pkg/state/modules/file_line.go`
+
+---
+
+`file.line` manages one line within a file. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). The `mode` parameter selects the action — `ensure` (the default: the line exists — it replaces the first matched line, or, when nothing matches, inserts the line positioned by `before`/`after`, appending it at the end when neither anchor matches), `replace` (rewrite a matched line, never adding one), `insert` (add the line if absent, positioned by `before`/`after`), or `delete` (remove every matching line; `absent` is a synonym). `match` is a regular expression identifying the target line (falling back to a literal substring test when it is not a valid regex); with no `match`, the exact `content` line is the target.
 
 ---
 
@@ -11,95 +17,106 @@ description: "Manages a single line within a file: ensuring it is present, repla
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Absolute path to the target file. `path` is accepted as an alias. If both are omitted, the state ID is used as the path. |
-| `content` | `string` | No | `""` | The desired line content. |
-| `mode` | `string` | No | `ensure` | Operation: `ensure`, `replace`, `insert`, or `delete` (`absent` is a synonym for `delete`). Case-insensitive. |
-| `match` | `string` | No | `""` | Expression identifying the target line. Treated as a Go regular expression; if it fails to compile, it falls back to a substring test. When empty, lines are matched by exact equality with `content`. |
-| `before` | `string` | No | `""` | Regex/substring; when inserting, the line is placed before the first matching line. |
-| `after` | `string` | No | `""` | Regex/substring; when inserting, the line is placed after the first matching line. Checked before `before`. |
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `content` | `string` | No | *(none)* | the line content to ensure, replace, insert, or delete |
+| `mode` | `string` | No | `ensure` | operation to perform: ensure (default), replace, insert, or delete (absent = delete); case-insensitive |
+| `match` | `string` | No | *(none)* | regular expression (or literal substring fallback) identifying the target line; when empty, the exact Content line is matched |
+| `before` | `string` | No | *(none)* | regular expression (or substring); on insert/ensure the new line is placed before the first matching line |
+| `after` | `string` | No | *(none)* | regular expression (or substring); on insert/ensure the new line is placed after the first matching line (takes precedence over before) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Mode Semantics
+## Effects
 
-| Mode | Behavior |
-|---|---|
-| `ensure` (default) | If a line matches (`match`, or exact `content` when `match` is empty), it is rewritten to `content` if different. If no line matches, `content` is inserted (at the `after`/`before` anchor, otherwise appended at the end). |
-| `replace` | Every matching line that differs from `content` is rewritten. Nothing is inserted when no line matches. |
-| `insert` | `content` is inserted (at the anchor or appended) only if no line already equals `content` exactly. |
-| `delete` / `absent` | Every matching line is removed. |
+### Check
 
----
+Reads the file and computes the resulting lines in memory. A change is needed only when the computed content differs. When the file does not exist, a change is needed only for the content-adding actions (`ensure`/`insert`); `replace`/`delete` on a missing file need no change. Any read error other than not-exist fails the check rather than risking a blind write.
 
-## Check Behavior
+### Apply
 
-- If the file does not exist: `ensure` and `insert` report changes needed (the file will be created); `replace` and `delete` report no changes needed.
-- Otherwise, the transformation is computed in memory and the state reports changes only if the result differs from the current content.
+Reads the file (capturing the original for revert on the first write). A missing file is created with the single line for the content-adding actions, and is a no-op for `replace`/`delete`. Otherwise it applies the action — `ensure` replaces the first matched line, or, when no line matches, inserts `content` after the first `after` match, else before the first `before` match, else appends it at the end; `replace` rewrites matched lines in place; `insert` adds `content` after the first `after` match, else before the first `before` match, else at end; `delete` drops every matching line — and writes the result with mode 0644, preserving the trailing newline.
 
----
+### Revert
 
-## Apply Behavior
+Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
 
-1. If the file does not exist and the mode creates content (`ensure`/`insert`), the file is created containing just `content` and a trailing newline (mode `0644`).
-2. Otherwise the current content is read and stored as a backup, the line transformation is applied, and the result is written back with mode `0644`. A trailing newline in the original file is preserved.
-3. If the computed content is identical to the current content, Apply reports `Changed: false`.
-
----
-
-## Revert Behavior
-
-- If the file did not exist before Apply, it is removed.
-- Otherwise the original content is restored from the backup.
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Ensure a directive is present
 
-```bash
-# Ensure a specific sshd setting (replaces any existing PermitRootLogin line)
-zester 'web-01' file.line /etc/ssh/sshd_config content='PermitRootLogin no' match='^PermitRootLogin'
+With no match, the exact content line is ensured — appended if it is not already present.
 
-# Delete matching lines
-zester 'web-01' file.line /etc/hosts mode=delete match='old-hostname'
+```yaml
+/etc/sysctl.conf:
+  file.line:
+    - content: "net.ipv4.ip_forward=1"
 ```
 
-### State File
+### Replace a matched line
 
-**Pin a config directive:**
+match selects the line to rewrite; mode: replace never adds a line when the match is absent.
 
 ```yaml
 /etc/ssh/sshd_config:
   file.line:
     - content: "PermitRootLogin no"
     - match: "^PermitRootLogin"
+    - mode: replace
 ```
 
-**Insert after an anchor line:**
+### Insert a line after an anchor
 
-```yaml
-/etc/fstab:
-  file.line:
-    - mode: insert
-    - content: "tmpfs /tmp tmpfs defaults 0 0"
-    - after: "^# custom mounts"
-```
-
-**Remove a line:**
+mode: insert places the line after the first line matching after (before is the fallback anchor).
 
 ```yaml
 /etc/hosts:
   file.line:
-    - mode: delete
-    - match: "decommissioned-host"
+    - content: "10.0.0.5 db"
+    - after: "^127\\.0\\.0\\.1"
+    - mode: insert
 ```
+
+### Delete a matching line ad hoc
+
+mode=delete removes every line matching match; the bare positional is the path.
+
+```bash
+zester 'web*' file.line /etc/fstab mode=delete match='\sswap\s'
+```
+
 
 ---
 
-## Divergences from Salt
+## Notes
 
-- `match` falls back to a plain substring test when it is not a valid Go regular expression (Salt requires a valid Python regex).
-- Salt's `location`, `quiet`, `indent`, and `backup` parameters are not supported.
+> **mode is an action, not a permission mode**
+>
+> Unlike file.managed, file.line's `mode` selects the edit operation (ensure/replace/insert/delete). It is not a file permission; file.line never changes permissions and always writes with 0644 when it creates a file.
+
+> **match is a regex with a substring fallback**
+>
+> `match`, `before`, and `after` are compiled as Go (RE2) regular expressions; if a value is not a valid regex it falls back to a literal substring test rather than erroring.
+
+> **Divergences from Salt**
+>
+> Unlike Salt — which requires `match` to be a valid Python regular expression — Zester falls back to a plain substring test when `match` is not a valid Go regex. Salt's `location`, `quiet`, `indent`, and `backup` parameters are not supported.
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [file.replace](/docs/guides/modules/file-replace)
+- [file.blockreplace](/docs/guides/modules/file-blockreplace)
+- [file.managed](/docs/guides/modules/file-managed)

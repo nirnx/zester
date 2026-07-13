@@ -1,0 +1,298 @@
+module: file.line
+# Permanent differential contract for the file.line migration. These cases were
+# approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accepting cases
+# pin the decoded Path/Content/Action/Match/Before/After projection (the decode
+# wrapper lowercases Action, reproducing the builder's strings.ToLower(mode)
+# normalization); rejecting cases pin the error kind. BD-tagged cases pin the
+# flagged behavioral differences:
+#   BD-6 (APPROVED) — a wrong-typed `name` is coerced (scalar) or rejected
+#   (composite) instead of silently falling back to the state ID; and every
+#   non-primary string parameter (content/match/before/after/mode) now sprints
+#   a numeric scalar to its string form, where the legacy `.(string)` assertion
+#   silently zeroed it (the pkg.installed `version` precedent).
+# `mode` is an ACTION ENUM (ensure/replace/insert/delete), not a permission
+# mode; it is a plain string with an eager default of "ensure". A numeric
+# `mode` coerces to its string form ("5") — an unrecognized action that runs as
+# the default ensure, so it is runtime-equivalent to the legacy fallback, but
+# the decoded string differs (the coercion is what BD-6 pins).
+cases:
+  # --- parity: full config across all three universes ---
+  - label: full-config-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/motd
+      content: "PermitRootLogin no"
+      match: "^PermitRootLogin"
+      mode: replace
+    want:
+      Path: /etc/motd
+      Content: "PermitRootLogin no"
+      Match: "^PermitRootLogin"
+      Action: replace
+  - label: full-config-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/motd
+      content: "PermitRootLogin no"
+      match: "^PermitRootLogin"
+      mode: replace
+    want:
+      Path: /etc/motd
+      Action: replace
+  - label: full-config-cli
+    universe: cli
+    id: web
+    input:
+      name: /etc/motd
+      content: "PermitRootLogin no"
+      mode: replace
+    want:
+      Path: /etc/motd
+      Content: "PermitRootLogin no"
+      Action: replace
+
+  # --- parity: mode defaults to ensure when absent ---
+  - label: mode-default-ensure-yaml
+    universe: yaml
+    id: /etc/motd
+    input:
+      content: hello
+    want:
+      Action: ensure
+
+  # --- parity: mode is lowercased (case-insensitive action) ---
+  - label: mode-lowercased-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/motd
+      mode: Insert
+      content: x
+    want:
+      Action: insert
+
+  # --- parity: the `path` alias supplies the primary when `name` is absent ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: web
+    input:
+      path: /etc/motd
+      content: x
+    want:
+      Path: /etc/motd
+  - label: path-alias-cli
+    universe: cli
+    id: web
+    input:
+      path: /etc/motd
+      content: x
+    want:
+      Path: /etc/motd
+
+  # --- parity: no name/path key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /etc/motd
+    input:
+      content: x
+    want:
+      Path: /etc/motd
+  - label: primary-fallback-cli
+    universe: cli
+    id: /etc/motd
+    input:
+      content: x
+    want:
+      Path: /etc/motd
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/motd
+    input:
+      name: ""
+      content: x
+    want:
+      Path: /etc/motd
+
+  # --- PARITY (§2.1 source fall-through): an empty-string `name` alongside a
+  # non-empty `path` alias resolves to the PATH, not the state ID. ---
+  - label: name-empty-path-wins-yaml
+    universe: yaml
+    id: /the/id
+    input:
+      name: ""
+      path: /etc/motd
+      content: x
+    want:
+      Path: /etc/motd
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent, falls back
+  # to the state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/motd
+    input:
+      name:
+      content: x
+    want:
+      Path: /etc/motd
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /etc/motd
+    input:
+      name:
+      content: x
+    want:
+      Path: /etc/motd
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      content: x
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      content: x
+    want:
+      Path: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+      content: x
+    want:
+      Path: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      content: x
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      content: x
+    want_error: wrong_type
+
+  # --- BD-6: every non-primary string param sprints a numeric scalar to its
+  # string form, where the legacy `.(string)` assertion silently zeroed it.
+  # Pinned per-param across yaml (native int) and msgpack (sized int). ---
+  - label: numeric-content-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      content: 5
+    want:
+      Content: "5"
+  - label: numeric-content-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      content: 5
+    want:
+      Content: "5"
+  - label: numeric-match-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      match: 5
+    want:
+      Match: "5"
+  - label: numeric-match-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      match: 5
+    want:
+      Match: "5"
+  - label: numeric-before-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      before: 5
+    want:
+      Before: "5"
+  - label: numeric-before-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      before: 5
+    want:
+      Before: "5"
+  - label: numeric-after-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      after: 5
+    want:
+      After: "5"
+  - label: numeric-after-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      after: 5
+    want:
+      After: "5"
+  # `mode` is the action enum; a numeric coerces to "5" (an unknown action, run
+  # as the default ensure at runtime — the decoded string is what BD-6 pins).
+  - label: numeric-mode-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      mode: 5
+    want:
+      Action: "5"
+  - label: numeric-mode-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      mode: 5
+    want:
+      Action: "5"

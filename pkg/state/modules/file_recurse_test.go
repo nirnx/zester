@@ -9,6 +9,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -20,9 +22,17 @@ func testFileRecurseMctx() *exec.ModuleContext {
 	}
 }
 
+// newFileRecurseTest builds a FileRecurse state through the migrated builder with
+// a caller-supplied FileExec (used where the deleted legacy constructor
+// newFileRecurse took a fake). It threads an empty decode policy.
+func newFileRecurseTest(id string, config map[string]any, file exec.FileExec) (state.State, error) {
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: file}}
+	return NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})(id, config)
+}
+
 func TestFileRecurseName(t *testing.T) {
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/dest", map[string]any{"source": "/etc/src"})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +44,7 @@ func TestFileRecurseName(t *testing.T) {
 
 func TestFileRecursePrimaryParamDefault(t *testing.T) {
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/dest", map[string]any{"source": "/etc/src"})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +57,7 @@ func TestFileRecursePrimaryParamDefault(t *testing.T) {
 
 func TestFileRecurseRequisites(t *testing.T) {
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"source":    "/src",
 		"require":   []any{"pkg.installed:nginx"},
@@ -94,7 +104,7 @@ func TestFileRecurseCheckNeedsChange(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "dest")
 
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dest, map[string]any{"source": src})
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +142,7 @@ func TestFileRecurseCheckNoChange(t *testing.T) {
 	}
 
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dest, map[string]any{"source": src, "file_mode": "0644"})
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +161,7 @@ func TestFileRecurseCheckMissingSource(t *testing.T) {
 	dest := t.TempDir()
 
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dest, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +178,7 @@ func TestFileRecurseApply(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "dest")
 
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dest, map[string]any{"source": src, "makedirs": true})
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +214,7 @@ func TestFileRecurseApplyError(t *testing.T) {
 	dest := t.TempDir()
 
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	// Source does not exist.
 	s, err := builder(dest, map[string]any{"source": "/nonexistent/source/dir"})
 	if err != nil {
@@ -228,7 +238,7 @@ func TestFileRecurseApplyClean(t *testing.T) {
 	}
 
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dest, map[string]any{"source": src, "clean": true})
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +263,7 @@ func TestFileRecurseRevert(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "dest")
 
 	mctx := testFileRecurseMctx()
-	builder := NewFileRecurseBuilder(mctx)
+	builder := NewFileRecurseBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(dest, map[string]any{"source": src, "makedirs": true})
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +294,7 @@ func TestFileRecurseCheckCleanDetectsExtras(t *testing.T) {
 	src := setupSourceDir(t)
 	dest := filepath.Join(t.TempDir(), "dest")
 
-	s, err := NewFileRecurseBuilder(testFileRecurseMctx())(dest, map[string]any{
+	s, err := NewFileRecurseBuilder(testFileRecurseMctx(), modschema.DecodeOptions{})(dest, map[string]any{
 		"source": src, "clean": true, "makedirs": true,
 	})
 	if err != nil {
@@ -337,7 +347,7 @@ func TestFileRecurseCheckCleanExtrasIgnoredWithoutClean(t *testing.T) {
 	src := setupSourceDir(t)
 	dest := filepath.Join(t.TempDir(), "dest")
 
-	s, err := NewFileRecurseBuilder(testFileRecurseMctx())(dest, map[string]any{
+	s, err := NewFileRecurseBuilder(testFileRecurseMctx(), modschema.DecodeOptions{})(dest, map[string]any{
 		"source": src, "makedirs": true,
 	})
 	if err != nil {
@@ -364,7 +374,7 @@ func TestFileRecurseCheckCleanStrayDirNoChurn(t *testing.T) {
 	src := setupSourceDir(t)
 	dest := filepath.Join(t.TempDir(), "dest")
 
-	s, err := NewFileRecurseBuilder(testFileRecurseMctx())(dest, map[string]any{
+	s, err := NewFileRecurseBuilder(testFileRecurseMctx(), modschema.DecodeOptions{})(dest, map[string]any{
 		"source": src, "clean": true, "makedirs": true,
 	})
 	if err != nil {
@@ -392,7 +402,7 @@ func TestFileRecurseCheckCleanDestMissing(t *testing.T) {
 	src := setupSourceDir(t)
 	dest := filepath.Join(t.TempDir(), "nonexistent-dest")
 
-	s, err := NewFileRecurseBuilder(testFileRecurseMctx())(dest, map[string]any{
+	s, err := NewFileRecurseBuilder(testFileRecurseMctx(), modschema.DecodeOptions{})(dest, map[string]any{
 		"source": src, "clean": true, "makedirs": true,
 	})
 	if err != nil {
@@ -415,7 +425,7 @@ func TestFileRecurseCheckDirModeDrift(t *testing.T) {
 	src := setupSourceDir(t)
 	dest := filepath.Join(t.TempDir(), "dest")
 
-	s, err := NewFileRecurseBuilder(testFileRecurseMctx())(dest, map[string]any{
+	s, err := NewFileRecurseBuilder(testFileRecurseMctx(), modschema.DecodeOptions{})(dest, map[string]any{
 		"source": src, "dir_mode": "0750", "makedirs": true,
 	})
 	if err != nil {
@@ -488,7 +498,7 @@ func TestFileRecurseUndeclaredDirModeNoChurn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := NewFileRecurseBuilder(testFileRecurseMctx())(dest, map[string]any{
+	s, err := NewFileRecurseBuilder(testFileRecurseMctx(), modschema.DecodeOptions{})(dest, map[string]any{
 		"source": src, "file_mode": "0644",
 	})
 	if err != nil {
@@ -534,7 +544,7 @@ func TestFileRecurseCheckOwnershipDrift(t *testing.T) {
 	// Flat source tree (files only) built entirely in the fake.
 	fake.PreCreate("/src/app.conf", []byte("conf"), 0644)
 
-	s, err := newFileRecurse("/dst", map[string]any{
+	s, err := newFileRecurseTest("/dst", map[string]any{
 		"source": "/src", "user": userName,
 	}, fake)
 	if err != nil {
@@ -570,7 +580,7 @@ func TestFileRecurseCheckOwnershipUndeclared(t *testing.T) {
 	fake.PreCreate("/dst/app.conf", []byte("conf"), 0644)
 	fake.SetOwner("/dst/app.conf", 12345, 54321)
 
-	s, err := newFileRecurse("/dst", map[string]any{"source": "/src"}, fake)
+	s, err := newFileRecurseTest("/dst", map[string]any{"source": "/src"}, fake)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +606,7 @@ func TestFileRecurseWalksViaFileExec(t *testing.T) {
 	fake.PreCreate("/dst/a.txt", []byte("alpha"), 0644)
 	fake.PreCreate("/dst/stray.txt", []byte("rogue"), 0644)
 
-	s, err := newFileRecurse("/dst", map[string]any{
+	s, err := newFileRecurseTest("/dst", map[string]any{
 		"source": "/src", "clean": true,
 	}, fake)
 	if err != nil {
@@ -637,7 +647,7 @@ func TestFileRecurseCheckReadErrorFails(t *testing.T) {
 	fake.PreCreate("/dst/a.txt", []byte("alpha"), 0644)
 	fake.SetReadError("/dst/a.txt", errors.New("permission denied"))
 
-	s, err := newFileRecurse("/dst", map[string]any{"source": "/src"}, fake)
+	s, err := newFileRecurseTest("/dst", map[string]any{"source": "/src"}, fake)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +661,7 @@ func TestFileRecurseRevertFreshInstanceNoOp(t *testing.T) {
 	src := setupSourceDir(t)
 	dest := filepath.Join(t.TempDir(), "dest")
 
-	s, err := NewFileRecurseBuilder(testFileRecurseMctx())(dest, map[string]any{"source": src})
+	s, err := NewFileRecurseBuilder(testFileRecurseMctx(), modschema.DecodeOptions{})(dest, map[string]any{"source": src})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -667,3 +677,23 @@ func TestFileRecurseRevertFreshInstanceNoOp(t *testing.T) {
 }
 
 var _ state.State = (*FileRecurse)(nil)
+
+// TestFileRecurseContract replays the permanent differential contract fixtures
+// against the migrated fileRecurseSpec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still existed
+// (see the migration changelog); after its deletion this replay is the permanent
+// regression guard for file.recurse's decode behavior — including the flagged BD-1
+// (a msgpack-delivered sized-int file_mode/dir_mode is applied, and for dir_mode
+// its declared-only bit survives), BD-2 (a CLI clean/makedirs string is honored),
+// BD-6 (a wrong-typed value is coerced or rejected), and BD-7 (clean and makedirs
+// each accept the integers 1/0) divergences, plus the DECLARED-ONLY dir_mode pins.
+func TestFileRecurseContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var r FileRecurse
+		if _, err := fileRecurseSpec.Decode(id, config, &r, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &r, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.recurse.yaml")
+}

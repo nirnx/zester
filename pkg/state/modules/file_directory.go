@@ -7,69 +7,163 @@ import (
 	"io/fs"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/paramtypes"
 	"github.com/nirnx/zester/pkg/state"
 )
 
 // FileDirectory implements the file.directory state.
 // It ensures a directory exists with the specified permissions and ownership.
+//
+// FileDirectory is also its own schema proto: the tagged exported fields ARE the
+// module's parameter declaration (one schema declaration per module). Mode is a
+// paramtypes.FileMode declared `lazy,default=0755,aliases=dir_mode` — the mode is
+// never materialized into the struct; the module applies the documented 0755
+// default at use time via Mode.Resolve(0755), and dir_mode is accepted as a
+// fallback source (mode wins when both are set, exactly like the legacy
+// mode-then-dir_mode-then-0755 chain). FileMode honors an octal-int mode of ANY
+// integer kind, so a reactor-dispatched `mode: 0700` (delivered as a msgpack-sized
+// uint16) now applies 0700 rather than silently dropping to the 0755 default
+// (BD-1, the same reproduced reactor bug as file.managed). The unexported runtime
+// fields (id, reqs, injected provider, revert memo) are untagged, so the schema
+// compiler skips them.
 type FileDirectory struct {
 	id   string
 	reqs state.Requisites
 
-	Path     string
-	Mode     string
-	DirMode  string
-	User     string
-	Group    string
-	MakeDirs bool
+	// Path is the absolute path to the directory; it defaults to the state ID.
+	Path string `zester:"name,primary" usage:"absolute path to the target directory (defaults to the state ID)"`
+	// Mode is the directory permission mode; it defaults to 0755 (applied lazily).
+	// The dir_mode alias is accepted as a fallback source (mode wins when both set).
+	Mode paramtypes.FileMode `zester:"mode,lazy,default=0755,aliases=dir_mode" usage:"directory permission mode in octal (\"0755\", \"0700\"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755"`
+	// User is the directory owner username; ownership is left unchanged when unset.
+	User string `zester:"user" usage:"directory owner username; ownership is left unchanged when unset"`
+	// Group is the directory group name; ownership is left unchanged when unset.
+	Group string `zester:"group" usage:"directory group name; ownership is left unchanged when unset"`
+	// MakeDirs is accepted for Salt compatibility but has NO effect: the Apply
+	// always calls MkdirAll, so parent directories are created unconditionally.
+	MakeDirs bool `zester:"makedirs" usage:"accepted for Salt compatibility but has NO effect — parent directories are always created via MkdirAll regardless; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
+	// file is the injected file execution provider.
 	file exec.FileExec
 
+	// wasCreated records that Apply created the directory (it did not pre-exist),
+	// so a same-instance Revert removes it. With the memo unset, Revert is a
+	// clean no-op.
 	wasCreated bool
 }
 
-// NewFileDirectoryBuilder returns a state.Builder that creates FileDirectory states.
-func NewFileDirectoryBuilder(mctx *exec.ModuleContext) state.Builder {
+// fileDirectorySpec is the compiled schema + documentation for file.directory. It
+// is compiled once at package init and executed by every decode path (the builder
+// below, and Registry.Parse). The prose is drift-corrected against the live
+// Check/Apply/Revert behavior — notably that `makedirs` has no effect (MkdirAll is
+// unconditional) and that the mode is set (Chmod) BEFORE ownership is converged
+// (Chown), the order the legacy code has always used.
+var fileDirectorySpec = mustSpec("file.directory", modschema.KindState, FileDirectory{}, modschema.Doc{
+	Summary: "Ensure a directory exists with the desired permissions and ownership.",
+	Description: "`file.directory` ensures a directory exists at its path with the desired permission " +
+		"mode and ownership. The path defaults to the state ID. The `mode` parameter sets the " +
+		"directory's permission bits and defaults to `0755`; `dir_mode` is accepted as an alias — a " +
+		"fallback source for the same mode, with `mode` winning when both are given. It honors an " +
+		"octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0700` applies " +
+		"0700. `user`/`group` converge ownership only when declared. The `makedirs` parameter is " +
+		"accepted for Salt compatibility but has no effect — the parent chain is always created.",
+	Effects: modschema.Effects{
+		Check: "Compares, in order: path existence (a genuine not-exist means the directory must be " +
+			"created, while any other stat error fails the check rather than reporting phantom drift); " +
+			"that the path is a directory (an existing non-directory needs a change); the permission " +
+			"mode (the managed facets — permission bits plus setuid/setgid/sticky) against the desired " +
+			"mode, defaulting to 0755; and, only when `user`/`group` are declared, ownership drift. " +
+			"Reports a change on the first mismatch.",
+		Apply: "Probes existence for the revert memo — a non-not-exist stat error fails the apply " +
+			"rather than poisoning the memo, since a pre-existing tree must never be recorded as " +
+			"created (a same-instance Revert would RemoveAll it). Creates the directory and any missing " +
+			"parents with MkdirAll (unconditionally — `makedirs` is inert), records the created memo " +
+			"only when the directory did not pre-exist, sets the mode via Chmod, and — when `user`/" +
+			"`group` is declared — converges ownership via Chown. Reports the applied mode.",
+		Revert: "Removes a directory this run's Apply created (RemoveAll). A directory that pre-existed " +
+			"(only its mode or ownership changed) is left untouched, and a fresh instance (a standalone " +
+			"revert) recorded nothing and is a no-op — it never removes a directory it did not create.",
+	},
+	Examples: []modschema.Example{
+		{
+			Title:       "Create a directory with ownership",
+			Kind:        "state",
+			Explanation: "The state ID is the target path; mode and ownership are set inline.",
+			Code:        "/opt/myapp:\n  file.directory:\n    - mode: \"0755\"\n    - user: root\n    - group: root\n",
+		},
+		{
+			Title:       "Private application data directory",
+			Kind:        "state",
+			Explanation: "A restrictive 0700 mode with a service account owner; the require pulls in the user first.",
+			Code: "/var/lib/prometheus/data:\n  file.directory:\n    - mode: \"0700\"\n" +
+				"    - user: prometheus\n    - group: prometheus\n    - require:\n      - \"user.present:prometheus\"\n",
+		},
+		{
+			Title:       "Create a directory ad hoc",
+			Kind:        "cli",
+			Explanation: "The bare positional argument is the path; mode and ownership are key=value args.",
+			Code:        "zester 'web*' file.directory /var/log/myapp mode=0750 user=appuser group=appuser",
+		},
+	},
+	Notes: []modschema.Note{
+		{
+			Level: "info",
+			Title: "makedirs has no effect",
+			Body: "The makedirs parameter is accepted for Salt compatibility but is inert: file.directory " +
+				"always creates the full parent chain via MkdirAll, whether or not makedirs is set.",
+		},
+		{
+			Title: "Mode defaults to 0755 and honors integer modes",
+			Body: "An omitted mode applies 0755. The dir_mode alias supplies the same mode as a fallback " +
+				"(mode wins if both are given). A mode given as an octal integer (for example `mode: 0700`) " +
+				"is honored across every delivery path, including a reactor dispatch where msgpack encodes " +
+				"it as a sized integer; setuid/setgid/sticky bits are preserved.",
+		},
+		{
+			Level: "info",
+			Title: "Ownership requires privilege",
+			Body: "`user` and `group` are resolved via `os/user.Lookup` and `os/user.LookupGroup`; the " +
+				"peel must run with sufficient privileges to set ownership.",
+		},
+	},
+	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7"},
+	SeeAlso:     []string{"file.managed", "file.recurse", "file.absent"},
+})
+
+// NewFileDirectoryBuilder returns a state.Builder that creates FileDirectory
+// states using the given ModuleContext's file provider. Decode policy (unknown-key
+// handling, reserved keys) is threaded via opts; the peel supplies it through
+// modules.RegisterAll.
+func NewFileDirectoryBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions) state.Builder {
 	return func(id string, config map[string]any) (state.State, error) {
-		return newFileDirectory(id, config, mctx.File)
+		if mctx.File == nil {
+			return nil, fmt.Errorf("file.directory: no file provider available")
+		}
+		// Decode the typed parameters first. Decode is transactional and commits
+		// by replacing the whole struct, so the injected provider, id, and
+		// requisites MUST be assigned AFTER it — assigning them before would be
+		// overwritten by the committed scratch value.
+		d := &FileDirectory{}
+		if _, err := fileDirectorySpec.Decode(id, config, d, opts); err != nil {
+			return nil, fmt.Errorf("file.directory: %w", err)
+		}
+		d.id = id
+		d.file = mctx.File
+		d.reqs = state.ParseRequisites(config)
+		return d, nil
 	}
-}
-
-func newFileDirectory(id string, config map[string]any, file exec.FileExec) (state.State, error) {
-	d := &FileDirectory{id: id, file: file}
-
-	d.Path, _ = config["name"].(string)
-	if d.Path == "" {
-		d.Path = id
-	}
-
-	d.Mode = modeConfigToString(config["mode"])
-	d.DirMode = modeConfigToString(config["dir_mode"])
-	d.User, _ = config["user"].(string)
-	d.Group, _ = config["group"].(string)
-	d.MakeDirs, _ = config["makedirs"].(bool)
-
-	d.reqs = state.ParseRequisites(config)
-
-	return d, nil
 }
 
 func (d *FileDirectory) Name() string           { return "file.directory:" + d.id }
 func (d *FileDirectory) Reqs() state.Requisites { return d.reqs }
 
-func (d *FileDirectory) desiredMode() (fs.FileMode, error) {
-	modeStr := d.Mode
-	if modeStr == "" {
-		modeStr = d.DirMode
-	}
-	if modeStr == "" {
-		return 0755, nil
-	}
-	m, err := parseFileMode(modeStr)
-	if err != nil {
-		return 0, fmt.Errorf("file.directory: invalid mode %q: %w", modeStr, err)
-	}
-	return m, nil
+// desiredMode resolves the managed permission mode, supplying the documented 0755
+// default for the lazy, unmaterialized Mode field. FileMode parsed the value at
+// decode time (through the mode name or its dir_mode alias), so resolution here
+// cannot fail.
+func (d *FileDirectory) desiredMode() fs.FileMode {
+	return d.Mode.Resolve(0755)
 }
 
 func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
@@ -94,11 +188,7 @@ func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
 		}, nil
 	}
 
-	mode, err := d.desiredMode()
-	if err != nil {
-		return state.CheckResult{}, err
-	}
-
+	mode := d.desiredMode()
 	if !modesEqual(info.Mode(), mode) {
 		return state.CheckResult{
 			NeedsChange: true,
@@ -118,10 +208,7 @@ func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (d *FileDirectory) Apply(ctx context.Context) (state.ApplyResult, error) {
-	mode, err := d.desiredMode()
-	if err != nil {
-		return state.ApplyResult{}, err
-	}
+	mode := d.desiredMode()
 
 	// Probe existence for the revert memo. Only a genuine not-exist can mark
 	// the directory as created; any other stat error fails the apply — a

@@ -10,14 +10,26 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testFileCopyMctx() *exec.ModuleContext {
 	return &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: &exec.OSFileExec{}}}
 }
 
+// newFileCopyTest builds a FileCopy state through the migrated builder with a
+// caller-supplied file provider — the seam the pre-migration inner
+// constructor (newFileCopy) offered. It threads an empty decode policy; the
+// builder decodes through fileCopySpec.
+func newFileCopyTest(id string, config map[string]any, file exec.FileExec) (state.State, error) {
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: file}}
+	return NewFileCopyBuilder(mctx, modschema.DecodeOptions{})(id, config)
+}
+
 func TestFileCopyName(t *testing.T) {
-	s, err := NewFileCopyBuilder(testFileCopyMctx())("/etc/dst", map[string]any{
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})("/etc/dst", map[string]any{
 		"source": "/etc/src",
 	})
 	if err != nil {
@@ -29,14 +41,14 @@ func TestFileCopyName(t *testing.T) {
 }
 
 func TestFileCopyMissingSource(t *testing.T) {
-	_, err := NewFileCopyBuilder(testFileCopyMctx())("/etc/dst", map[string]any{})
+	_, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})("/etc/dst", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when source is missing")
 	}
 }
 
 func TestFileCopyMissingProvider(t *testing.T) {
-	_, err := NewFileCopyBuilder(&exec.ModuleContext{})("/etc/dst", map[string]any{
+	_, err := NewFileCopyBuilder(&exec.ModuleContext{}, modschema.DecodeOptions{})("/etc/dst", map[string]any{
 		"source": "/etc/src",
 	})
 	if err == nil {
@@ -49,7 +61,7 @@ func TestFileCopyHappyPath(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "payload\n")
 	dst := filepath.Join(t.TempDir(), "dst.txt")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{"source": src})
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{"source": src})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +104,7 @@ func TestFileCopyExistingNoForce(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "new\n")
 	dst := writeTempFile(t, "dst.txt", "old\n")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{"source": src})
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{"source": src})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +135,7 @@ func TestFileCopyForceOverwrite(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "new\n")
 	dst := writeTempFile(t, "dst.txt", "old\n")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{
 		"source": src, "force": true,
 	})
 	if err != nil {
@@ -165,7 +177,7 @@ func TestFileCopyMakeDirs(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "data\n")
 	dst := filepath.Join(t.TempDir(), "a", "b", "dst.txt")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{
 		"source": src, "makedirs": true,
 	})
 	if err != nil {
@@ -185,7 +197,7 @@ func TestFileCopyNoMakeDirsFails(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "data\n")
 	dst := filepath.Join(t.TempDir(), "missing", "dst.txt")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{"source": src})
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{"source": src})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +211,7 @@ func TestFileCopyRevert(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "new\n")
 	dst := writeTempFile(t, "dst.txt", "old\n")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{
 		"source": src, "force": true,
 	})
 	if err != nil {
@@ -222,7 +234,7 @@ func TestFileCopyRevertRemovesFreshCopy(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "data\n")
 	dst := filepath.Join(t.TempDir(), "dst.txt")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{"source": src})
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{"source": src})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +254,7 @@ func TestFileCopyRevertFreshInstanceNoOp(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "new\n")
 	dst := writeTempFile(t, "dst.txt", "precious\n")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{
 		"source": src, "force": true,
 	})
 	if err != nil {
@@ -275,7 +287,7 @@ func TestFileCopyRevertFreshInstanceMissingDest(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "new\n")
 	dst := filepath.Join(t.TempDir(), "missing.txt")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{"source": src})
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{"source": src})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +307,7 @@ func TestFileCopyRevertCreatedToleratesMissing(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "data\n")
 	dst := filepath.Join(t.TempDir(), "dst.txt")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{"source": src})
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{"source": src})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +332,7 @@ func TestFileCopyReApplyKeepsFirstBackup(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "new\n")
 	dst := writeTempFile(t, "dst.txt", "old\n")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{
 		"source": src, "force": true,
 	})
 	if err != nil {
@@ -354,7 +366,7 @@ func TestFileCopyCreatedPrecedenceOverBackup(t *testing.T) {
 	src := writeTempFile(t, "src.txt", "data\n")
 	dst := filepath.Join(t.TempDir(), "dst.txt")
 
-	s, err := NewFileCopyBuilder(testFileCopyMctx())(dst, map[string]any{
+	s, err := NewFileCopyBuilder(testFileCopyMctx(), modschema.DecodeOptions{})(dst, map[string]any{
 		"source": src, "force": true,
 	})
 	if err != nil {
@@ -389,7 +401,7 @@ func TestFileCopyCheckReadErrorFails(t *testing.T) {
 	fake.PreCreate("/dst", []byte("old"), 0644)
 	fake.SetReadError("/dst", errors.New("permission denied"))
 
-	s, err := newFileCopy("/dst", map[string]any{"source": "/src", "force": true}, fake)
+	s, err := newFileCopyTest("/dst", map[string]any{"source": "/src", "force": true}, fake)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +418,7 @@ func TestFileCopyApplyReadErrorFails(t *testing.T) {
 	fake.PreCreate("/dst", []byte("old"), 0644)
 	fake.SetReadError("/dst", errors.New("permission denied"))
 
-	s, err := newFileCopy("/dst", map[string]any{"source": "/src", "force": true}, fake)
+	s, err := newFileCopyTest("/dst", map[string]any{"source": "/src", "force": true}, fake)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,4 +430,24 @@ func TestFileCopyApplyReadErrorFails(t *testing.T) {
 	if !ok || string(got) != "old" {
 		t.Errorf("destination overwritten despite read error: got %q", string(got))
 	}
+}
+
+// Verify the State interface is fully satisfied at compile time.
+var _ state.State = (*FileCopy)(nil)
+
+// TestFileCopyContract replays the permanent differential contract fixtures
+// against the migrated fileCopySpec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is the
+// permanent regression guard for file.copy's decode behavior — including the
+// flagged BD-2, BD-6, and BD-7 divergences.
+func TestFileCopyContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileCopy
+		if _, err := fileCopySpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.copy.yaml")
 }

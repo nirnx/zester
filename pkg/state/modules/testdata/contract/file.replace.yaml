@@ -1,0 +1,441 @@
+module: file.replace
+# Permanent differential contract for the file.replace migration. These cases
+# were approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accepting cases
+# pin the decoded Path/Pattern/Repl/Count/AppendIfNotFound/PrependIfNotFound/
+# NotFoundContent projection; rejecting cases pin the error kind. `pattern` is
+# REQUIRED — a missing/empty pattern fails BOTH the legacy explicit check and
+# the decoded MissingRequired error ("both reject" is PARITY, not a BD).
+# BD-tagged cases pin the flagged behavioral differences:
+#   BD-1 (PENDING sign-off) — `count` honors a msgpack sized integer. msgpack
+#   encodes a small int (count: 2) as an int8, which the legacy fsxToInt switch
+#   (int/int64/float64 only) dropped to 0 (replace-all); it is now honored.
+#   BD-2 (APPROVED) — a CLI numeric-string `count=2` is parsed (legacy fsxToInt
+#   dropped a string to 0), and a CLI bool-string
+#   append_if_not_found=true/prepend_if_not_found=true is honored (legacy .(bool)
+#   dropped it).
+#   BD-6 (APPROVED) — a wrong-typed `name` is coerced (scalar) or rejected
+#   (composite) instead of silently falling back to the state ID; and a
+#   NON-integral float `count` (2.9) is now rejected with a typed value_invalid
+#   error, where the legacy fsxToInt truncated it (int(2.9) = 2). An integral
+#   float count still coerces — only a non-integral value diverges (the
+#   file.managed float-mode fixture is the precedent). The non-primary string
+#   params (pattern/repl/not_found_content) now sprint a numeric scalar to its
+#   string form, where the legacy `.(string)` assertion silently zeroed it — for
+#   the REQUIRED `pattern` this is a reject-to-accept flip (legacy `pattern: 5`
+#   became "" and hit the required check; now it decodes to "5").
+#   BD-7 (APPROVED) — append_if_not_found/prepend_if_not_found accept the
+#   INTEGERS 1 and 0 (1 -> true, 0 -> false) and reject any other integer with a
+#   typed error, where the legacy .(bool) assertion dropped an int entirely.
+cases:
+  # --- parity: full config across all three universes ---
+  - label: full-config-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      pattern: "^level="
+      repl: "level=debug"
+      not_found_content: "level=debug"
+    want:
+      Path: /etc/x
+      Pattern: "^level="
+      Repl: "level=debug"
+      NotFoundContent: "level=debug"
+  - label: full-config-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/x
+      pattern: "^level="
+      repl: "level=debug"
+    want:
+      Path: /etc/x
+      Pattern: "^level="
+      Repl: "level=debug"
+  - label: full-config-cli
+    universe: cli
+    id: web
+    input:
+      name: /etc/x
+      pattern: "^level="
+      repl: "level=debug"
+    want:
+      Path: /etc/x
+      Pattern: "^level="
+      Repl: "level=debug"
+
+  # --- parity: the `path` alias supplies the primary when `name` is absent ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: web
+    input:
+      path: /etc/x
+      pattern: p
+    want:
+      Path: /etc/x
+  # --- parity: primary fallback / empty-name / nil-name ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /etc/x
+    input:
+      pattern: p
+    want:
+      Path: /etc/x
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/x
+    input:
+      name: ""
+      pattern: p
+    want:
+      Path: /etc/x
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /etc/x
+    input:
+      name:
+      pattern: p
+    want:
+      Path: /etc/x
+
+  # --- parity: pattern is required (both legacy and decoded reject) ---
+  - label: pattern-missing-rejected-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      repl: r
+    want_error: missing_required
+  - label: pattern-missing-rejected-cli
+    universe: cli
+    id: web
+    input:
+      name: /etc/x
+      repl: r
+    want_error: missing_required
+  - label: pattern-empty-rejected-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      pattern: ""
+      repl: r
+    want_error: missing_required
+
+  # --- parity: count as a native YAML int decodes unchanged ---
+  - label: count-native-int-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      pattern: p
+      count: 2
+    want:
+      Count: 2
+
+  # --- BD-1 (PENDING): count over msgpack (a sized int8) is now honored, where
+  # legacy fsxToInt dropped every non-int/int64/float64 kind to 0. ---
+  - label: count-msgpack-sized-int
+    universe: msgpack
+    id: web
+    bd: BD-1
+    input:
+      name: /etc/x
+      pattern: p
+      count: 2
+    want:
+      Count: 2
+
+  # --- BD-2: a CLI numeric-string count is parsed (was dropped to 0) ---
+  - label: count-cli-numeric-string
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: /etc/x
+      pattern: p
+      count: 2
+    want:
+      Count: 2
+
+  # --- BD-6: a NON-integral float count is rejected at decode with a typed
+  # value error, where the legacy fsxToInt truncated it (int(2.9) = 2). The
+  # primitive int coercion accepts finite INTEGRAL floats but rejects a
+  # non-integral value, so count VALIDATION moves to decode time. The file.managed
+  # float-mode fixture is the precedent. Pinned across yaml (native float) and
+  # msgpack (round-tripped float64). ---
+  - label: float-count-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      pattern: p
+      count: 2.9
+    want_error: value_invalid
+  - label: float-count-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      pattern: p
+      count: 2.9
+    want_error: value_invalid
+
+  # --- parity: append/prepend as native bools ---
+  - label: append-true-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      pattern: p
+      append_if_not_found: true
+    want:
+      AppendIfNotFound: true
+
+  # --- BD-2: a CLI bool-string append_if_not_found is now honored ---
+  - label: append-cli-truthy-string
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: /etc/x
+      pattern: p
+      append_if_not_found: true
+    want:
+      AppendIfNotFound: true
+
+  # --- BD-2: a CLI bool-string prepend_if_not_found is now honored. Every boolean
+  # parameter's CLI arm is pinned per-param (§11), not by a representative. ---
+  - label: prepend-cli-truthy-string
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: /etc/x
+      pattern: p
+      prepend_if_not_found: true
+    want:
+      PrependIfNotFound: true
+
+  # --- BD-7: append_if_not_found accepts the INTEGERS 1 and 0 and rejects any
+  # other integer with a typed error. Pinned across yaml (native int) and
+  # msgpack (sized int). prepend_if_not_found's arm is pinned explicitly below
+  # (every boolean parameter is pinned per-param, not by a representative). ---
+  - label: append-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      append_if_not_found: 1
+    want:
+      AppendIfNotFound: true
+  - label: append-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      append_if_not_found: 1
+    want:
+      AppendIfNotFound: true
+  - label: append-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      append_if_not_found: 0
+    want:
+      AppendIfNotFound: false
+  - label: append-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      append_if_not_found: 0
+    want:
+      AppendIfNotFound: false
+  - label: append-int-invalid-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      append_if_not_found: 2
+    want_error: value_invalid
+  - label: append-int-invalid-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      append_if_not_found: 2
+    want_error: value_invalid
+
+  # --- BD-7: prepend_if_not_found's integer arm is pinned explicitly (every
+  # boolean parameter's arm is declared, not just a representative). ---
+  - label: prepend-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      prepend_if_not_found: 1
+    want:
+      PrependIfNotFound: true
+  - label: prepend-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      prepend_if_not_found: 1
+    want:
+      PrependIfNotFound: true
+  - label: prepend-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      prepend_if_not_found: 0
+    want:
+      PrependIfNotFound: false
+  - label: prepend-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      prepend_if_not_found: 0
+    want:
+      PrependIfNotFound: false
+  - label: prepend-int-invalid-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      prepend_if_not_found: 2
+    want_error: value_invalid
+  - label: prepend-int-invalid-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/x
+      pattern: p
+      prepend_if_not_found: 2
+    want_error: value_invalid
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      pattern: p
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      pattern: p
+    want:
+      Path: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      pattern: p
+    want_error: wrong_type
+
+  # --- BD-6: non-primary string params sprint a numeric scalar to its string
+  # form, where the legacy `.(string)` assertion silently zeroed it. For the
+  # REQUIRED `pattern` this is a reject-to-accept flip. Pinned per-param across
+  # yaml (native int) and msgpack (sized int). ---
+  - label: numeric-pattern-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      pattern: 5
+    want:
+      Pattern: "5"
+  - label: numeric-pattern-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      pattern: 5
+    want:
+      Pattern: "5"
+  - label: numeric-repl-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      pattern: p
+      repl: 5
+    want:
+      Repl: "5"
+  - label: numeric-repl-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      pattern: p
+      repl: 5
+    want:
+      Repl: "5"
+  - label: numeric-not-found-content-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      pattern: p
+      not_found_content: 5
+    want:
+      NotFoundContent: "5"
+  - label: numeric-not-found-content-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      pattern: p
+      not_found_content: 5
+    want:
+      NotFoundContent: "5"

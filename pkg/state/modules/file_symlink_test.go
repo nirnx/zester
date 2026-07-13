@@ -9,6 +9,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -22,7 +24,7 @@ func testFileSymlinkMctx() *exec.ModuleContext {
 
 func TestFileSymlinkName(t *testing.T) {
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/link", map[string]any{"target": "/etc/target"})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +36,7 @@ func TestFileSymlinkName(t *testing.T) {
 
 func TestFileSymlinkPrimaryParamDefault(t *testing.T) {
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/link", map[string]any{"target": "/etc/target"})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +49,7 @@ func TestFileSymlinkPrimaryParamDefault(t *testing.T) {
 
 func TestFileSymlinkRequisites(t *testing.T) {
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"target":    "/etc/target",
 		"require":   []any{"pkg.installed:nginx"},
@@ -78,7 +80,7 @@ func TestFileSymlinkCheckMissing(t *testing.T) {
 	linkPath := filepath.Join(tmp, "mylink")
 
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(linkPath, map[string]any{"target": "/etc/hosts"})
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +107,7 @@ func TestFileSymlinkCheckCorrect(t *testing.T) {
 	}
 
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(linkPath, map[string]any{"target": target})
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +130,7 @@ func TestFileSymlinkCheckWrongTarget(t *testing.T) {
 	}
 
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(linkPath, map[string]any{"target": "/correct/target", "force": true})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +154,7 @@ func TestFileSymlinkApplyCreate(t *testing.T) {
 	linkPath := filepath.Join(tmp, "mylink")
 
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(linkPath, map[string]any{"target": target})
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +185,7 @@ func TestFileSymlinkApplyReplaceWithForce(t *testing.T) {
 	}
 
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(linkPath, map[string]any{"target": "/new/target", "force": true})
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +216,7 @@ func TestFileSymlinkApplyNoForceError(t *testing.T) {
 	}
 
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	// force is false (default)
 	s, err := builder(linkPath, map[string]any{"target": "/new/target"})
 	if err != nil {
@@ -232,7 +234,7 @@ func TestFileSymlinkApplyMakeDirs(t *testing.T) {
 	linkPath := filepath.Join(tmp, "subdir", "nested", "mylink")
 
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(linkPath, map[string]any{"target": "/etc/hosts", "makedirs": true})
 	if err != nil {
 		t.Fatal(err)
@@ -261,7 +263,7 @@ func TestFileSymlinkApplyError(t *testing.T) {
 	// Symlink will fail because fakeFile doesn't actually create symlinks that work with real OS.
 	// We simulate by having an internal issue — use a real bad path scenario.
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fakeFile}}
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/dev/null/impossible/link", map[string]any{"target": "/etc/hosts"})
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +281,7 @@ func TestFileSymlinkApplyError(t *testing.T) {
 func TestFileSymlinkApplyRealError(t *testing.T) {
 	// Attempt to create a symlink in a non-existent directory without makedirs.
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/nonexistent/dir/mylink", map[string]any{"target": "/etc/hosts"})
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +302,7 @@ func TestFileSymlinkRevert(t *testing.T) {
 	linkPath := filepath.Join(tmp, "mylink")
 
 	mctx := testFileSymlinkMctx()
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(linkPath, map[string]any{"target": target})
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +331,7 @@ func TestFileSymlinkRevertError(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.RemoveAllErr = fmt.Errorf("permission denied") // Remove doesn't use this, but let's test Remove error path
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fakeFile}}
-	builder := NewFileSymlinkBuilder(mctx)
+	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/some/link", map[string]any{"target": "/some/target"})
 	if err != nil {
 		t.Fatal(err)
@@ -345,3 +347,20 @@ func TestFileSymlinkRevertError(t *testing.T) {
 }
 
 var _ state.State = (*FileSymlink)(nil)
+
+// TestFileSymlinkContract replays the permanent differential contract fixtures
+// against the migrated fileSymlinkSpec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is the
+// permanent regression guard for file.symlink's decode behavior — including
+// the flagged BD-2, BD-6, and BD-7 divergences.
+func TestFileSymlinkContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var s FileSymlink
+		if _, err := fileSymlinkSpec.Decode(id, config, &s, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &s, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.symlink.yaml")
+}

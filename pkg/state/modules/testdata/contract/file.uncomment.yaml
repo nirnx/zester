@@ -1,0 +1,185 @@
+module: file.uncomment
+# Permanent differential contract for the file.uncomment half of the N:1
+# file.comment/file.uncomment migration (one FileComment proto, two Specs;
+# file.uncomment decodes through fileUncommentSpec). These cases were approved by
+# the legacy-vs-new equivalence comparison while the legacy constructor still
+# existed (see the migration changelog); after its deletion RunContract replays
+# them as the permanent regression guard. Accepting cases pin the decoded
+# Path/Char/Regex projection; rejecting cases pin the error kind. `regex` is
+# REQUIRED (both legacy and decoded reject a missing/empty regex — PARITY);
+# `char` has an eager default of "#". BD-tagged cases pin the flagged behavioral
+# difference:
+#   BD-6 (APPROVED) — a wrong-typed `name` is coerced (scalar) or rejected
+#   (composite) instead of silently falling back to the state ID; and the
+#   non-primary string params (regex/char) now sprint a numeric scalar to their
+#   string form, where the legacy `.(string)` assertion silently zeroed them —
+#   for the REQUIRED `regex` this is a reject-to-accept flip.
+cases:
+  # --- parity: full config across all three universes ---
+  - label: full-config-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/a
+      regex: "net.ipv4.ip_forward"
+      char: ";"
+    want:
+      Path: /etc/a
+      Regex: "net.ipv4.ip_forward"
+      Char: ";"
+  - label: full-config-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/a
+      regex: "net.ipv4.ip_forward"
+      char: ";"
+    want:
+      Path: /etc/a
+      Regex: "net.ipv4.ip_forward"
+      Char: ";"
+  - label: full-config-cli
+    universe: cli
+    id: web
+    input:
+      name: /etc/a
+      regex: "net.ipv4.ip_forward"
+      char: ";"
+    want:
+      Path: /etc/a
+      Regex: "net.ipv4.ip_forward"
+      Char: ";"
+
+  # --- parity: char defaults to # when absent ---
+  - label: char-default-yaml
+    universe: yaml
+    id: /etc/a
+    input:
+      regex: "^x"
+    want:
+      Char: "#"
+
+  # --- parity: the `path` alias supplies the primary when `name` is absent ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: web
+    input:
+      path: /etc/a
+      regex: "^x"
+    want:
+      Path: /etc/a
+
+  # --- parity: primary fallback / empty-name / nil-name ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /etc/a
+    input:
+      regex: "^x"
+    want:
+      Path: /etc/a
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/a
+    input:
+      name: ""
+      regex: "^x"
+    want:
+      Path: /etc/a
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /etc/a
+    input:
+      name:
+      regex: "^x"
+    want:
+      Path: /etc/a
+
+  # --- parity: regex is required (both legacy and decoded reject) ---
+  - label: regex-missing-rejected-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/a
+    want_error: missing_required
+  - label: regex-empty-rejected-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/a
+      regex: ""
+    want_error: missing_required
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      regex: "^x"
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      regex: "^x"
+    want:
+      Path: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      regex: "^x"
+    want_error: wrong_type
+
+  # --- BD-6: non-primary string params sprint a numeric scalar to their string
+  # form, where the legacy `.(string)` assertion silently zeroed them. For the
+  # REQUIRED `regex` this is a reject-to-accept flip. Pinned per-param across
+  # yaml (native int) and msgpack (sized int). ---
+  - label: numeric-regex-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/a
+      regex: 5
+    want:
+      Regex: "5"
+  - label: numeric-regex-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/a
+      regex: 5
+    want:
+      Regex: "5"
+  - label: numeric-char-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/a
+      regex: "^x"
+      char: 5
+    want:
+      Char: "5"
+  - label: numeric-char-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/a
+      regex: "^x"
+      char: 5
+    want:
+      Char: "5"

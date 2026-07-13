@@ -10,6 +10,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -23,7 +25,7 @@ func testFileBlockReplaceMctx() *exec.ModuleContext {
 
 func TestFileBlockReplaceName(t *testing.T) {
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/conf", map[string]any{"content": "hello"})
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +37,7 @@ func TestFileBlockReplaceName(t *testing.T) {
 
 func TestFileBlockReplacePrimaryParamDefault(t *testing.T) {
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/conf", map[string]any{"content": "hello"})
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +50,7 @@ func TestFileBlockReplacePrimaryParamDefault(t *testing.T) {
 
 func TestFileBlockReplaceDefaultMarkers(t *testing.T) {
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/conf", map[string]any{"content": "hello"})
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +66,7 @@ func TestFileBlockReplaceDefaultMarkers(t *testing.T) {
 
 func TestFileBlockReplaceRequisites(t *testing.T) {
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"content":   "hello",
 		"require":   []any{"pkg.installed:nginx"},
@@ -94,7 +96,7 @@ func TestFileBlockReplaceCheckNeedsChange(t *testing.T) {
 	}
 
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{"content": "new content"})
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +121,7 @@ func TestFileBlockReplaceCheckNoChange(t *testing.T) {
 	}
 
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{"content": "desired content"})
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +144,7 @@ func TestFileBlockReplaceCheckMissingBlockNoAppend(t *testing.T) {
 	}
 
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{"content": "hello", "append_if_not_found": false})
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +167,7 @@ func TestFileBlockReplaceCheckMissingBlockWithAppend(t *testing.T) {
 	}
 
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{"content": "hello", "append_if_not_found": true})
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +192,7 @@ func TestFileBlockReplaceApplyReplace(t *testing.T) {
 	}
 
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{"content": "new content"})
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +233,7 @@ func TestFileBlockReplaceApplyAppend(t *testing.T) {
 	}
 
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{"content": "managed content", "append_if_not_found": true})
 	if err != nil {
 		t.Fatal(err)
@@ -274,7 +276,7 @@ func TestFileBlockReplaceApplyCustomMarkers(t *testing.T) {
 	}
 
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"content":      "new",
 		"marker_start": "# BEGIN block",
@@ -308,7 +310,7 @@ func TestFileBlockReplaceRevert(t *testing.T) {
 	}
 
 	mctx := testFileBlockReplaceMctx()
-	builder := NewFileBlockReplaceBuilder(mctx)
+	builder := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{"content": "new content"})
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +346,7 @@ func TestFileBlockReplaceFreshInstanceRevertIsNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx())(filePath, map[string]any{
+	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx(), modschema.DecodeOptions{})(filePath, map[string]any{
 		"content": "new",
 	})
 	if err != nil {
@@ -374,7 +376,7 @@ func TestFileBlockReplaceRevertRemovesCreatedFile(t *testing.T) {
 	ctx := context.Background()
 	filePath := filepath.Join(t.TempDir(), "new.conf")
 
-	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx())(filePath, map[string]any{
+	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx(), modschema.DecodeOptions{})(filePath, map[string]any{
 		"content": "hello", "append_if_not_found": true,
 	})
 	if err != nil {
@@ -398,7 +400,7 @@ func TestFileBlockReplaceRevertRemovesCreatedFile(t *testing.T) {
 func TestFileBlockReplaceRevertCreatedToleratesMissing(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx())(path, map[string]any{
+	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"content": "hello", "append_if_not_found": true,
 	})
 	if err != nil {
@@ -427,7 +429,7 @@ func TestFileBlockReplaceApplyRecomputesExistencePerInvocation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx())(filePath, map[string]any{
+	s, err := NewFileBlockReplaceBuilder(testFileBlockReplaceMctx(), modschema.DecodeOptions{})(filePath, map[string]any{
 		"content": "new", "append_if_not_found": true,
 	})
 	if err != nil {
@@ -477,7 +479,7 @@ func TestFileBlockReplaceReadErrorFailsCheckAndApply(t *testing.T) {
 	fake.PreCreate("/etc/cfg.conf", []byte(original), 0644)
 	fake.SetReadError("/etc/cfg.conf", errors.New("input/output error"))
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
-	s, err := NewFileBlockReplaceBuilder(mctx)("/etc/cfg.conf", map[string]any{
+	s, err := NewFileBlockReplaceBuilder(mctx, modschema.DecodeOptions{})("/etc/cfg.conf", map[string]any{
 		"content": "new", "append_if_not_found": true,
 	})
 	if err != nil {
@@ -495,3 +497,19 @@ func TestFileBlockReplaceReadErrorFailsCheckAndApply(t *testing.T) {
 }
 
 var _ state.State = (*FileBlockReplace)(nil)
+
+// TestFileBlockReplaceContract replays the permanent differential contract
+// fixtures against the migrated fileBlockReplaceSpec decoder — including the
+// path-is-not-an-alias parity (name has no path alias here), the marker defaults,
+// and the flagged BD-2 (CLI bool string), BD-6 (wrong-typed name), and BD-7
+// (integer bool coercion) divergences.
+func TestFileBlockReplaceContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileBlockReplace
+		if _, err := fileBlockReplaceSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.blockreplace.yaml")
+}

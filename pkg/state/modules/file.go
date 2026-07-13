@@ -69,26 +69,6 @@ func checkOwnershipDrift(ctx context.Context, file exec.FileExec, module, path, 
 	return "", false, nil
 }
 
-// modeConfigToString converts a YAML-parsed mode value to a string.
-// YAML parsers interpret "0750" (leading zero) as an octal integer,
-// so mode may arrive as int (488) instead of string ("0750"). Used by
-// file.directory and file.recurse, which still parse their mode parameters
-// through the legacy string path (file.managed now decodes mode through the
-// paramtypes.FileMode semantic type instead).
-func modeConfigToString(v any) string {
-	switch m := v.(type) {
-	case string:
-		return m
-	case int:
-		return fmt.Sprintf("%04o", m)
-	case int64:
-		return fmt.Sprintf("%04o", m)
-	case float64:
-		return fmt.Sprintf("%04o", int(m))
-	}
-	return ""
-}
-
 func hashBytes(data []byte) string {
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h)

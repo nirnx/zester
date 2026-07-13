@@ -1,9 +1,15 @@
 ---
 title: "file.append"
-description: "Ensures specific lines are present in a file, appending any that are missing."
+description: "Ensure specific lines are present in a file, appending any that are missing."
 ---
 
+{/* zester-docgen:managed module="file.append" */}
+
 **Source**: `pkg/state/modules/file_append.go`
+
+---
+
+`file.append` ensures every line listed in `text` is present somewhere in the file at the given path (defaulting to the state ID). Each line is checked independently by substring match; only the lines that are missing are appended, in declared order, each followed by a newline.
 
 ---
 
@@ -11,55 +17,44 @@ description: "Ensures specific lines are present in a file, appending any that a
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Absolute path to the target file. If omitted, the state ID is used as the path. |
-| `text` | `list` | No | `[]` | List of lines that must be present in the file. Each line is checked independently; only missing lines are appended. |
+| `name` | `string` | No | State ID | absolute path to the target file (defaults to the state ID) |
+| `text` | `StringList` | No | *(none)* | lines that must be present in the file; each line is checked independently and only missing lines are appended |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Parameter Types
 
-The check phase performs these comparisons:
+### StringList
 
-1. **File existence** — if the file does not exist, the state needs changes (file will be created on apply).
-2. **Line presence** — reads the file content and checks if each line in `text` is present (substring match). If any lines are missing, the state needs changes.
+A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.
 
-If the file exists and all lines are already present, the state reports no changes needed.
 
 ---
 
-## Apply Behavior
+## Effects
 
-1. Reads the current file content (if the file exists, stores it as a backup for revert).
-2. For each line in `text`, checks if it is already present in the content.
-3. Appends any missing lines, each followed by a newline. Ensures a newline separator before appending if the file does not end with one.
-4. Writes the updated content back to the file with mode `0644`.
+### Check
 
----
+A missing file needs a change (it will be created and populated on apply). For an existing file, each declared line is checked for presence as a substring of the file's content; any missing line needs a change.
 
-## Revert Behavior
+### Apply
 
-- If the file did not exist before Apply (was newly created), removes the file.
-- If the file existed before Apply, restores the original content from the backup.
+Reads the current content (capturing it as the revert backup on first capture, if the file exists). For each declared line not already present, appends it followed by a newline — inserting a separating newline first if the existing content does not already end with one. A run where every line was already present is a no-op. Reports the count of appended lines in its details.
+
+### Revert
+
+A file this run's Apply created is removed (tolerating an already-missing file); a file that pre-existed is restored to its captured original content. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Add entries to /etc/hosts
 
-```bash
-# Ensure a line is present in a file
-zester 'web-01' file.append /etc/hosts text='["192.168.1.10 db-master"]'
-
-# Add multiple lines
-zester 'web*' file.append /etc/environment text='["JAVA_HOME=/usr/lib/jvm/java-17", "LANG=en_US.UTF-8"]'
-```
-
-### State File
-
-**Add entries to /etc/hosts:**
+Each listed line is appended only if not already present.
 
 ```yaml
 /etc/hosts:
@@ -69,17 +64,9 @@ zester 'web*' file.append /etc/environment text='["JAVA_HOME=/usr/lib/jvm/java-1
       - "192.168.1.11 db-replica"
 ```
 
-**Ensure environment variables are set:**
+### Append configuration after package install
 
-```yaml
-/etc/environment:
-  file.append:
-    - text:
-      - "JAVA_HOME=/usr/lib/jvm/java-17"
-      - "LANG=en_US.UTF-8"
-```
-
-**Append configuration after package install:**
+require ensures the package is installed before the config file is touched.
 
 ```yaml
 /etc/security/limits.conf:
@@ -90,3 +77,39 @@ zester 'web*' file.append /etc/environment text='["JAVA_HOME=/usr/lib/jvm/java-1
     - require:
       - "pkg.installed:base-packages"
 ```
+
+### Append a line ad hoc
+
+The bare positional argument is the path. The CLI leg passes `text` as a plain string — one line — so a single line is given directly; a multi-line list is YAML-only (a bracketed value on the CLI is taken literally, not parsed as a list).
+
+```bash
+zester 'web-01' file.append /etc/hosts text='192.168.1.10 db-master'
+```
+
+
+---
+
+## Notes
+
+> **Lines are matched by substring**
+>
+> A declared line is considered present if it occurs anywhere in the file's content, not only as a whole line.
+
+> **text accepts a single line too**
+>
+> A bare string (`text: "some line"`, or a CLI `text="some line"`) manages exactly that one line, equivalent to a one-element list.
+
+
+---
+
+## Divergences
+
+- BD-5
+- BD-6
+
+---
+
+## See Also
+
+- [file.managed](/docs/guides/modules/file-managed)
+- [file.line](/docs/guides/modules/file-line)

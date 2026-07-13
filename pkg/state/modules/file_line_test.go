@@ -6,10 +6,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -27,7 +30,7 @@ func writeTempFile(t *testing.T, name, content string) string {
 }
 
 func TestFileLineName(t *testing.T) {
-	s, err := NewFileLineBuilder(testFileLineMctx())("/etc/motd", map[string]any{"content": "hi"})
+	s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})("/etc/motd", map[string]any{"content": "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +40,7 @@ func TestFileLineName(t *testing.T) {
 }
 
 func TestFileLineRequisites(t *testing.T) {
-	s, err := NewFileLineBuilder(testFileLineMctx())("test", map[string]any{
+	s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})("test", map[string]any{
 		"content":   "x",
 		"require":   []any{"pkg.installed:nginx"},
 		"watch":     []any{"file.managed:/etc/a"},
@@ -54,7 +57,7 @@ func TestFileLineRequisites(t *testing.T) {
 }
 
 func TestFileLineMissingProvider(t *testing.T) {
-	_, err := NewFileLineBuilder(&exec.ModuleContext{})("x", map[string]any{"content": "a"})
+	_, err := NewFileLineBuilder(&exec.ModuleContext{}, modschema.DecodeOptions{})("x", map[string]any{"content": "a"})
 	if err == nil {
 		t.Fatal("expected error when File provider is nil")
 	}
@@ -109,7 +112,7 @@ func TestFileLineOps(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeTempFile(t, "f.txt", tc.initial)
-			s, err := NewFileLineBuilder(testFileLineMctx())(path, tc.config)
+			s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})(path, tc.config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,7 +148,7 @@ func TestFileLineOps(t *testing.T) {
 func TestFileLineCreatesMissingFile(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{"content": "hello"})
+	s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})(path, map[string]any{"content": "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +171,7 @@ func TestFileLineCreatesMissingFile(t *testing.T) {
 func TestFileLineDeleteMissingFileNoop(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "absent.conf")
-	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{
+	s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"content": "x", "mode": "delete", "match": "x",
 	})
 	if err != nil {
@@ -186,7 +189,7 @@ func TestFileLineDeleteMissingFileNoop(t *testing.T) {
 func TestFileLineRevert(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "r.txt", "a\nb\n")
-	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{"content": "c"})
+	s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})(path, map[string]any{"content": "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +209,7 @@ func TestFileLineFreshInstanceRevertIsNoOp(t *testing.T) {
 	ctx := context.Background()
 	original := "a\nb\n"
 	path := writeTempFile(t, "fresh.txt", original)
-	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{"content": "c"})
+	s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})(path, map[string]any{"content": "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +235,7 @@ func TestFileLineFreshInstanceRevertIsNoOp(t *testing.T) {
 func TestFileLineRevertRemovesCreatedFile(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.txt")
-	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{"content": "c"})
+	s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})(path, map[string]any{"content": "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +257,7 @@ func TestFileLineRevertRemovesCreatedFile(t *testing.T) {
 func TestFileLineRevertCreatedToleratesMissing(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.txt")
-	s, err := NewFileLineBuilder(testFileLineMctx())(path, map[string]any{"content": "c"})
+	s, err := NewFileLineBuilder(testFileLineMctx(), modschema.DecodeOptions{})(path, map[string]any{"content": "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +310,7 @@ func TestFileLineReadErrorFailsCheckAndApply(t *testing.T) {
 	fake.PreCreate("/etc/app.conf", []byte("keep\n"), 0644)
 	fake.SetReadError("/etc/app.conf", errors.New("input/output error"))
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
-	s, err := NewFileLineBuilder(mctx)("/etc/app.conf", map[string]any{"content": "c"})
+	s, err := NewFileLineBuilder(mctx, modschema.DecodeOptions{})("/etc/app.conf", map[string]any{"content": "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,3 +326,19 @@ func TestFileLineReadErrorFailsCheckAndApply(t *testing.T) {
 }
 
 var _ state.State = (*FileLine)(nil)
+
+// TestFileLineContract replays the permanent differential contract fixtures
+// against the migrated fileLineSpec decoder. The decode wrapper lowercases
+// Action, reproducing the builder's strings.ToLower(mode) normalization so the
+// contract projects the resolved action exactly as the builder computes it.
+func TestFileLineContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileLine
+		if _, err := fileLineSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		f.Action = strings.ToLower(f.Action)
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.line.yaml")
+}

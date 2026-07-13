@@ -1,9 +1,15 @@
 ---
 title: "file.touch"
-description: "Creates an empty file when it is missing, or updates the modification time of an existing file. Modeled after Salt's file.touch module."
+description: "Create an empty file when missing, or update its modification time."
 ---
 
+{/* zester-docgen:managed module="file.touch" */}
+
 **Source**: `pkg/state/modules/file_touch.go`
+
+---
+
+`file.touch` ensures a file exists, creating it empty when missing. The path defaults to the state ID; `path` is accepted as an alias for Salt compatibility. If the file already exists, Check reports no change is needed regardless of its timestamp — the modification-time update only runs when the state is force-applied (for example by a `watch` requisite).
 
 ---
 
@@ -11,46 +17,35 @@ description: "Creates an empty file when it is missing, or updates the modificat
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Absolute path to the file to touch. `path` is accepted as an alias. |
-| `makedirs` | `bool` | No | `false` | Create parent directories (mode `0755`) if needed. |
+| `name` | `string` | No | State ID | absolute path to the file to touch; the path alias is accepted for Salt compatibility (defaults to the state ID) |
+| `makedirs` | `bool` | No | *(none)* | create missing parent directories (mode 0755) before touching; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-- If the file exists, the state reports **no changes needed** — regardless of its timestamps.
-- If the file does not exist, changes are needed.
+### Check
 
----
+Stats the path. An existing file (any content) needs no change; a missing path needs a change.
 
-## Apply Behavior
+### Apply
 
-1. Creates parent directories when `makedirs` is set.
-2. If the file is missing, creates it empty with mode `0644`.
-3. If the file already exists (only reached on a force-apply, e.g. via `watch`), runs the system `touch` command to update its modification time.
+Creates missing parent directories first when `makedirs` is set. If the file is missing, creates it empty with the default file mode. If the file already exists (only reached on a force-apply), runs the system `touch` command to update its modification time — a no-op (`Changed: false`) when no command provider is available.
 
----
+### Revert
 
-## Revert Behavior
+A file this run's Apply created is removed. A file that already existed (Apply only updated its mtime) is left alone — the previous timestamp is not restored, so Revert is a clean no-op.
 
-- If Apply created the file, Revert removes it.
-- If Apply only updated the mtime of an existing file, Revert is a no-op (`Changed: false`) — the previous timestamp is not restored.
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Create a marker file
 
-```bash
-zester 'web-01' file.touch /var/run/myapp/.initialized
-```
-
-### State File
-
-**Create a marker file:**
+makedirs creates any missing parent directories before the empty file is created.
 
 ```yaml
 /var/lib/myapp/.provisioned:
@@ -58,7 +53,9 @@ zester 'web-01' file.touch /var/run/myapp/.initialized
     - makedirs: true
 ```
 
-**Bump a reload trigger whenever config changes:**
+### Bump a reload trigger whenever config changes
+
+A watch requisite force-applies the state, which updates the file's mtime via the system touch command.
 
 ```yaml
 /etc/myapp/reload-trigger:
@@ -67,9 +64,39 @@ zester 'web-01' file.touch /var/run/myapp/.initialized
       - "file.managed:/etc/myapp/config.yaml"
 ```
 
+### Touch a file ad hoc
+
+The bare positional argument is the path.
+
+```bash
+zester 'web-01' file.touch /var/run/myapp/.initialized
+```
+
+
 ---
 
-## Divergences from Salt
+## Notes
 
-- **The mtime is not refreshed on a normal run when the file already exists.** Salt's `file.touch` updates atime/mtime every time it runs; Zester's Check reports an existing file as satisfied, so the timestamp-update path in Apply only executes when the state is force-applied (for example by a `watch` requisite).
-- Salt's `atime` and `mtime` parameters (setting explicit timestamps) are not supported.
+> **The mtime is not refreshed on a normal run when the file already exists**
+>
+> Salt's `file.touch` updates atime/mtime every time it runs; Zester's Check reports an existing file as satisfied, so the timestamp-update path in Apply only executes when the state is force-applied (for example by a `watch` requisite).
+
+> **Explicit timestamps are not supported**
+>
+> Salt's `atime`/`mtime` parameters (setting explicit timestamps) have no equivalent here.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [file.managed](/docs/guides/modules/file-managed)
+- [file.absent](/docs/guides/modules/file-absent)

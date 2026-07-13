@@ -1,27 +1,68 @@
 ---
 title: "file.recurse"
-description: "Recursively copies a source directory tree to a destination directory. Mirrors the source structure, creating directories and files with the specified permissions and ownership."
+description: "Recursively copy a source directory tree to a destination directory."
 ---
+
+{/* zester-docgen:managed module="file.recurse" */}
+
+**Source**: `pkg/state/modules/file_recurse.go`
+
+---
+
+`file.recurse` mirrors a `source` directory tree onto the destination, creating directories and copying files by SHA-256 content. The destination path defaults to the state ID. `file_mode` (default `0644`) is enforced on every copied file. `dir_mode` (default `0755`) is DECLARED-ONLY: when it is omitted, existing directory modes are left alone (it is used only as the creation mode for directories the copy makes); when it is set, managed directory modes are compared and enforced. `user`/`group` set ownership on copied files only. `clean` removes destination files absent from the source, and `makedirs` creates the destination's parent chain. Both mode parameters honor an octal string or an octal integer of any kind.
 
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Destination directory path |
-| `source` | string | (required) | Source directory path to copy from |
-| `file_mode` | string | `"0644"` | File permission mode for copied files (octal string) |
-| `dir_mode` | string | `"0755"` | Directory permission mode for created directories (octal string) |
-| `user` | string | — | Username to set as owner of copied files |
-| `group` | string | — | Group name to set on copied files |
-| `clean` | bool | `false` | Remove files in destination that are not present in source |
-| `makedirs` | bool | `false` | Create the destination's parent directory if it does not exist |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | destination directory path (defaults to the state ID) |
+| `source` | `string` | No | *(none)* | source directory path to copy from (required at run time) |
+| `dir_mode` | `FileMode` | No | `0755` (lazy) | directory permission mode for managed directories (octal); DECLARED-ONLY — undeclared, existing directory modes are left alone (used only as the creation mode for new directories, defaulting to 0755) |
+| `file_mode` | `FileMode` | No | `0644` (lazy) | permission mode for copied files in octal ("0644"); always enforced; defaults to 0644 |
+| `user` | `string` | No | *(none)* | owner username for copied files; ownership is left unchanged when unset |
+| `group` | `string` | No | *(none)* | group name for copied files; ownership is left unchanged when unset |
+| `clean` | `bool` | No | *(none)* | remove files in the destination that are not present in the source (regular files only; directories are never removed); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | *(none)* | create the destination's parent directory chain if it does not exist; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
-## Example
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Parameter Types
+
+### FileMode
+
+A Unix file-permission mode. Accepts an octal string ("0644", "755", "4755") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.
+
+
+---
+
+## Effects
+
+### Check
+
+Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.
+
+### Apply
+
+Requires a source. When `makedirs` is set, creates the destination's parent chain. Walks the source: creates each directory with MkdirAll (chmod'ing it to `dir_mode` ONLY when dir_mode is declared — an undeclared dir_mode never rewrites a pre-existing directory's mode), and writes each file with `file_mode`, recording newly created files for revert (a non-not-exist stat error fails the apply rather than mis-memoizing a pre-existing file), chmod'ing it to `file_mode`, and chowning it when ownership is declared. With `clean`, removes destination regular files not present in the source (directories are never removed). Reports the copied and cleaned counts.
+
+### Revert
+
+Removes only the files this run's Apply created (best-effort; files that already existed before Apply are left untouched). A fresh instance (a standalone revert, e.g. after a peel restart) recorded nothing and is a clean no-op — it never removes a file it did not create.
+
+
+---
+
+## Examples
+
+### Deploy a config directory tree
+
+Copies a whole tree with explicit modes and ownership; clean prunes stray destination files; makedirs creates the parent chain.
 
 ```yaml
-# Copy a config directory to /etc/app.
 /etc/app:
   file.recurse:
     - source: /srv/config/app
@@ -35,17 +76,60 @@ description: "Recursively copies a source directory tree to a destination direct
       - "pkg.installed:myapp"
 ```
 
-## Behavior
+### Mirror a tree, leaving directory modes alone
 
-| Phase | Action |
-|-|-|
-| Check | Walk source tree. For each file, compare size and SHA-256 hash against destination. For each directory, verify it exists. Returns `NeedsChange: true` if any file differs or is missing. |
-| Apply | Walk source tree. Create directories with `dir_mode`. Copy files with `file_mode`. Optionally set ownership. If `clean: true`, remove destination files not present in source. |
-| Revert | Remove only the files that Apply created (files already present before Apply are not touched). |
+With no dir_mode declared, existing directory modes are never touched — only file content and file_mode converge.
+
+```yaml
+/opt/app/static:
+  file.recurse:
+    - source: /srv/static
+    - file_mode: "0644"
+```
+
+### Copy a tree ad hoc
+
+The bare positional argument is the destination; source is a key=value arg.
+
+```bash
+zester 'web*' file.recurse /etc/app source=/srv/config/app clean=true
+```
+
+
+---
 
 ## Notes
 
-- Check uses SHA-256 content comparison — it detects content changes even if sizes match.
-- `clean: true` only removes regular files from the destination that are absent from the source. Empty directories left behind after clean are not removed.
-- Revert is best-effort: it removes files created by the most recent Apply call. If the module is re-instantiated (e.g., after peel restart), revert information is lost.
-- `user` and `group` are resolved via `os/user.Lookup` and `os/user.LookupGroup`. The peel must run with sufficient privileges to set ownership.
+> **dir_mode is a declared-only facet**
+>
+> When dir_mode is omitted, existing directory modes are neither compared (Check) nor rewritten (Apply) — an operator-set mode on a pre-existing directory (for example a private 0700 tree) is preserved, and the 0755 default is used only as the mode for directories the copy creates. Declare dir_mode to actively manage directory modes.
+
+> **clean removes regular files only**
+>
+> clean: true removes destination regular files that are absent from the source. Empty directories left behind after a clean are not removed (matching the Apply behavior), so a stray empty directory never churns Check.
+
+> **Ownership requires privilege**
+>
+> `user` and `group` are resolved via `os/user.Lookup` and `os/user.LookupGroup`; the peel must run with sufficient privileges to set ownership.
+
+> **Revert loses its memo across instances**
+>
+> Revert removes only the files created by the most recent Apply on the same instance. If the module is re-instantiated (for example after a peel restart), that memo is lost and a standalone revert is a clean no-op.
+
+
+---
+
+## Divergences
+
+- BD-1
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [file.managed](/docs/guides/modules/file-managed)
+- [file.directory](/docs/guides/modules/file-directory)
+- [file.copy](/docs/guides/modules/file-copy)

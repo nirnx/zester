@@ -1,0 +1,257 @@
+module: file.touch
+# Permanent differential contract for the file.touch migration. These cases
+# were approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accepting cases
+# pin the decoded Path/MakeDirs projection; rejecting cases pin the error
+# kind. BD-tagged cases pin the flagged behavioral differences: BD-2 (a CLI
+# makedirs string is honored), BD-6 (a wrong-typed value is coerced or
+# rejected instead of silently ignored/falling back), and BD-7 (makedirs'
+# integer arm — 1/0 accepted, any other integer a typed error). The
+# name-empty-path-wins pair is PARITY (§2.1 source fall-through), not a BD: an
+# empty-string `name` alongside a non-empty `path` alias resolves to the
+# path, never the state ID — matching the legacy fsxResolvePath
+# `if name == "" { name = path }` chain.
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /var/run/app.stamp
+    want:
+      Path: /var/run/app.stamp
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /var/run/app.stamp
+    want:
+      Path: /var/run/app.stamp
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: /var/run/app.stamp
+    want:
+      Path: /var/run/app.stamp
+
+  # --- parity: the `path` alias supplies the primary when `name` is absent ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: web
+    input:
+      path: /var/run/app.stamp
+    want:
+      Path: /var/run/app.stamp
+  - label: path-alias-cli
+    universe: cli
+    id: web
+    input:
+      path: /var/run/app.stamp
+    want:
+      Path: /var/run/app.stamp
+
+  # --- parity: no name/path key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /var/run/app.stamp
+    input: {}
+    want:
+      Path: /var/run/app.stamp
+  - label: primary-fallback-cli
+    universe: cli
+    id: /var/run/app.stamp
+    input: {}
+    want:
+      Path: /var/run/app.stamp
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /var/run/app.stamp
+    input:
+      name: ""
+    want:
+      Path: /var/run/app.stamp
+  - label: empty-name-falls-back-to-id-cli
+    universe: cli
+    id: /var/run/app.stamp
+    input:
+      name: ""
+    want:
+      Path: /var/run/app.stamp
+
+  # --- PARITY (§2.1 source fall-through, NOT a BD): an empty-string `name`
+  # alongside a non-empty `path` alias resolves to the PATH, not the state ID
+  # (matches the legacy fsxResolvePath chain: name empty -> consult path). ---
+  - label: name-empty-path-wins-yaml
+    universe: yaml
+    id: /the/id
+    input:
+      name: ""
+      path: /var/run/app.stamp
+    want:
+      Path: /var/run/app.stamp
+  - label: name-empty-path-wins-msgpack
+    universe: msgpack
+    id: /the/id
+    input:
+      name: ""
+      path: /var/run/app.stamp
+    want:
+      Path: /var/run/app.stamp
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent, falls back
+  # to the state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /var/run/app.stamp
+    input:
+      name:
+    want:
+      Path: /var/run/app.stamp
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /var/run/app.stamp
+    input:
+      name:
+    want:
+      Path: /var/run/app.stamp
+
+  # --- parity: makedirs as a native bool ---
+  - label: makedirs-true-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /var/run/app.stamp
+      makedirs: true
+    want:
+      MakeDirs: true
+
+  # --- BD-2: a CLI makedirs=true (the string "true") now applies, where the
+  # legacy .(bool) assertion dropped the string ---
+  - label: makedirs-cli-truthy-string
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: /var/run/app.stamp
+      makedirs: true
+    want:
+      MakeDirs: true
+
+  # --- BD-7: a boolean-typed parameter accepts the INTEGERS 1 and 0 (1 ->
+  # true, 0 -> false) and rejects any other integer with a typed error. The
+  # legacy `config["makedirs"].(bool)` assertion dropped an int entirely
+  # (silent false). Pinned across yaml (native int) and msgpack (sized int). ---
+  - label: makedirs-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /var/run/app.stamp
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /var/run/app.stamp
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /var/run/app.stamp
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /var/run/app.stamp
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-invalid-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /var/run/app.stamp
+      makedirs: 2
+    want_error: value_invalid
+  - label: makedirs-int-invalid-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /var/run/app.stamp
+      makedirs: 2
+    want_error: value_invalid
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Path: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      Path: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # --- BD-6: a composite makedirs is rejected with a typed error (legacy's
+  # .(bool) assertion silently left it false) ---
+  - label: composite-makedirs-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /var/run/app.stamp
+      makedirs:
+        - a
+    want_error: wrong_type
