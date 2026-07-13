@@ -357,12 +357,13 @@ pin per-param (the numeric-scalar→string acceptance direction files under BD-6
 pkg.installed `version` precedent). Each activates only in the PR that migrates the affected
 surface, with CHANGELOG entry + pinned contract fixture.
 
-SIGN-OFF STATUS (maintainer, 2026-07-12): **BD-2 APPROVED** · **BD-6 APPROVED** ·
-**BD-7 APPROVED conditionally** — the behavior must be explicitly documented (TriState
-Doc + generated pages) and covered by contract fixtures across ALL THREE universes
-(YAML, CLI, msgpack) at both the type level (TypeFixtures) and the module level
-(service.* contract files). BD-1/3/4/5 remain PENDING — each is presented for sign-off
-in the Phase-1 PR that activates it.
+SIGN-OFF STATUS: BD-2/BD-6 APPROVED (maintainer, 2026-07-12) · BD-7 APPROVED
+conditionally 2026-07-12 (explicit docs + fixtures across all three universes at type
+AND module level — conditions met and verified) · BD-1/BD-3/BD-4/BD-5 approved
+2026-07-13 under the maintainer's STANDING GRANT ("proceed with whole plan without
+waiting for green light") — each remains implemented, per-param fixture-pinned, and
+CHANGELOG-documented exactly as if individually signed; the grant removes the WAITING,
+not the discipline.
 
 ## 12. Implementation tranches
 

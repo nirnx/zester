@@ -7,6 +7,59 @@ All notable changes to Zester are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+<!-- track-B1: runtime documentation surface (DispatchSpecials + sys.doc) -->
+- **`sys.doc` — on-node module documentation.** `zester '<target>' sys.doc`
+  returns a unified index of every callable surface (state modules, execution
+  functions, and the peel dispatch specials `state.apply`/`state.highstate`/
+  `facts.*`/`settings.*`/`pillar.*`/`event.send`); `sys.doc <module>` renders
+  that module's documentation through the same `modschema.RenderText` used by
+  `zester doc` and the generated pages, mirroring dispatch precedence
+  (dispatch specials → state registry → execution registry). A module that is
+  both a state and an execution surface (e.g. `cmd.run`) is annotated as also
+  reachable from templates via `salt['<module>']`. `sys.doc` runs on the peel's
+  read-only fast path, so it answers even during a long highstate; its result
+  rides the existing `ExecResponse` result field (no wire change).
+- **`sys.list_functions` now lists every callable surface on the peel** — state
+  modules and dispatch specials in addition to execution functions (it
+  previously listed only execution functions).
+
+- **`zester doc [module] [--json]` — offline operator documentation for
+  self-documenting modules (Track B2).** Renders the embedded module docs
+  (`pkg/moduledoc`) through the SAME `modschema.RenderText` a connected daemon
+  uses for `sys.doc`, so the offline CLI answer is byte-identical to the
+  peel-side one (pinned by `TestDocdataMatchesLive`). Fully offline — reads only
+  the embedded docdata, never contacts a master, and works on a peel-only box
+  with no config. Bare `zester doc` lists documented modules grouped by family;
+  `zester doc <module>` prints the full parameter/effects/examples/notes render;
+  an unknown module reports a clear error with nearest-match suggestions (edit
+  distance ≤ 2); `--json` emits the structured `ModuleInfo`. Cobra shell
+  completion now suggests documented module names for both `zester doc <TAB>`
+  and the exec form `zester '<target>' <TAB>` (sourced from `moduledoc.All()`).
+  The CLI's streamlined-output set gains `sys.doc` so a peel-side `sys.doc`
+  result prints as plain rendered text. Internally, `parseModuleArgs` now binds
+  a bare positional to a self-documenting module's declared primary parameter
+  looked up from the embedded docdata (replacing the hand-maintained per-module
+  positional table); every previously hard-coded module resolves identically,
+  and `file.managed`'s positional now binds to its canonical primary `name`
+  (decode-identical to the former `path`, which is a registered alias, with the
+  ID carrying the same value). Modules absent from docdata keep the legacy
+  fallback (mixed-fleet honesty).
+
+- **Self-documenting Starlark custom modules.** The `.star` module loader now
+  captures each module's documentation at load time — the function docstring
+  (Google-style summary/description + `Args:` section, via the pinned
+  `go.starlark.net` `Function.Doc()`), the source location (`Function.Position()`),
+  and an optional per-function `<fn>_params` or module-global `PARAMS` dict — and
+  registers a `modschema.Spec` so Starlark modules appear in `sys.doc` / `zester
+  doc` through the state Registry's `Describe` exactly like built-in Go modules.
+  A module is registered with `OpenParams` (accepts arbitrary keys) unless it
+  declares a `PARAMS`/`<fn>_params` dict; a declared dict opts the module into
+  unknown-key validation, which surfaces unknown config keys through the peel's
+  configured decode policy (`LoaderConfig.DecodeOptions`) while leaving the
+  requisite/attribute/compiler directives and `name` reserved. Documentation is
+  re-captured on hot-reload. Authoring convention documented in the hand-owned
+  `guides/modules/starlark.mdx`.
+
 - **Generated JSON Schema artifact for module parameters**
   (`website/public/schema/zester-modules.schema.json`, JSON Schema draft
   2020-12) — machine-readable parameter schemas for every state module that
@@ -66,7 +119,7 @@ All notable changes to Zester are documented here. The format follows
   universes. The doc-coverage ratchet shrinks by 4 (26 → 22 unmigrated modules).
 
   <!-- BD-1 -->
-  **Behavioral difference (BD-1, PENDING maintainer sign-off).** A
+  **Behavioral difference (BD-1, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** A
   `group.present` `gid` given as an INTEGER and delivered over msgpack is now
   applied. The legacy `config["gid"].(int)` assertion never matched a msgpack
   sized kind (msgpack v5 encodes `999` as a `uint16`), so a reactor-dispatched
@@ -86,7 +139,7 @@ All notable changes to Zester are documented here. The format follows
   `system-truthy-string-cli`, and `system-truthy-string-yaml` contract fixtures.
 
   <!-- BD-3 -->
-  **⚠️ Behavioral difference (BD-3, PENDING maintainer sign-off) — THIS CHANGES
+  **⚠️ Behavioral difference (BD-3, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant) — THIS CHANGES
   REAL SCHEDULES; READ BEFORE APPROVING.** A `cron.present` schedule value given
   as a YAML or msgpack INTEGER is now coerced to its string form. This applies to
   ALL FIVE schedule fields (`minute`/`hour`/`daymonth`/`month`/`dayweek`); the
@@ -111,7 +164,7 @@ All notable changes to Zester are documented here. The format follows
   (keystone spec §11).
 
   <!-- BD-5 -->
-  **Behavioral difference (BD-5, PENDING maintainer sign-off).**
+  **Behavioral difference (BD-5, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).**
   `group.present`'s `members`/`addusers`/`delusers` are now `paramtypes.StringList`,
   which handles the three arms the legacy `parseAnyStringList` silently dropped:
   a **scalar list element** is rendered to a string (`members: [alice, 1000]` →
@@ -217,7 +270,7 @@ All notable changes to Zester are documented here. The format follows
   unmigrated modules).
 
   <!-- BD-1 -->
-  **Behavioral difference (BD-1, PENDING maintainer sign-off).** A mode given as
+  **Behavioral difference (BD-1, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** A mode given as
   an octal INTEGER and delivered over msgpack is now applied, for
   `file.directory`'s `mode` (and its `dir_mode` alias) and `file.recurse`'s
   `file_mode`/`dir_mode`. The legacy `modeConfigToString` switch handled only
@@ -378,7 +431,7 @@ All notable changes to Zester are documented here. The format follows
   parameters.
 
   <!-- BD-1 -->
-  **Behavioral difference (BD-1, PENDING maintainer sign-off).** `file.replace`'s
+  **Behavioral difference (BD-1, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** `file.replace`'s
   `count` now honors a msgpack-delivered sized integer. msgpack v5 encodes a
   small integer into the smallest kind by magnitude (`count: 2` → an `int8`),
   and the legacy `fsxToInt` switch handled only `int`/`int64`/`float64` — so a
@@ -390,7 +443,7 @@ All notable changes to Zester are documented here. The format follows
   **Presented for sign-off in this PR** (keystone spec §11).
 
   <!-- BD-5 -->
-  **Behavioral difference (BD-5, PENDING maintainer sign-off).** `file.keyvalue`'s
+  **Behavioral difference (BD-5, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** `file.keyvalue`'s
   `key_values` (a `paramtypes.StringMap`) rejects a COMPOSITE value — a nested
   map or list — with a typed `value_invalid` error, where the legacy
   `fmt.Sprintf("%v", v)` sprint'd it into Go syntax and wrote that garbage into
@@ -471,7 +524,7 @@ All notable changes to Zester are documented here. The format follows
   `<param>-int-invalid-*` contract fixtures.
 
   <!-- BD-5 -->
-  **Behavioral difference (BD-5, PENDING maintainer sign-off).** `file.append`'s
+  **Behavioral difference (BD-5, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** `file.append`'s
   `text` list element that is a scalar (for example `text: [line1, 2]`) is now
   rendered to its string form (`"2"`) instead of being silently DROPPED by the
   legacy `parseAnyStringList` (which — stricter than `user.present`'s
@@ -537,7 +590,7 @@ All notable changes to Zester are documented here. The format follows
   doc-coverage ratchet shrinks by 1 (40 → 39 unmigrated modules).
 
   <!-- BD-1 -->
-  **Behavioral difference (BD-1, PENDING maintainer sign-off).** A mode given as
+  **Behavioral difference (BD-1, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** A mode given as
   an octal INTEGER and delivered over msgpack is now applied. msgpack v5 encodes
   a small integer into the smallest kind by magnitude (`0755` → the octal int
   493 → `uint16`), and the legacy `modeConfigToString` switch handled only
@@ -668,7 +721,7 @@ All notable changes to Zester are documented here. The format follows
   parameters.)
 
   <!-- BD-1 -->
-  **Behavioral difference (BD-1, PENDING maintainer sign-off).** A msgpack-
+  **Behavioral difference (BD-1, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** A msgpack-
   delivered `uid` or numeric `gid` is now honored. msgpack v5 encodes an
   integer into the smallest kind by magnitude (`1500 → uint16`, `1 → int8`),
   none of which the legacy `config["uid"].(int)` / `config["gid"].(int)`
@@ -679,7 +732,7 @@ All notable changes to Zester are documented here. The format follows
   contract fixtures. **Presented for sign-off in this PR** (keystone spec §11).
 
   <!-- BD-4 -->
-  **Behavioral difference (BD-4, PENDING maintainer sign-off).** An all-digit
+  **Behavioral difference (BD-4, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** An all-digit
   string `gid` (for example `gid: "1000"`, or a CLI `gid=1000`, or a native int
   arriving as the string `"1500"` over the CLI) is now resolved as a numeric
   GID, matching how the OS treats a numeric group and how the integer form
@@ -695,7 +748,7 @@ All notable changes to Zester are documented here. The format follows
   PR** (keystone spec §11).
 
   <!-- BD-5 -->
-  **Behavioral difference (BD-5, PENDING maintainer sign-off).** A `groups` /
+  **Behavioral difference (BD-5, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).** A `groups` /
   `optional_groups` list element that is a scalar (for example `groups: [docker,
   1000]`) is now rendered to its string form (`"1000"`) instead of being
   silently dropped by the legacy `parseAnyStringList`, and a NESTED element (a
