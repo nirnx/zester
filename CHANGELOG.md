@@ -122,6 +122,23 @@ All notable changes to Zester are documented here. The format follows
   Architecture nav (`architecture/meta.json`).
 
 ### Changed
+- **Starlark hot-reload now UNREGISTERS removed modules.** A function removed
+  from a reloaded `.star` file — and every module of a deleted `.star` file or
+  a removed `_modules/` directory — is unregistered from the state registry on
+  the next load pass, so it is neither callable nor documented (previously the
+  stale builder and docs survived until a peel restart). When another loaded
+  file still provides the same module name (a deleted formula override with a
+  surviving global definition), that surviving file is re-executed so ITS
+  builder becomes live again. New `state.Registry.Unregister` seam backs this;
+  a conformance test pins that built-ins are never unregistered.
+- **A `.star` module can no longer shadow a built-in module name.** The
+  Starlark loader refuses to register a module whose name is already held by a
+  non-Starlark registration (e.g. a `pkg.star` defining `installed` colliding
+  with the built-in `pkg.installed`) and logs an error naming the file —
+  previously the `.star` silently hijacked the built-in fleet-wide with no way
+  to restore it until restart. Starlark-over-Starlark overrides (formula
+  overrides global, hot-reload) are unaffected.
+
 - **A typo'd state-module parameter now FAILS the build instead of being silently
   ignored (`strict_params`, default on).** The peel gains a `strict_params` knob
   (peel.yaml `strict_params:` / `--strict-params`, default **true**). With every
@@ -1497,6 +1514,31 @@ All notable changes to Zester are documented here. The format follows
   falling back to the ID. This activates the §11 BD-6 class ("wrong-typed values
   are handled deterministically instead of a silent zero") for `pkg.removed`'s
   `name` parameter; it is pinned by the contract fixtures (approved 2026-07-12).
+
+
+### Fixed
+- **`zester '<target>' cmd.run name=<cmd>` no longer executes the literal
+  assignment string.** The CLI treated a leading `name=`/`command=`/`cmd=`
+  token as the positional command, so the Salt-parity form ran e.g.
+  `name=echo hi` (exit 127). A leading explicit command-key assignment now
+  parses as key=value form; a positional command merely containing `=`
+  (env-prefix style, `FOO=bar env`) still runs verbatim.
+- **JSON Schema artifact tightened to match the runtime decoder exactly**
+  (review findings): `FileMode` string values now carry the octal pattern
+  (`"999"`/`"banana"` are schema-rejected, matching decode); float strings
+  follow the exact `strconv.ParseFloat` grammar (underscores only between
+  digits, hex floats incl. `0x_1p2`/`0x.8p1`; `1__0`/`10_`/`0xp1` rejected);
+  required-parameter checks reject `""`/`null` stand-ins across array-of-maps
+  items. Known, documented limitation: when the same parameter key appears in
+  multiple list items the runtime merges last-occurrence-wins, which JSON
+  Schema cannot express — the schema validates items independently and the
+  decoder stays authoritative (docgen refuses to GENERATE examples with
+  duplicate keys).
+- **`modschema` documentation views are now deep copies.** `CompiledSchema.
+  Schema()` and `Spec.Info()` returned internally shared maps/slices; a
+  consumer mutating a returned view (fields, aliases, JSON-Schema fragments,
+  doc slices, semantic-type fragments) could corrupt later docs/schema output
+  or race concurrent readers. Both now return fully detached values.
 
 ## [0.5.0] - 2026-07-10
 

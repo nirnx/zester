@@ -46,5 +46,57 @@ type Field struct {
 	JSONSchema map[string]any
 }
 
-// Schema returns the derived ModuleSchema view of the compiled plan.
-func (cs *CompiledSchema) Schema() *ModuleSchema { return cs.schema }
+// Schema returns the derived ModuleSchema view of the compiled plan as a DEEP
+// COPY: the compiled plan is shared, long-lived state (registries, docgen,
+// sys.doc render concurrently), and handing out the internal pointer let a
+// consumer mutate later docs/schema output or race other readers (review
+// round 4).
+func (cs *CompiledSchema) Schema() *ModuleSchema {
+	return &ModuleSchema{
+		Doc:    cloneDoc(cs.schema.Doc),
+		Fields: cloneFields(cs.schema.Fields),
+	}
+}
+
+// cloneDoc deep-copies a Doc's slice fields (their elements are all-scalar
+// structs, so a per-slice copy fully detaches the clone).
+func cloneDoc(d Doc) Doc {
+	d.Examples = append([]Example(nil), d.Examples...)
+	d.Notes = append([]Note(nil), d.Notes...)
+	d.Divergences = append([]string(nil), d.Divergences...)
+	d.SeeAlso = append([]string(nil), d.SeeAlso...)
+	return d
+}
+
+// cloneFields deep-copies a Field slice including each JSONSchema fragment.
+func cloneFields(in []Field) []Field {
+	out := append([]Field(nil), in...)
+	for i := range out {
+		out[i].Aliases = append([]string(nil), out[i].Aliases...)
+		if out[i].JSONSchema != nil {
+			out[i].JSONSchema = cloneJSONValue(out[i].JSONSchema).(map[string]any)
+		}
+	}
+	return out
+}
+
+// cloneJSONValue deep-copies the JSON-shaped values (maps, slices, scalars)
+// that schema fragments are built from.
+func cloneJSONValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			out[k] = cloneJSONValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, val := range t {
+			out[i] = cloneJSONValue(val)
+		}
+		return out
+	default:
+		return v
+	}
+}

@@ -374,7 +374,7 @@ func isSectionHeader(t string) bool {
 		return false
 	}
 	for _, r := range word {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
 			return false
 		}
 	}
@@ -384,7 +384,7 @@ func isSectionHeader(t string) bool {
 // isIdentLike reports whether s is a plausible parameter identifier.
 func isIdentLike(s string) bool {
 	for _, r := range s {
-		if !(r == '_' || r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+		if r != '_' && r != '-' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 			return false
 		}
 	}

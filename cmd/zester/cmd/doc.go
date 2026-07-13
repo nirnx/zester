@@ -61,8 +61,8 @@ func runDoc(cmd *cobra.Command, args []string) error {
 		if jsonOut {
 			return writeDocJSON(out, moduledoc.All())
 		}
-		writeModuleIndex(out, moduledoc.All())
-		return nil
+		_, err := io.WriteString(out, renderModuleIndex(moduledoc.All()))
+		return err
 	}
 
 	module := args[0]
@@ -73,17 +73,18 @@ func runDoc(cmd *cobra.Command, args []string) error {
 	if jsonOut {
 		return writeDocJSON(out, mi)
 	}
-	fmt.Fprintln(out, modschema.RenderText(mi))
-	return nil
+	_, err := fmt.Fprintln(out, modschema.RenderText(mi))
+	return err
 }
 
-// writeModuleIndex prints the documented modules grouped by family (the segment
-// before the first '.'), each with its one-line summary.
-func writeModuleIndex(w io.Writer, mods []modschema.ModuleInfo) {
+// renderModuleIndex renders the documented modules grouped by family (the
+// segment before the first '.'), each with its one-line summary. Rendering
+// into a builder keeps runDoc down to one checked write.
+func renderModuleIndex(mods []modschema.ModuleInfo) string {
 	if len(mods) == 0 {
-		fmt.Fprintln(w, "No modules are documented in this build.")
-		return
+		return "No modules are documented in this build.\n"
 	}
+	w := &strings.Builder{}
 
 	byFamily := map[string][]modschema.ModuleInfo{}
 	for _, mi := range mods {
@@ -116,6 +117,7 @@ func writeModuleIndex(w io.Writer, mods []modschema.ModuleInfo) {
 		}
 	}
 	fmt.Fprintln(w, "\nRun 'zester doc <module>' for full documentation.")
+	return w.String()
 }
 
 // writeDocJSON writes v as indented JSON followed by a newline.

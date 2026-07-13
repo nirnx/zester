@@ -58,6 +58,22 @@ func (r *Registry) ReplaceSpec(spec *modschema.Spec, b Builder) error {
 	return nil
 }
 
+// Unregister removes a module's builder AND spec from the registry, reporting
+// whether the name was registered at all. Like ReplaceSpec it exists solely
+// for dynamic registration paths — the Starlark loader unregisters a module
+// when its function is removed from a reloaded .star file or the file itself
+// is deleted, so a removed module is neither callable nor documented. Built-in
+// modules must never be unregistered; a conformance test pins that the
+// built-in registration table never calls it.
+func (r *Registry) Unregister(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, had := r.builders[name]
+	delete(r.builders, name)
+	delete(r.specs, name)
+	return had
+}
+
 // Describe returns the ModuleInfo for a spec-registered module. It reports
 // (zero, false) for a name that was registered only via Register (legacy or
 // Starlark, no spec) or is not registered at all.

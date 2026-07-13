@@ -30,6 +30,11 @@ var typeFixtures = map[string][]schematest.TypeFixture{
 		// numeric-looking string, so it stays a string through every leg.
 		{Label: "setuid-4755", YAML: "4755", CLI: "4755", Want: paramtypes.NewFileMode(0o755 | fs.ModeSetuid)},
 		{Label: "reject-nonoctal-string", YAML: "999", CLI: "999", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		// Review round 4: the string arm now carries the octal pattern, so a
+		// word string is a SCHEMA-expressible rejection too (agreement gate
+		// hard-asserts it), not just a decode-time one.
+		{Label: "reject-word-string", YAML: "banana", CLI: "banana", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		{Label: "reject-mixed-octal", YAML: "0o644", CLI: "0o644", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
 		{Label: "reject-out-of-range-int", YAML: 5000, CLISkip: true, CLISkipReason: "an out-of-range integer mode has no equivalent octal CLI string", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
 		{Label: "reject-list", YAML: []any{7, 5, 5}, CLISkip: true, CLISkipReason: "a list is not a file mode", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
 		// EMPTY-STRING RULE (§3): "" decodes to the undeclared zero value, not an error.

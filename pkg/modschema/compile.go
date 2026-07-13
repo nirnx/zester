@@ -434,10 +434,12 @@ func primitiveJSONSchema(pk primKind, t reflect.Type) map[string]any {
 		return map[string]any{"anyOf": []any{
 			map[string]any{"type": "number"},
 			// Mirrors strconv.ParseFloat's accepted grammar (minus inf/nan,
-			// which floatValue rejects): decimal forms incl. trailing/leading
-			// dots ("1.", ".5"), exponents, underscore separators, and hex
-			// floats ("0x1p2") — review finding.
-			map[string]any{"type": "string", "pattern": `^\s*[+-]?(([0-9][0-9_]*(\.[0-9_]*)?|\.[0-9][0-9_]*)([eE][+-]?[0-9]+)?|0[xX][0-9a-fA-F_]*\.?[0-9a-fA-F_]*[pP][+-]?[0-9]+)\s*$`},
+			// which floatValue rejects), empirically pinned: underscores only
+			// BETWEEN digits (1_0, 1e1_0, 0x1p1_0 valid; 1__0, 10_, _10
+			// invalid), one leading underscore allowed after the hex prefix
+			// (0x_1p2), trailing/leading dots ("1.", ".5", "0x.8p1"), and a
+			// hex mantissa must carry at least one digit (0xp1 invalid).
+			map[string]any{"type": "string", "pattern": `^\s*[+-]?((([0-9](_?[0-9])*)(\.([0-9](_?[0-9])*)?)?|\.([0-9](_?[0-9])*))([eE][+-]?[0-9](_?[0-9])*)?|0[xX](_?[0-9a-fA-F](_?[0-9a-fA-F])*(\.([0-9a-fA-F](_?[0-9a-fA-F])*)?)?|\.[0-9a-fA-F](_?[0-9a-fA-F])*)[pP][+-]?[0-9](_?[0-9])*)\s*$`},
 		}}
 	case primMapAny:
 		return map[string]any{"type": "object"}

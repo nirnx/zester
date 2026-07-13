@@ -369,7 +369,7 @@ func TestFileAppendApplyError(t *testing.T) {
 	if err := os.MkdirAll(readOnlyDir, 0555); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(readOnlyDir, 0755)
+	defer func() { _ = os.Chmod(readOnlyDir, 0755) }()
 
 	filePath := filepath.Join(readOnlyDir, "cantwrite")
 

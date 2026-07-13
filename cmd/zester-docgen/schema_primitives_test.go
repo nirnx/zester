@@ -36,6 +36,10 @@ func TestSchemaAcceptsEveryRuntimeValidPrimitiveRepresentation(t *testing.T) {
 		// strconv.ParseFloat forms (review round 3): trailing dot, hex float,
 		// underscore separators.
 		{"ratio": "1."}, {"ratio": "0x1p2"}, {"ratio": "1_0.5"}, {"ratio": ".5"},
+		// Round 4: exact ParseFloat grammar — underscores are legal between
+		// digits ANYWHERE (exponent included), and 0x may be followed by an
+		// underscore before the first hex digit; hex-fraction exponents too.
+		{"ratio": "1e1_0"}, {"ratio": "0x_1p2"}, {"ratio": "0x.8p1"}, {"ratio": "0x1.8p-2"},
 		{"label": "x"}, {"label": 12345}, {"label": true},
 	}
 	for _, params := range accept {
@@ -51,6 +55,10 @@ func TestSchemaAcceptsEveryRuntimeValidPrimitiveRepresentation(t *testing.T) {
 		{"ratio": "not-a-number"},
 		// floatValue rejects non-finite results even though ParseFloat parses them.
 		{"ratio": "inf"}, {"ratio": "NaN"},
+		// Round 4: ParseFloat REJECTS these underscore/hex misuses, so the
+		// schema must too — doubled or trailing underscores, a bare hex
+		// exponent with no mantissa digits, an underscore next to the dot.
+		{"ratio": "1__0"}, {"ratio": "10_"}, {"ratio": "0xp1"}, {"ratio": "1._5"}, {"ratio": "_10"},
 		{"label": []any{"a"}},
 	}
 	for _, params := range reject {

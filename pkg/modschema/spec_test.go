@@ -180,3 +180,67 @@ func TestSpec_Info_DedupesSemTypes(t *testing.T) {
 		t.Fatalf("two fields of one semantic type must dedupe to 1 SemType, got %d: %+v", len(mi.SemTypes), mi.SemTypes)
 	}
 }
+
+// TestInfoAndSchemaAreDeepCopies pins review-round-4 item 6: the compiled plan
+// is shared, long-lived state (registries, docgen, sys.doc render
+// concurrently), so Info() must hand out fully detached values — mutating any
+// part of a returned view (param fields, alias slices, JSON-Schema fragments,
+// doc slices, semantic-type fragments) must not leak into the next call's
+// result.
+func TestInfoAndSchemaAreDeepCopies(t *testing.T) {
+	spec, err := modschema.NewSpec("demo.copy", modschema.KindState, specProto{}, modschema.Doc{
+		Summary:  "demo",
+		Examples: []modschema.Example{{Title: "t", Kind: "cli", Code: "c"}},
+		Notes:    []modschema.Note{{Level: "info", Body: "b"}},
+		SeeAlso:  []string{"other.module"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mi := spec.Info()
+	// Vandalize every mutable region of the returned view.
+	mi.Doc.Examples[0].Title = "VANDALIZED"
+	mi.Doc.Notes[0].Body = "VANDALIZED"
+	mi.Doc.SeeAlso[0] = "VANDALIZED"
+	for i := range mi.Params {
+		mi.Params[i].Usage = "VANDALIZED"
+		for k := range mi.Params[i].JSONSchema {
+			mi.Params[i].JSONSchema[k] = "VANDALIZED"
+		}
+		mi.Params[i].JSONSchema["injected"] = true
+		if len(mi.Params[i].Aliases) > 0 {
+			mi.Params[i].Aliases[0] = "VANDALIZED"
+		}
+	}
+	for i := range mi.SemTypes {
+		for k := range mi.SemTypes[i].JSONSchema {
+			mi.SemTypes[i].JSONSchema[k] = "VANDALIZED"
+		}
+	}
+
+	fresh := spec.Info()
+	if fresh.Doc.Examples[0].Title != "t" || fresh.Doc.Notes[0].Body != "b" || fresh.Doc.SeeAlso[0] != "other.module" {
+		t.Fatalf("Doc mutated through a returned Info view: %+v", fresh.Doc)
+	}
+	for _, f := range fresh.Params {
+		if f.Usage == "VANDALIZED" {
+			t.Fatalf("param %q usage mutated through a returned Info view", f.Name)
+		}
+		if _, injected := f.JSONSchema["injected"]; injected {
+			t.Fatalf("param %q JSON-Schema fragment mutated through a returned Info view", f.Name)
+		}
+		for k, v := range f.JSONSchema {
+			if v == "VANDALIZED" {
+				t.Fatalf("param %q JSON-Schema key %q mutated through a returned Info view", f.Name, k)
+			}
+		}
+	}
+	for _, st := range fresh.SemTypes {
+		for k, v := range st.JSONSchema {
+			if v == "VANDALIZED" {
+				t.Fatalf("semantic type %q fragment key %q mutated through a returned Info view", st.Name, k)
+			}
+		}
+	}
+}

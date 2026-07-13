@@ -158,7 +158,9 @@ func TestSvcRunning_Revert(t *testing.T) {
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
 	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
-	s.Apply(context.Background())
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -414,7 +416,9 @@ func TestSvcEnabled_Revert(t *testing.T) {
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
 	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
-	s.Apply(context.Background())
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -632,7 +636,9 @@ func TestSvcDead_Revert(t *testing.T) {
 	fake.PreAdd("nginx", true, false)
 	mctx := testSvcMctx(fake)
 	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
-	s.Apply(context.Background())
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)

@@ -82,9 +82,12 @@ func (fileModeType) Doc() string {
 		"(4000/2000/1000) are honored."
 }
 func (fileModeType) JSONSchema() map[string]any {
+	// The string arm mirrors fileModeOctalValue exactly: base-8 ParseUint, no
+	// trimming, value capped at 0o7777 — an unconstrained string accepted
+	// runtime-invalid values like "999" and "banana" (review round 4).
 	return map[string]any{
-		"oneOf": []any{
-			map[string]any{"type": "string"},
+		"anyOf": []any{
+			map[string]any{"type": "string", "pattern": `^0*[0-7]{1,4}$`},
 			map[string]any{"type": "integer", "minimum": 0, "maximum": 0o7777},
 		},
 	}

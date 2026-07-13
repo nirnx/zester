@@ -152,7 +152,9 @@ def running(id, config):
 		t.Fatal(err)
 	}
 	future := time.Now().Add(2 * time.Second)
-	os.Chtimes(path, future, future)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
 
 	if _, err := loader.LoadGlobal(registry); err != nil {
 		t.Fatal(err)

@@ -86,6 +86,15 @@ func validateModuleExamples(reg *state.Registry, artifact *jsonschema.Schema, mo
 			}
 		}
 
+		// Duplicate param keys across list items are legal at runtime
+		// (last-occurrence-wins) but schema-invisible — the artifact validates
+		// items independently, so a duplicate could satisfy required with an
+		// earlier value the merge then discards (review round 4). Generated
+		// EXAMPLES must not model that ambiguity.
+		if dup := duplicateExampleKey(ex.Code, module); dup != "" {
+			return nil, fmt.Errorf("docgen: module %s: example %q repeats parameter %q across list items — runtime merges last-wins, which the JSON Schema cannot express; collapse the example to a single occurrence", module, ex.Title, dup)
+		}
+
 		if hasRequisiteKeys(params) {
 			skips = append(skips, exampleSkip{module, ex.Title, "references external requisites, not self-contained"})
 			continue
@@ -287,3 +296,44 @@ func exampleJSONInstance(code string) (any, error) {
 	}
 	return inst, nil
 }
+
+// duplicateExampleKey reports the first parameter key that appears in more
+// than one of the module's list items in a state example (empty string when
+// none). Requisite/attribute keys are exempt — repeating require blocks is
+// conventional.
+func duplicateExampleKey(code, module string) string {
+	var top map[string]any
+	if err := yaml.Unmarshal([]byte(code), &top); err != nil {
+		return ""
+	}
+	for _, stateVal := range top {
+		sm, ok := stateVal.(map[string]any)
+		if !ok {
+			continue
+		}
+		items, ok := sm[module].([]any)
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, it := range items {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			for k := range m {
+				if _, reserved := reservedKeySet[k]; reserved {
+					continue
+				}
+				if seen[k] {
+					return k
+				}
+				seen[k] = true
+			}
+		}
+	}
+	return ""
+}
+
+// reservedKeySet caches the state-layer reserved keys for example checks.
+var reservedKeySet = state.ReservedKeySet()

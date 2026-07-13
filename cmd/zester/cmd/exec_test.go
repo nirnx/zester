@@ -47,6 +47,52 @@ func TestParseModuleArgs_CmdRunMissing(t *testing.T) {
 	}
 }
 
+// TestParseModuleArgs_CmdRunKeyValueForms pins the review-round-4 P1 fix:
+// a Salt-style `cmd.run name=<cmd>` (or command=/cmd=) invocation is key=value
+// form — the assignment must NOT become the literal command string — while a
+// positional command that merely CONTAINS '=' (env-prefix style) stays the
+// verbatim command.
+func TestParseModuleArgs_CmdRunKeyValueForms(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantCmd string
+		extra   map[string]any
+	}{
+		{"name= form (Salt parity)", []string{"name=echo hi"}, "echo hi", nil},
+		{"command= form", []string{"command=uptime"}, "uptime", nil},
+		{"cmd= form", []string{"cmd=uptime", "env=prod"}, "uptime", map[string]any{"env": "prod"}},
+		{"positional with embedded =", []string{"FOO=bar env"}, "FOO=bar env", nil},
+		{"positional then kv", []string{"echo a=b", "shell=/bin/sh"}, "echo a=b", map[string]any{"shell": "/bin/sh"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, args, err := parseModuleArgs("cmd.run", tc.args)
+			if err != nil {
+				t.Fatalf("parseModuleArgs: %v", err)
+			}
+			if id != "ad-hoc" {
+				t.Errorf("id = %q, want ad-hoc", id)
+			}
+			key := "command"
+			if _, viaName := args["name"]; viaName {
+				key = "name"
+			}
+			if _, viaCmd := args["cmd"]; viaCmd {
+				key = "cmd"
+			}
+			if got := args[key]; got != tc.wantCmd {
+				t.Errorf("args[%q] = %v, want %q (full args: %v)", key, got, tc.wantCmd, args)
+			}
+			for k, v := range tc.extra {
+				if args[k] != v {
+					t.Errorf("args[%q] = %v, want %v", k, args[k], v)
+				}
+			}
+		})
+	}
+}
+
 func TestParseModuleArgs_TestPing(t *testing.T) {
 	id, args, err := parseModuleArgs("test.ping", nil)
 	if err != nil {

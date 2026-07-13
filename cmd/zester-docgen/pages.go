@@ -569,7 +569,7 @@ func paramDefaultCell(f modschema.Field) string {
 // paramDefaultCellKind is the Kind-aware variant: an execution function's
 // primary falls back to the request ID / bare positional, not a state ID.
 func paramDefaultCellKind(f modschema.Field, kind modschema.Kind) string {
-	if f.Primary && !f.Sensitive && !(f.HasDefault && f.Default != "") && kind == modschema.KindExec {
+	if f.Primary && !f.Sensitive && (!f.HasDefault || f.Default == "") && kind == modschema.KindExec {
 		return "Request ID (bare positional)"
 	}
 	return paramDefaultCell(f)

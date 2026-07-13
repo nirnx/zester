@@ -105,3 +105,43 @@ func TestPlainRegisterClearsStaleSpec(t *testing.T) {
 		t.Fatal("builder must survive the spec clearing")
 	}
 }
+
+// TestUnregister pins the removal seam added for Starlark reload
+// reconciliation: Unregister removes BOTH the builder and the spec (a removed
+// module is neither callable nor documented) and reports prior presence.
+func TestUnregister(t *testing.T) {
+	r := state.NewRegistry()
+	if err := r.ReplaceSpec(newTestSpec(t, "star.mod"), testBuilder); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if !r.Unregister("star.mod") {
+		t.Fatal("Unregister reported absent for a registered module")
+	}
+	if r.Has("star.mod") {
+		t.Error("builder survived Unregister")
+	}
+	if _, ok := r.Describe("star.mod"); ok {
+		t.Error("spec survived Unregister")
+	}
+	if _, err := r.Build("star.mod", "x", map[string]any{"name": "x"}); err == nil {
+		t.Error("Build still constructs an unregistered module")
+	}
+	if r.Unregister("star.mod") {
+		t.Error("second Unregister reported presence")
+	}
+	if r.Unregister("never.was") {
+		t.Error("Unregister of an unknown name reported presence")
+	}
+}
+
+// TestBuiltinsNeverUnregister is the conformance pin promised in Unregister's
+// doc comment: the built-in registration table must never remove modules.
+func TestBuiltinsNeverUnregister(t *testing.T) {
+	src, err := os.ReadFile("modules/register.go")
+	if err != nil {
+		t.Fatalf("read modules/register.go: %v", err)
+	}
+	if strings.Contains(string(src), ".Unregister(") {
+		t.Fatal("pkg/state/modules/register.go calls Unregister — built-ins must never be unregistered")
+	}
+}

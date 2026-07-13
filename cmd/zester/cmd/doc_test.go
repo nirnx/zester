@@ -70,7 +70,7 @@ func TestDoc_ListGroupsByFamily(t *testing.T) {
 	if iFile < 0 || iPkg < 0 || iService < 0 || iUser < 0 {
 		t.Fatalf("missing a family header: file=%d pkg=%d service=%d user=%d", iFile, iPkg, iService, iUser)
 	}
-	if !(iFile < iPkg && iPkg < iService && iService < iUser) {
+	if iFile >= iPkg || iPkg >= iService || iService >= iUser {
 		t.Errorf("families not sorted: file=%d pkg=%d service=%d user=%d", iFile, iPkg, iService, iUser)
 	}
 	if !strings.Contains(out, "Run 'zester doc <module>'") {

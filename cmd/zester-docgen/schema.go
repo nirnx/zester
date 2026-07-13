@@ -100,10 +100,13 @@ func renderModuleSchemaArtifact(infos []modschema.ModuleInfo) ([]byte, error) {
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"$id":     schemaID,
 		"title":   "Zester module parameters",
-		"description": "A Zester state file (state ID -> exactly one module name -> " +
-			"parameters), generated from each module's self-documenting schema (keystone " +
-			"spec). Only migrated modules are constrained via $defs.modules; a module " +
-			"absent from it has no schema yet and is left unconstrained.",
+		"description": "A Zester state file (state ID -> module name(s) -> parameter " +
+			"list), generated from each module's self-documenting schema (keystone " +
+			"spec). Known limitation (inexpressible in JSON Schema): when the same " +
+			"parameter key appears in MULTIPLE list items, the runtime merges " +
+			"last-occurrence-wins — the schema validates each item independently and " +
+			"cannot see the merge order, so the decoder is the final authority for " +
+			"duplicated keys.",
 		"$defs": map[string]any{
 			"modules":       moduleDefs,
 			"semanticTypes": semTypeDefs,

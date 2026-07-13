@@ -128,9 +128,3 @@ func masterURLs() []string {
 	}
 	return []string{"nats://localhost:4222"}
 }
-
-// exitError prints an error and exits.
-func exitError(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
-	os.Exit(1)
-}

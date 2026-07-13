@@ -267,34 +267,6 @@ func (c *Compiler) namesInjectKey(module string) (key string, aliases []string) 
 	return "name", nil
 }
 
-// primarySourcePresent reports whether cfg already carries an EXPLICIT value
-// (present, non-nil, non-empty-string) at key or any of aliases — mirroring
-// modschema's own source-resolution absence rule (§2.1: a nil or empty-string
-// value is absence, falling through to the next source) — so a `names:`
-// expansion never overwrites a value the state file genuinely set (M2).
-func primarySourcePresent(cfg map[string]any, key string, aliases []string) bool {
-	if sourceValuePresent(cfg, key) {
-		return true
-	}
-	for _, a := range aliases {
-		if sourceValuePresent(cfg, a) {
-			return true
-		}
-	}
-	return false
-}
-
-// sourceValuePresent reports whether cfg[key] is present and not the §2.1
-// absence shape (nil, or an empty string).
-func sourceValuePresent(cfg map[string]any, key string) bool {
-	v, ok := cfg[key]
-	if !ok || v == nil {
-		return false
-	}
-	s, isStr := v.(string)
-	return !isStr || s != ""
-}
-
 // namesKey is the `names:` expansion directive. It is DERIVED from
 // state.CompilerKeys() — the sole compiler directive that is neither an "_in"
 // inverse form nor a same-state alias source — so the key string lives only in

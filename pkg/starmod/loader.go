@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,11 @@ type LoaderConfig struct {
 // and registers them as state modules in the Registry.
 //
 // Hot-reload: if a .star file's modification time changes between calls,
-// the Loader re-parses the file and re-registers all its modules.
+// the Loader re-parses the file and re-registers all its modules. Functions a
+// reloaded file no longer defines — and every module of a deleted file — are
+// UNREGISTERED (removed modules must be neither callable nor documented),
+// unless another loaded file still provides the name, in which case that
+// surviving owner is re-executed so its builder becomes live again.
 type Loader struct {
 	config LoaderConfig
 	mu     sync.Mutex
@@ -51,6 +56,17 @@ type Loader struct {
 	// independent of the state Registry's strict, replace-less RegisterSpec.
 	// A nil value records a module that loaded but produced no spec.
 	specs map[string]*modschema.Spec
+	// fileModules records, per absolute .star file path, the set of module
+	// names that file registered on its last successful load. It is the
+	// ownership ledger behind removal reconciliation: a name a reloaded file
+	// no longer provides (or whose file was deleted) is unregistered from the
+	// Registry unless another loaded file still provides it — in which case
+	// that surviving owner is re-executed so ITS builder becomes live again.
+	fileModules map[string]map[string]bool
+	// owned is the union of all fileModules name sets. A Registry name that
+	// exists but is NOT loader-owned belongs to a built-in (or other
+	// non-Starlark) registration; the loader refuses to shadow it.
+	owned map[string]bool
 }
 
 // NewLoader creates a new Starlark module loader.
@@ -59,10 +75,12 @@ func NewLoader(cfg LoaderConfig) *Loader {
 		cfg.Logger = slog.Default()
 	}
 	return &Loader{
-		config: cfg,
-		loaded: make(map[string]time.Time),
-		cache:  make(map[string]starlark.StringDict),
-		specs:  make(map[string]*modschema.Spec),
+		config:      cfg,
+		loaded:      make(map[string]time.Time),
+		cache:       make(map[string]starlark.StringDict),
+		specs:       make(map[string]*modschema.Spec),
+		fileModules: make(map[string]map[string]bool),
+		owned:       make(map[string]bool),
 	}
 }
 
@@ -95,13 +113,29 @@ func (l *Loader) LoadDir(dir string, registry *state.Registry) (int, error) {
 // loadModulesDir is the shared implementation for LoadGlobal and LoadDir.
 func (l *Loader) loadModulesDir(modulesDir string, registry *state.Registry) (int, error) {
 	info, err := os.Stat(modulesDir)
-	if err != nil || !info.IsDir() {
-		return 0, nil
+	dirExists := err == nil && info.IsDir()
+
+	var entries []os.DirEntry
+	if dirExists {
+		entries, err = os.ReadDir(modulesDir)
+		if err != nil {
+			return 0, fmt.Errorf("starmod: read %s: %w", modulesDir, err)
+		}
 	}
 
-	entries, err := os.ReadDir(modulesDir)
-	if err != nil {
-		return 0, fmt.Errorf("starmod: read %s: %w", modulesDir, err)
+	// Reconcile deletions FIRST: a previously loaded .star file that no longer
+	// exists under this directory (including the directory itself vanishing)
+	// must not keep its modules callable or documented.
+	present := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".star") {
+			present[filepath.Join(modulesDir, entry.Name())] = true
+		}
+	}
+	l.unloadMissingFiles(modulesDir, present, registry)
+
+	if !dirExists {
+		return 0, nil
 	}
 
 	count := 0
@@ -202,6 +236,7 @@ func (l *Loader) loadFile(absPath string, registry *state.Registry) (int, error)
 	moduleParams, fnParams := collectParamDicts(globals)
 
 	count := 0
+	registered := make(map[string]bool, len(applyFns))
 	for name, applyFn := range applyFns {
 		moduleName := baseName + "." + name
 
@@ -230,33 +265,162 @@ func (l *Loader) loadFile(absPath string, registry *state.Registry) (int, error)
 			spec = nil
 		}
 
-		l.registerStarModule(registry, moduleName, spec, builder)
+		if !l.registerStarModule(registry, moduleName, spec, builder, absPath) {
+			continue
+		}
 		l.config.Logger.Info("starmod: registered module",
 			"module", moduleName,
 			"has_check", checkFns[name] != nil,
 			"has_revert", revertFns[name] != nil,
 			"has_spec", spec != nil,
 		)
+		registered[moduleName] = true
 		count++
 	}
 
+	// The file executed successfully: reconcile module names it registered on a
+	// PREVIOUS load but no longer provides. (On an exec error above, the old
+	// registrations deliberately stay live — last-known-good semantics.)
+	l.reconcileRemoved(absPath, registered, registry)
+
 	return count, nil
+}
+
+// unloadMissingFiles unregisters the modules of previously loaded .star files
+// that no longer exist. Files directly under modulesDir are checked against
+// present (this pass's directory listing); every OTHER previously loaded file
+// is stat-checked, so an orphaned formula _modules dir — one no compiled state
+// references anymore, whose own LoadDir will never run again — is reconciled
+// on the NEXT load pass of ANY directory. Only a confirmed not-exist counts as
+// deleted; a transient stat error never unregisters.
+func (l *Loader) unloadMissingFiles(modulesDir string, present map[string]bool, registry *state.Registry) {
+	l.mu.Lock()
+	known := make([]string, 0, len(l.loaded))
+	for p := range l.loaded {
+		known = append(known, p)
+	}
+	l.mu.Unlock()
+	sort.Strings(known)
+
+	var deleted []string
+	for _, p := range known {
+		if filepath.Dir(p) == modulesDir {
+			if !present[p] {
+				deleted = append(deleted, p)
+			}
+			continue
+		}
+		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
+			deleted = append(deleted, p)
+		}
+	}
+	if len(deleted) == 0 {
+		return
+	}
+
+	l.mu.Lock()
+	dirs := make(map[string]bool)
+	for _, p := range deleted {
+		delete(l.loaded, p)
+		dirs[filepath.Dir(p)] = true
+	}
+	for d := range dirs {
+		l.invalidateCacheDir(d)
+	}
+	l.mu.Unlock()
+
+	for _, p := range deleted {
+		l.config.Logger.Info("starmod: module file deleted; unregistering its modules", "file", p)
+		l.reconcileRemoved(p, nil, registry)
+		l.mu.Lock()
+		delete(l.fileModules, p)
+		l.mu.Unlock()
+	}
+}
+
+// reconcileRemoved updates absPath's ownership ledger entry to newNames and
+// handles every module name the file previously provided but no longer does:
+// if another loaded file still provides the name, that surviving owner file is
+// re-executed so its builder becomes live again (formula/global layering);
+// otherwise the name is unregistered from the Registry and forgotten.
+func (l *Loader) reconcileRemoved(absPath string, newNames map[string]bool, registry *state.Registry) {
+	l.mu.Lock()
+	old := l.fileModules[absPath]
+	l.fileModules[absPath] = newNames
+
+	var gone []string
+	reload := make(map[string]bool)
+	for name := range old {
+		if newNames[name] {
+			continue
+		}
+		survivor := ""
+		for f, names := range l.fileModules {
+			if f != absPath && names[name] {
+				survivor = f
+				break
+			}
+		}
+		if survivor != "" {
+			reload[survivor] = true
+			continue
+		}
+		gone = append(gone, name)
+		delete(l.owned, name)
+		delete(l.specs, name)
+	}
+	l.mu.Unlock()
+
+	sort.Strings(gone)
+	for _, name := range gone {
+		if registry.Unregister(name) {
+			l.config.Logger.Info("starmod: unregistered removed module",
+				"module", name, "file", absPath)
+		}
+	}
+
+	survivors := make([]string, 0, len(reload))
+	for f := range reload {
+		survivors = append(survivors, f)
+	}
+	sort.Strings(survivors)
+	for _, f := range survivors {
+		l.config.Logger.Info("starmod: re-executing surviving owner of removed module override", "file", f)
+		if _, err := l.loadFile(f, registry); err != nil {
+			l.config.Logger.Warn("starmod: surviving owner re-execution failed; its previous registrations stay live",
+				"file", f, "error", err)
+		}
+	}
 }
 
 // registerStarModule installs a Starlark module's builder and, when available,
 // its self-documentation spec into the state Registry, and records the fresh
 // spec in the loader's own store.
 //
-// The state Registry's RegisterSpec is STRICT (a duplicate module name is an
-// error) and has no replace API, whereas Starlark registration is inherently
-// dynamic: a hot-reload re-registers the same name, and a formula module
-// overrides a global one of the same name. On such a duplicate we fall back to
-// plain Register so the builder-override and hot-reload behaviors are preserved
-// exactly as before. The loader's own specs map is always refreshed, so
-// LoadedSpec (and any consumer that reads it) sees the latest docs even though
-// Registry.Describe cannot be refreshed through the current public API — see the
-// FRAMEWORK DEVIATION reported for this track.
-func (l *Loader) registerStarModule(registry *state.Registry, moduleName string, spec *modschema.Spec, inner state.Builder) {
+// Starlark registration is inherently dynamic — a hot-reload re-registers the
+// same name and a formula module overrides a global one — so documented
+// modules go through the Registry's ReplaceSpec seam (Describe/sys.doc always
+// serve the LATEST docs) and undocumented ones through plain Register. The
+// loader's own specs map is refreshed in step, and the ownership ledger
+// (fileModules/owned) records which file provides the name so removal
+// reconciliation and shadow refusal work. It reports whether the module was
+// actually registered (false = shadow refusal).
+func (l *Loader) registerStarModule(registry *state.Registry, moduleName string, spec *modschema.Spec, inner state.Builder, absPath string) bool {
+	// Shadow refusal: a Registry name the loader has never owned belongs to a
+	// built-in (or other non-Starlark) registration. A .star file must not
+	// hijack it — silently replacing pkg.installed fleet-wide is a namespace
+	// collision, and once the .star is removed the built-in's builder could
+	// never be restored. Starlark-over-Starlark overrides (formula overrides
+	// global, hot-reload) remain allowed: those names are loader-owned.
+	l.mu.Lock()
+	owned := l.owned[moduleName]
+	l.mu.Unlock()
+	if !owned && registry.Has(moduleName) {
+		l.config.Logger.Error("starmod: refusing to register module: name is already registered by a non-Starlark module",
+			"module", moduleName, "file", absPath)
+		return false
+	}
+
 	builder := inner
 	if spec != nil && !spec.OpenParams {
 		builder = l.validatingBuilder(spec, inner)
@@ -279,7 +443,9 @@ func (l *Loader) registerStarModule(registry *state.Registry, moduleName string,
 
 	l.mu.Lock()
 	l.specs[moduleName] = spec
+	l.owned[moduleName] = true
 	l.mu.Unlock()
+	return true
 }
 
 // validatingBuilder wraps a Starlark builder so that, when the module declared

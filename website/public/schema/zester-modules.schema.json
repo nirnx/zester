@@ -3173,9 +3173,9 @@
     },
     "semanticTypes": {
       "FileMode": {
-        "description": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.",
-        "oneOf": [
+        "anyOf": [
           {
+            "pattern": "^0*[0-7]{1,4}$",
             "type": "string"
           },
           {
@@ -3183,7 +3183,8 @@
             "minimum": 0,
             "type": "integer"
           }
-        ]
+        ],
+        "description": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored."
       },
       "GroupRef": {
         "description": "A group reference, given as a non-negative integer GID or a group name. An all-digit string is treated as a numeric GID, so \"1000\" and the integer 1000 resolve identically; a negative GID is rejected.",
@@ -3422,7 +3423,7 @@
     },
     "type": "object"
   },
-  "description": "A Zester state file (state ID -> exactly one module name -> parameters), generated from each module's self-documenting schema (keystone spec). Only migrated modules are constrained via $defs.modules; a module absent from it has no schema yet and is left unconstrained.",
+  "description": "A Zester state file (state ID -> module name(s) -> parameter list), generated from each module's self-documenting schema (keystone spec). Known limitation (inexpressible in JSON Schema): when the same parameter key appears in MULTIPLE list items, the runtime merges last-occurrence-wins — the schema validates each item independently and cannot see the merge order, so the decoder is the final authority for duplicated keys.",
   "properties": {
     "extend": {
       "type": "object"

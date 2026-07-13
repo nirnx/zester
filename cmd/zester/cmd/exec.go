@@ -191,7 +191,7 @@ func runJobMode(ctx context.Context, client *bus.Client, tgtExpr, module, id str
 	if err != nil {
 		return fmt.Errorf("subscribe job returns: %w", err)
 	}
-	defer returnSub.Unsubscribe()
+	defer func() { _ = returnSub.Unsubscribe() }()
 
 	// Dispatch to master.
 	jobCtx, jobCancel := context.WithTimeout(ctx, timeout)
@@ -332,6 +332,16 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 	case "cmd.run":
 		if len(remaining) == 0 {
 			return "", nil, fmt.Errorf("cmd.run requires a command argument")
+		}
+		// Salt-style key=value invocations must not become the literal command
+		// (P1 regression: `cmd.run name=echo hi` executed the command
+		// "name=echo hi", exit 127). When the FIRST token is an explicit
+		// command=/cmd=/name= assignment, the whole invocation is key=value
+		// form; otherwise the first token is the positional command, verbatim
+		// (`cmd.run 'FOO=bar env'` still works — FOO is not a command key).
+		if k, _, ok := strings.Cut(remaining[0], "="); ok && (k == "command" || k == "cmd" || k == "name") {
+			cliargs.ParseKeyValues(remaining, args)
+			return "ad-hoc", args, nil
 		}
 		args["command"] = remaining[0]
 		cliargs.ParseKeyValues(remaining[1:], args)

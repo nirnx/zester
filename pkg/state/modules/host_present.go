@@ -10,9 +10,6 @@ import (
 	"github.com/nirnx/zester/pkg/state"
 )
 
-// defaultHostsPath is the default path to the hosts file.
-const defaultHostsPath = "/etc/hosts"
-
 // HostPresent implements the host.present state.
 // It ensures a hostname is mapped to a given IP address in /etc/hosts,
 // adding it to an existing line for that IP or creating a new line, and

@@ -2008,8 +2008,9 @@
         "HasDefault": true,
         "Default": "0755",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
+              "pattern": "^0*[0-7]{1,4}$",
               "type": "string"
             },
             {
@@ -2109,8 +2110,9 @@
         "Name": "FileMode",
         "Doc": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
+              "pattern": "^0*[0-7]{1,4}$",
               "type": "string"
             },
             {
@@ -2842,8 +2844,9 @@
         "HasDefault": true,
         "Default": "0644",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
+              "pattern": "^0*[0-7]{1,4}$",
               "type": "string"
             },
             {
@@ -2958,8 +2961,9 @@
         "Name": "FileMode",
         "Doc": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
+              "pattern": "^0*[0-7]{1,4}$",
               "type": "string"
             },
             {
@@ -3106,8 +3110,9 @@
         "HasDefault": true,
         "Default": "0755",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
+              "pattern": "^0*[0-7]{1,4}$",
               "type": "string"
             },
             {
@@ -3131,8 +3136,9 @@
         "HasDefault": true,
         "Default": "0644",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
+              "pattern": "^0*[0-7]{1,4}$",
               "type": "string"
             },
             {
@@ -3263,8 +3269,9 @@
         "Name": "FileMode",
         "Doc": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
+              "pattern": "^0*[0-7]{1,4}$",
               "type": "string"
             },
             {

@@ -160,7 +160,6 @@ func (f *FileBlockReplace) Reqs() state.Requisites { return f.reqs }
 // Returns (-1, -1, "") if the block is not found.
 func findBlock(lines []string, markerStart, markerEnd string) (startIdx, endIdx int, current string) {
 	startIdx = -1
-	endIdx = -1
 
 	for i, line := range lines {
 		if strings.TrimRight(line, "\r") == markerStart {

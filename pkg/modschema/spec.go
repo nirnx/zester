@@ -113,8 +113,8 @@ func (s *Spec) Info() ModuleInfo {
 	mi := ModuleInfo{
 		Module:     s.Module,
 		Kind:       s.Kind,
-		Doc:        s.Doc,
-		Params:     append([]Field(nil), s.plan.schema.Fields...),
+		Doc:        cloneDoc(s.Doc),
+		Params:     cloneFields(s.plan.schema.Fields),
 		HasSpec:    true,
 		OpenParams: s.OpenParams,
 	}
@@ -132,7 +132,7 @@ func (s *Spec) Info() ModuleInfo {
 		mi.SemTypes = append(mi.SemTypes, SemanticTypeInfo{
 			Name:       name,
 			Doc:        fp.semType.Doc(),
-			JSONSchema: fp.semType.JSONSchema(),
+			JSONSchema: cloneJSONValue(fp.semType.JSONSchema()).(map[string]any),
 		})
 	}
 	return mi

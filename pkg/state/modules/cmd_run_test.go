@@ -102,7 +102,9 @@ func TestCmdRunCreatesGuard(t *testing.T) {
 		t.Error("expected NeedsChange when creates file doesn't exist")
 	}
 
-	os.WriteFile(guardPath, []byte("done"), 0644)
+	if err := os.WriteFile(guardPath, []byte("done"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	cr, err = s.Check(ctx)
 	if err != nil {

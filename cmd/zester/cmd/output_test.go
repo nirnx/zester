@@ -9,8 +9,6 @@ import (
 	"github.com/nirnx/zester/pkg/proto"
 )
 
-var errTimeout = errors.New("request timeout")
-
 func TestShouldColor(t *testing.T) {
 	// shouldColor should return false when NO_COLOR is set.
 	t.Setenv("NO_COLOR", "1")
