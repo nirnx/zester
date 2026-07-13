@@ -48,7 +48,7 @@ var families = []metaFamily{
 		"timezone-system", "locale-present",
 	}},
 	{Label: "Other", Pages: []string{
-		"module-run", "test-ping", "test-helpers", "query", "starlark",
+		"module-run", "test-ping", "test-helpers", "query", "starlark", "developing",
 	}},
 }
 
@@ -143,11 +143,13 @@ func isDistinctParamSlug(slug string) bool {
 // extraPages are nav entries not derived from any state module registration:
 // "query" documents the peel dispatch specials (facts.*/settings.*/pillar.*/
 // grains.*/sys.list_functions — generated from DispatchSpecials in Phase 3,
-// §7) and "starlark" is a general authoring guide. Both are hand-maintained
-// until their own tranche.
+// §7), "starlark" is the operator authoring guide, and "developing" is the
+// developer howto for adding a built-in module with a schema. All are
+// hand-maintained.
 var extraPages = map[string]bool{
-	"query":    true,
-	"starlark": true,
+	"query":      true,
+	"starlark":   true,
+	"developing": true,
 }
 
 // allPageSlugs returns every page slug enumerated by families, in nav order,

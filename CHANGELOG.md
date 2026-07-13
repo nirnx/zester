@@ -121,6 +121,14 @@ All notable changes to Zester are documented here. The format follows
   build failure instead of a silent fact of life. Registered in the
   Architecture nav (`architecture/meta.json`).
 
+- **New guide: Developing a Built-in Module** (`guides/modules/developing`) —
+  the step-by-step howto for adding a state module with a self-documenting
+  schema: the proto struct and `zester` tag grammar, semantic types, the
+  drift-corrected `Doc`, builder/lifecycle contract, registration and the
+  coverage gates, contract fixtures across the three input universes, docgen
+  regeneration, and the exec-module variant. Complements the operator-facing
+  Starlark guide and the architecture page.
+
 ### Changed
 - **Starlark hot-reload now UNREGISTERS removed modules.** A function removed
   from a reloaded `.star` file — and every module of a deleted `.star` file or
