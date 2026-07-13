@@ -10,10 +10,12 @@ import (
 // as a numeric GID or as a group name (for example file.managed's group /
 // user.present's primary group). It accepts:
 //
-//   - any integer kind, taken as a numeric GID, and
+//   - any integer kind, taken as a numeric GID (a NEGATIVE GID is rejected up
+//     front — BD-4 arm — where the legacy path forwarded it and failed later at
+//     the group provider), and
 //   - a string: an all-digit string is a numeric GID (BD-4 — "1000" resolves the
 //     same as the integer 1000, matching how the OS treats a numeric group), any
-//     other string is a group name.
+//     other string is a group name. An empty string is undeclared (§3).
 type GroupRef struct {
 	declared bool
 	isGID    bool
@@ -45,9 +47,9 @@ type groupRefType struct{}
 func (groupRefType) Name() string         { return "GroupRef" }
 func (groupRefType) GoType() reflect.Type { return reflect.TypeOf(GroupRef{}) }
 func (groupRefType) Doc() string {
-	return "A group reference, given as a numeric GID (any integer) or a group " +
+	return "A group reference, given as a non-negative integer GID or a group " +
 		"name. An all-digit string is treated as a numeric GID, so \"1000\" and the " +
-		"integer 1000 resolve identically."
+		"integer 1000 resolve identically; a negative GID is rejected."
 }
 func (groupRefType) JSONSchema() map[string]any {
 	return map[string]any{
@@ -62,7 +64,12 @@ func (groupRefType) sealed() {}
 func (groupRefType) Decode(in Input) (any, error) {
 	if s, ok := in.Raw.(string); ok {
 		if s == "" {
-			return GroupRef{}, fmt.Errorf("paramtypes: GroupRef: empty group reference")
+			// EMPTY-STRING RULE (keystone spec §3): an empty group reference is
+			// undeclared and falls through to a lower-precedence source (e.g.
+			// primary_group), exactly as the legacy comma-ok extraction did. The
+			// framework intercepts "" before dispatch; this guard keeps the type
+			// self-consistent for any direct caller.
+			return GroupRef{}, nil
 		}
 		if isAllDigits(s) {
 			gid, err := strconv.Atoi(s)

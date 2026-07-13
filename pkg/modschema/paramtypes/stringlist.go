@@ -8,7 +8,10 @@ import (
 // StringList is the semantic value for a list-of-strings parameter (for example
 // cmd.run's args). It accepts:
 //
-//   - a bare string, becoming a single-element list;
+//   - a non-empty bare string, becoming a single-element list (BD-5 third arm —
+//     the legacy parsers ignored a scalar entirely, so `groups: docker` managed
+//     no groups; it now enables management with one element);
+//   - an EMPTY string, which is undeclared (the nil zero value), not [""] (§3);
 //   - a []string, copied as-is; and
 //   - a []any, with scalar elements rendered via fmt.Sprint.
 //
@@ -43,6 +46,17 @@ func (stringListType) sealed() {}
 func (stringListType) Decode(in Input) (any, error) {
 	switch v := in.Raw.(type) {
 	case string:
+		if v == "" {
+			// EMPTY-STRING RULE (keystone spec §3): an empty string is undeclared
+			// (the nil zero value), NOT a one-element [""] list — legacy comma-ok
+			// parity. The framework intercepts "" before dispatch; this guard keeps
+			// the type self-consistent for any direct caller.
+			return StringList(nil), nil
+		}
+		// A non-empty bare string is a single-element list (BD-5 third arm): the
+		// legacy list parsers ignored a scalar value entirely, so `groups: docker`
+		// silently managed no groups; it now enables group management with one
+		// element (this is also what makes a CLI `groups=docker` work).
 		return StringList{v}, nil
 	case StringList:
 		return append(StringList(nil), v...), nil

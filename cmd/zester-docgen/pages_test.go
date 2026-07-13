@@ -199,6 +199,132 @@ func TestAssertNoJSX_ExemptsLiteralAndSafeForms(t *testing.T) {
 	}
 }
 
+// TestBlockquoteBody_PrefixesEveryLine pins the multi-paragraph / fenced-code
+// Note fix: every line of a Note body — content, fenced-code delimiters, and
+// blank lines — must carry a `>` marker so the whole body stays in ONE
+// blockquote. A blank line renders as a lone `>` (a bare newline would end the
+// blockquote in CommonMark and let the rest of the body escape the callout).
+func TestBlockquoteBody_PrefixesEveryLine(t *testing.T) {
+	body := "Intro paragraph.\n\n```nginx\nworker_processes 4;\n```\n\nClosing paragraph."
+	got := blockquoteBody(body)
+	for i, line := range strings.Split(got, "\n") {
+		if !strings.HasPrefix(line, ">") {
+			t.Errorf("line %d is not blockquoted: %q\n--- full ---\n%s", i, line, got)
+		}
+	}
+	if !strings.Contains(got, "\n>\n") {
+		t.Errorf("a blank body line was not rendered as a lone '>':\n%s", got)
+	}
+	for _, want := range []string{
+		"> Intro paragraph.",
+		"> ```nginx",
+		"> worker_processes 4;",
+		"> ```",
+		"> Closing paragraph.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("blockquoteBody dropped the `>` on %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestRenderModulePage_MultiParagraphFencedNoteStaysInOneBlockquote is the
+// end-to-end guard for the docgen Note renderer bug: a Note whose body carries a
+// fenced code block plus a trailing paragraph must render entirely inside its
+// `>` callout (the file.managed "Worked source-template render" note previously
+// let the fenced block and closing paragraph escape the blockquote), and the
+// page must still pass the assertNoJSX fence-skipping guard.
+func TestRenderModulePage_MultiParagraphFencedNoteStaysInOneBlockquote(t *testing.T) {
+	mi := modschema.ModuleInfo{
+		Module: "demo.notes",
+		Kind:   modschema.KindState,
+		Doc: modschema.Doc{
+			Summary: "demo",
+			Notes: []modschema.Note{{
+				Level: "info",
+				Title: "Worked example",
+				Body:  "Intro paragraph.\n\n```nginx\nworker_processes 4;\n```\n\nClosing paragraph.",
+			}},
+		},
+	}
+	got, err := renderModulePage(mi)
+	if err != nil {
+		t.Fatalf("renderModulePage: %v", err)
+	}
+	notesIdx := strings.Index(got, "## Notes")
+	if notesIdx < 0 {
+		t.Fatalf("rendered page has no Notes section:\n%s", got)
+	}
+	noteRegion := got[notesIdx:]
+	for _, want := range []string{
+		"> **Worked example**",
+		"> Intro paragraph.",
+		"> ```nginx",
+		"> worker_processes 4;",
+		"> ```",
+		"> Closing paragraph.",
+	} {
+		if !strings.Contains(noteRegion, want) {
+			t.Errorf("note body line escaped the blockquote: missing %q\n--- notes ---\n%s", want, noteRegion)
+		}
+	}
+	// Regression guard: no body line may appear UNquoted (immediately after a
+	// newline with no `>`), which is exactly how the bug manifested.
+	for _, bad := range []string{"\n```nginx", "\nworker_processes 4;", "\nClosing paragraph."} {
+		if strings.Contains(noteRegion, bad) {
+			t.Errorf("note body escaped the blockquote (found unquoted %q):\n--- notes ---\n%s", bad, noteRegion)
+		}
+	}
+}
+
+// TestDisplayParamType_FriendlyCompositeNames pins the friendly display names for
+// the composite primitive passthroughs (map[string]any / []any) in the
+// Parameters table, and that a semantic type's registered name and scalar
+// primitives are unaffected.
+func TestDisplayParamType_FriendlyCompositeNames(t *testing.T) {
+	cases := []struct {
+		name string
+		f    modschema.Field
+		want string
+	}{
+		{"map-passthrough", modschema.Field{GoType: "map[string]interface {}"}, "map"},
+		{"list-passthrough", modschema.Field{GoType: "[]interface {}"}, "list"},
+		{"scalar-string", modschema.Field{GoType: "string"}, "string"},
+		{"scalar-bool", modschema.Field{GoType: "bool"}, "bool"},
+		{"semantic-type-wins", modschema.Field{GoType: "paramtypes.FileMode", SemanticType: "FileMode"}, "FileMode"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := displayParamType(tc.f); got != tc.want {
+				t.Errorf("displayParamType(%+v) = %q, want %q", tc.f, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderModulePage_FileManaged_CompositeTypesRenderFriendly ties the friendly
+// display names to the real file.managed page: its context/defaults parameters
+// must render as `map`, never leaking Go's `map[string]interface {}` spelling.
+func TestRenderModulePage_FileManaged_CompositeTypesRenderFriendly(t *testing.T) {
+	reg := buildStateRegistry()
+	mi, ok := reg.Describe("file.managed")
+	if !ok {
+		t.Fatal("file.managed has no registered spec")
+	}
+	got, err := renderModulePage(mi)
+	if err != nil {
+		t.Fatalf("renderModulePage: %v", err)
+	}
+	if strings.Contains(got, "map[string]interface {}") {
+		t.Errorf("file.managed page still leaks the raw Go map type:\n%s", got)
+	}
+	for _, want := range []string{"| `context` | `map` |", "| `defaults` | `map` |"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file.managed composite param not rendered with friendly `map` type: missing %q\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderModulePage_UnresolvableSeeAlsoFailsGeneration(t *testing.T) {
 	mi := modschema.ModuleInfo{
 		Module: "demo.thing",

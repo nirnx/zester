@@ -32,6 +32,8 @@ var typeFixtures = map[string][]schematest.TypeFixture{
 		{Label: "reject-nonoctal-string", YAML: "999", CLI: "999", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
 		{Label: "reject-out-of-range-int", YAML: 5000, CLISkip: true, CLISkipReason: "an out-of-range integer mode has no equivalent octal CLI string", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
 		{Label: "reject-list", YAML: []any{7, 5, 5}, CLISkip: true, CLISkipReason: "a list is not a file mode", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		// EMPTY-STRING RULE (§3): "" decodes to the undeclared zero value, not an error.
+		{Label: "empty-string-undeclared", YAML: "", CLISkip: true, CLISkipReason: emptyStringCLISkip, Want: paramtypes.FileMode{}},
 	},
 	"TriState": {
 		{Label: "bool-true", YAML: true, CLI: "true", Want: paramtypes.NewTriState(true)},
@@ -41,12 +43,21 @@ var typeFixtures = map[string][]schematest.TypeFixture{
 		{Label: "int-zero", YAML: 0, CLI: "0", Want: paramtypes.NewTriState(false)},
 		{Label: "reject-two", YAML: 2, CLI: "2", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
 		{Label: "reject-word", YAML: "maybe", CLI: "maybe", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		// EMPTY-STRING RULE (§3): "" decodes to the undeclared zero value, not an error.
+		{Label: "empty-string-undeclared", YAML: "", CLISkip: true, CLISkipReason: emptyStringCLISkip, Want: paramtypes.TriState{}},
 	},
 	"GroupRef": {
 		// BD-4: an all-digit string resolves to the same numeric GID as the integer.
 		{Label: "int-gid", YAML: 1000, CLI: "1000", Want: paramtypes.NewGroupRefGID(1000)},
 		{Label: "name", YAML: "wheel", CLI: "wheel", Want: paramtypes.NewGroupRefName("wheel")},
 		{Label: "reject-bool", YAML: true, CLISkip: true, CLISkipReason: "a bool is not a group; its CLI string \"true\" is a valid group name", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		// BD-4 arm: a negative GID is rejected up front (the legacy path forwarded
+		// it and failed later at the group provider). CLI-skipped: "-5" is not
+		// all-digits, so over the CLI it is a group NAME, not a rejected GID.
+		{Label: "reject-negative-gid", YAML: -5, CLISkip: true, CLISkipReason: "a negative integer over the CLI arrives as the string \"-5\", a group name, not a numeric GID", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		// EMPTY-STRING RULE (§3): "" is undeclared (falls through to primary_group
+		// at the module level), NOT a rejected empty group reference.
+		{Label: "empty-string-undeclared", YAML: "", CLISkip: true, CLISkipReason: emptyStringCLISkip, Want: paramtypes.GroupRef{}},
 	},
 	"TemplateFlag": {
 		{Label: "bool-true", YAML: true, CLI: "true", Want: paramtypes.NewTemplateFlag(true)},
@@ -55,6 +66,8 @@ var typeFixtures = map[string][]schematest.TypeFixture{
 		// BD-2: a truthy string enables rendering (the legacy `== "jinja"` dropped it).
 		{Label: "truthy-string", YAML: "yes", CLI: "yes", Want: paramtypes.NewTemplateFlag(true)},
 		{Label: "reject-number", YAML: 5, CLI: "5", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		// EMPTY-STRING RULE (§3): "" decodes to the undeclared zero value, not an error.
+		{Label: "empty-string-undeclared", YAML: "", CLISkip: true, CLISkipReason: emptyStringCLISkip, Want: paramtypes.TemplateFlag{}},
 	},
 	"StringList": {
 		{Label: "single-string", YAML: "nginx", CLI: "nginx", Want: paramtypes.StringList{"nginx"}},
@@ -63,12 +76,24 @@ var typeFixtures = map[string][]schematest.TypeFixture{
 		{Label: "mixed-scalars", YAML: []any{"a", 2, true}, CLISkip: true, CLISkipReason: "a list is not a single CLI value", Want: paramtypes.StringList{"a", "2", "true"}},
 		// BD-5: a nested element is a hard error, not a silent drop.
 		{Label: "reject-nested", YAML: []any{"a", []any{"b"}}, CLISkip: true, CLISkipReason: "a nested list is not CLI-expressible", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		// EMPTY-STRING RULE (§3): "" is undeclared (the nil zero value), NOT a
+		// one-element [""] list — legacy comma-ok parity.
+		{Label: "empty-string-undeclared", YAML: "", CLISkip: true, CLISkipReason: emptyStringCLISkip, Want: paramtypes.StringList(nil)},
 	},
 	"StringMap": {
 		{Label: "scalar-values", YAML: map[string]any{"a": 1, "b": "two"}, CLISkip: true, CLISkipReason: "a map is not a single CLI key=value argument", Want: paramtypes.StringMap{"a": "1", "b": "two"}},
 		{Label: "reject-composite-value", YAML: map[string]any{"a": []any{"x"}}, CLISkip: true, CLISkipReason: "a map is not CLI-expressible", WantErr: true, WantErrKind: modschema.ErrValueInvalid},
+		// EMPTY-STRING RULE (§3): "" decodes to the undeclared zero value, not an error.
+		{Label: "empty-string-undeclared", YAML: "", CLISkip: true, CLISkipReason: emptyStringCLISkip, Want: paramtypes.StringMap(nil)},
 	},
 }
+
+// emptyStringCLISkip is the shared CLISkip reason for the per-type empty-string
+// EMPTY-STRING RULE fixtures: the harness CLI leg treats an empty value as
+// not-provided, so the YAML and msgpack legs (both of which faithfully deliver
+// the Go string "") exercise the rule; the module-level CLI leg is covered by the
+// user.present contract's gid-empty-string-falls-through-cli case.
+const emptyStringCLISkip = "an empty string reads as not-provided over the CLI; the YAML and msgpack legs exercise the empty-string rule"
 
 // TestParamtypesConformance pins the seal walls: exactly VocabularySize types,
 // unique names and Go types, and complete fixture coverage.

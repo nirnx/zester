@@ -190,12 +190,24 @@ func projectFields(v any) map[string]any {
 
 // looseEqual compares two values, treating all integer kinds as equal by value
 // and all float kinds likewise, and otherwise falling back to reflect.DeepEqual.
-// A decoded semantic value with no YAML-native literal — currently only
-// paramtypes.TriState — is compared through a dedicated matcher so a contract's
-// `want` can pin it in plain YAML (§3 semantic-type pilot).
+// A decoded semantic value whose Go type differs from its YAML-native literal —
+// paramtypes.TriState (no scalar literal at all), paramtypes.StringList (a
+// []string that YAML parses into a []any), paramtypes.TemplateFlag (a
+// bool/"jinja"/truthy-string flag), and paramtypes.FileMode (an octal
+// string/int) — is compared through a dedicated matcher so a contract's `want`
+// can pin it in plain YAML (§3 semantic-type pilot).
 func looseEqual(a, b any) bool {
 	if ts, ok := a.(paramtypes.TriState); ok {
 		return triStateMatches(ts, b)
+	}
+	if sl, ok := a.(paramtypes.StringList); ok {
+		return stringListMatches(sl, b)
+	}
+	if tf, ok := a.(paramtypes.TemplateFlag); ok {
+		return templateFlagMatches(tf, b)
+	}
+	if fm, ok := a.(paramtypes.FileMode); ok {
+		return fileModeMatches(fm, b)
 	}
 	if ai, aok := asInt64(a); aok {
 		if bi, bok := asInt64(b); bok {
@@ -243,6 +255,99 @@ func triStateMatches(ts paramtypes.TriState, want any) bool {
 	default:
 		return false
 	}
+}
+
+// stringListMatches compares a decoded paramtypes.StringList against a contract's
+// YAML-expressed want. yaml.v3 parses a fixture's `want` list into a []any of
+// scalars (a bare scalar becomes a one-element list), so each element is compared
+// by its string form — `want: [dev, "123"]` matches whether YAML parsed an
+// element as a string or an int, which is exactly StringList's own scalar-sprint
+// contract (BD-5). A non-list, non-scalar want cannot match.
+func stringListMatches(sl paramtypes.StringList, want any) bool {
+	var wantElems []any
+	switch w := want.(type) {
+	case []any:
+		wantElems = w
+	case string:
+		wantElems = []any{w}
+	default:
+		return false
+	}
+	if len(sl) != len(wantElems) {
+		return false
+	}
+	for i := range sl {
+		if sl[i] != fmt.Sprint(wantElems[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// templateFlagMatches compares a decoded paramtypes.TemplateFlag against a
+// contract's YAML-expressed want. want may be a bool (the flag must be
+// Declared() with that Enabled() value) or a map carrying "declared" (bool,
+// default true) — the map form `{declared: false}` expresses an undeclared flag,
+// which no bare scalar can spell. It mirrors triStateMatches.
+func templateFlagMatches(tf paramtypes.TemplateFlag, want any) bool {
+	switch w := want.(type) {
+	case bool:
+		return tf.Declared() && tf.Enabled() == w
+	case map[string]any:
+		declared := true
+		if dv, ok := w["declared"]; ok {
+			db, ok := dv.(bool)
+			if !ok {
+				return false
+			}
+			declared = db
+		}
+		if tf.Declared() != declared {
+			return false
+		}
+		if !declared {
+			return true
+		}
+		vv, ok := w["value"]
+		if !ok {
+			return false
+		}
+		vb, ok := vv.(bool)
+		return ok && tf.Enabled() == vb
+	default:
+		return false
+	}
+}
+
+// fileModeMatches compares a decoded paramtypes.FileMode against a contract's
+// YAML-expressed want. want may be an octal string ("0644", "4755") or an octal
+// integer (a YAML `mode: 0644` literal) — decoded through FileMode's OWN sealed
+// decoder so the matcher never re-implements the octal/special-bit parsing — and
+// the two modes are compared on the managed facets via FileMode.Equal. A map
+// `{declared: false}` expresses the undeclared (lazy-default) FileMode, which no
+// scalar can spell.
+func fileModeMatches(fm paramtypes.FileMode, want any) bool {
+	if m, ok := want.(map[string]any); ok {
+		if dv, ok := m["declared"]; ok {
+			if db, ok := dv.(bool); ok {
+				return fm.Declared() == db && !db
+			}
+		}
+		return false
+	}
+	st, ok := paramtypes.ForGoType(reflect.TypeOf(paramtypes.FileMode{}))
+	if !ok {
+		return false
+	}
+	out, err := st.Decode(paramtypes.Input{Raw: want})
+	if err != nil {
+		return false
+	}
+	wm, ok := out.(paramtypes.FileMode)
+	if !ok {
+		return false
+	}
+	return fm.Declared() && fm.Equal(wm.Mode())
 }
 
 func asInt64(v any) (int64, bool) {

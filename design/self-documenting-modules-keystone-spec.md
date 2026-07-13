@@ -73,11 +73,14 @@ Architecture test pins every "never imports" via `go list -deps`.
 `zester:"<name>[,opt]..." usage:"<help text, commas fine>"`
 ```
 
-Options: `primary` (receives the state ID when no source key is present OR the resolved
-value is an empty string — matching the universal legacy `if x == "" { x = id }` idiom,
-so `name: "{{ var }}"` rendering empty still falls back to the ID; max one; eager;
-Origin: Primary in both cases), `aliases=a|b` (pipe-separated; precedence name → aliases
-→ id-if-primary), `required`. A nil value (YAML null — the `key:` trailing-colon shape)
+Options: `primary` (falls back to the state ID; max one; eager; Origin: Primary),
+`aliases=a|b` (pipe-separated), `required`. SOURCE RESOLUTION (amended 2026-07-12 after
+the file.managed gate): sources are consulted in order — declared name, then each alias
+left-to-right — and an EMPTY-STRING value at one source falls THROUGH to the next source
+exactly like absence (legacy `if x == "" { x = next }` chains: `name: ""` alongside a
+non-empty `path:` uses path, NOT the ID). Only when every source is absent/empty does a
+primary receive the state ID (`name: "{{ var }}"` rendering empty with no alias set
+still falls back to the ID). A nil value (YAML null — the `key:` trailing-colon shape)
 is treated as ABSENT for every param (legacy comma-ok parity); it never reaches coercion.
 Remaining options:
 `default=LIT` (EAGER; decoded through the field's own decoder at COMPILE time — an
@@ -112,10 +115,11 @@ func (cs *CompiledSchema) Decode(id string, config map[string]any, dst any, opts
 only if every field succeeds. On error `dst` is untouched — partially decoded data is
 unrepresentable, retries against the same destination are safe.
 
-Per-field semantics (plan order): resolve source key (name → aliases; record which; a
-nil value = absent) → present ⇒ coerce (primitive table | semantic dispatch with
-`Input{Origin: Explicit|Alias, Key, ...}`) → primary AND (absent OR resolved to empty
-string) ⇒ id (`Origin: Primary`) → absent + eager default ⇒ pre-decoded default value
+Per-field semantics (plan order): resolve source key (name → aliases in order; a nil OR
+empty-string value at a source falls through to the next source like absence; record
+which source supplied the value) → present ⇒ coerce (primitive table | semantic dispatch
+with `Input{Origin: Explicit|Alias, Key, ...}`) → primary AND every source absent/empty
+⇒ id (`Origin: Primary`) → absent + eager default ⇒ pre-decoded default value
 (`Origin: Default`) → absent + required ⇒ `FieldError{ErrMissingRequired}`. `lazy` never materializes. Errors joined; typed
 `FieldError{Module, Param, Key, Kind, Type, Value /* redacted when sensitive */, Err}`
 (kinds MissingRequired | WrongType | ValueInvalid), `UnknownKeyError{Module, Key,
@@ -173,7 +177,11 @@ type Input struct{ Raw any; Origin InputOrigin; Key string; StateID string }
 ```
 
 Absent fields NEVER reach a semantic Decode — the zero value IS undeclared (`Declared()
-== false`). The framework decides when a default applies; `Origin` tells the type whether
+== false`). EMPTY-STRING RULE (added 2026-07-12 after the user.present gate): a semantic
+type receiving an empty string decodes to its undeclared zero value — legacy comma-ok
+parity (`gid: ""` behaves as absent and falls through to `primary_group`), mirroring
+§2.1's empty-primary ID fallback. FileMode and TriState already conform; every semantic
+type must. The framework decides when a default applies; `Origin` tells the type whether
 the value was explicit, alias-supplied, id-synthesized, or defaulted (so declared-ness
 semantics of e.g. TriState under a future `default=` are well-defined: OriginDefault may
 be recorded distinctly if a module ever needs it).
@@ -337,9 +345,12 @@ BD-1 msgpack sized-int values honored (fixes reproduced mode 0755→0644 reactor
 BD-2 CLI string coercions work (enable=true, makedirs=true, template=true/truthy, numeric
 strings) · BD-3 `minute: 5` = minute 5, not `*` · BD-4 all-digit string gid = numeric
 GID · BD-5 StringList sprints scalars / errors on nested (was silent drop) · BD-6
-wrong-typed values produce typed errors (was silent zero) · BD-7 TriState integer
-coercion: `1` = declared-true, `0` = declared-false, any other integer a typed error
-(was: ints silently ignored). Each activates only in the PR that migrates the affected
+wrong-typed values produce typed errors (was silent zero) · BD-7 boolean integer
+coercion: `1` = true, `0` = false, any other integer a typed error (was: ints silently
+ignored). SCOPE (orchestrator ruling 2026-07-12, under the maintainer's TriState 1/0
+approval + the approved coercion table): applies to ALL boolean-typed parameters —
+primitive `bool` and TriState alike — one consistent rule; every activating module pins
+its own instances. Each activates only in the PR that migrates the affected
 surface, with CHANGELOG entry + pinned contract fixture.
 
 SIGN-OFF STATUS (maintainer, 2026-07-12): **BD-2 APPROVED** · **BD-6 APPROVED** ·

@@ -74,12 +74,15 @@ func (cs *CompiledSchema) Decode(id string, config map[string]any, dst any, opts
 		}
 		switch {
 		case fp.primary && (!present || isEmptyString(raw)):
-			// Primary fallback (§2.1): no source key present, OR the resolved
-			// value is an empty string — matching the universal legacy
+			// Primary fallback (§2.1): every source (name + aliases) was
+			// absent/nil/empty. resolveSource already treats an empty string as
+			// absent and falls through to the next source, so `!present` is the
+			// live condition here — matching the universal legacy
 			// `if x == "" { x = id }` idiom, so a `name: "{{ var }}"` that renders
-			// empty still falls back to the state ID. Both cases decode the ID with
-			// Origin: Primary; a semantic-typed primary with an empty-string value
-			// likewise falls through here.
+			// empty with no alias set still falls back to the state ID. The
+			// isEmptyString(raw) disjunct is a defensive backstop (unreachable while
+			// resolveSource never reports an empty value present). Decodes the ID
+			// with Origin: Primary; a semantic-typed primary likewise lands here.
 			if err := cs.decodeInto(fp, field, id, "", paramtypes.OriginPrimary, id); err != nil {
 				errs = append(errs, err)
 			}
@@ -131,26 +134,32 @@ func (cs *CompiledSchema) Decode(id string, config map[string]any, dst any, opts
 
 // resolveSource finds a field's value: canonical name first, then aliases in
 // order. It returns the raw value, the key it was read from, the origin, and
-// whether any source key was present. A nil value (YAML null — the `key:`
-// trailing-colon shape) is treated as ABSENT for every param (§2.1, legacy
-// comma-ok parity): it never reaches coercion, so a nil canonical name still
-// consults the aliases and a nil-only match reports not-present.
+// whether any source key was present. Per the §2.1/§2.2 amendment (the
+// file.managed gate), a value that is absent, nil (YAML null — the `key:`
+// trailing-colon shape), OR an empty string at a source FALLS THROUGH to the
+// next source exactly like absence — mirroring the universal legacy
+// `if x == "" { x = next }` idiom: a `name: ""` alongside a non-empty `path:`
+// resolves to path (NOT the state ID), and only when every source is
+// absent/empty does a primary later fall back to the ID. An empty string or
+// nil therefore never reaches coercion via this path; a nil/empty canonical
+// name still consults the aliases, and an all-empty match reports not-present.
 func resolveSource(fp *fieldPlan, config map[string]any) (raw any, key string, origin paramtypes.InputOrigin, present bool) {
-	if v, ok := config[fp.name]; ok && v != nil {
+	if v, ok := config[fp.name]; ok && v != nil && !isEmptyString(v) {
 		return v, fp.name, paramtypes.OriginExplicit, true
 	}
 	for _, a := range fp.aliases {
-		if v, ok := config[a]; ok && v != nil {
+		if v, ok := config[a]; ok && v != nil && !isEmptyString(v) {
 			return v, a, paramtypes.OriginAlias, true
 		}
 	}
 	return nil, "", paramtypes.OriginExplicit, false
 }
 
-// isEmptyString reports whether raw is the empty string. A primary parameter
-// whose resolved value is "" falls back to the state ID (§2.1); a semantic-typed
-// primary is treated identically (an empty-string raw falls through to the ID
-// path before semantic coercion).
+// isEmptyString reports whether raw is the empty string. It drives two §2.1/§3
+// fallbacks: a primary parameter whose resolved value is "" falls back to the
+// state ID (§2.1), and a non-primary semantic-typed parameter whose value is ""
+// decodes to its undeclared zero value (§3 empty-string rule) — both mirror the
+// universal legacy comma-ok idiom where an empty string reads as not-set.
 func isEmptyString(raw any) bool {
 	s, ok := raw.(string)
 	return ok && s == ""
@@ -160,6 +169,17 @@ func isEmptyString(raw any) bool {
 // on failure. It never mutates field on error.
 func (cs *CompiledSchema) decodeInto(fp *fieldPlan, field reflect.Value, raw any, key string, origin paramtypes.InputOrigin, id string) error {
 	if fp.kind == kindSemantic {
+		if isEmptyString(raw) {
+			// EMPTY-STRING RULE (keystone spec §3): a semantic type receiving an
+			// empty string decodes to its undeclared zero value — legacy comma-ok
+			// parity (`gid: ""` behaves as absent and falls through to a
+			// lower-precedence source such as primary_group), mirroring §2.1's
+			// empty-primary ID fallback. The scratch field already holds the zero
+			// value, so leave it untouched and never invoke the type's Decode. This
+			// is the single authoritative enforcement point — it is why every
+			// sealed type "already conforms" without a per-type change.
+			return nil
+		}
 		out, err := fp.semType.Decode(paramtypes.Input{
 			Raw:     raw,
 			Origin:  origin,

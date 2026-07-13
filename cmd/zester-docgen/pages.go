@@ -61,10 +61,7 @@ func renderModulePage(mi modschema.ModuleInfo) (string, error) {
 		b.WriteString("| Parameter | Type | Required | Default | Description |\n")
 		b.WriteString("|---|---|---|---|---|\n")
 		for _, f := range mi.Params {
-			typ := f.GoType
-			if f.SemanticType != "" {
-				typ = f.SemanticType
-			}
+			typ := displayParamType(f)
 			required := "No"
 			if f.Required {
 				required = "Yes"
@@ -106,7 +103,7 @@ func renderModulePage(mi modschema.ModuleInfo) (string, error) {
 	if len(mi.Doc.Notes) > 0 {
 		b.WriteString("\n---\n\n## Notes\n\n")
 		for _, n := range mi.Doc.Notes {
-			fmt.Fprintf(&b, "> **%s**\n>\n> %s\n\n", n.Title, n.Body)
+			fmt.Fprintf(&b, "> **%s**\n>\n%s\n\n", n.Title, blockquoteBody(n.Body))
 		}
 	}
 
@@ -152,7 +149,12 @@ func assertNoJSX(module, rendered string) error {
 	inFence := false
 	for i, line := range strings.Split(rendered, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+		// A Note body renders inside a blockquote, so its fenced-code delimiters
+		// arrive prefixed with "> "; strip an optional leading blockquote marker
+		// before the fence check so code inside a Note toggles the fence and is
+		// still skipped.
+		fenceProbe := strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))
+		if strings.HasPrefix(fenceProbe, "```") || strings.HasPrefix(fenceProbe, "~~~") {
 			inFence = !inFence
 			continue
 		}
@@ -194,6 +196,51 @@ func unescapedJSXComponent(line string) (int, bool) {
 		}
 	}
 	return -1, false
+}
+
+// displayParamType renders the Parameters-table Type cell for a field. A
+// semantic-typed field shows its registered semantic-type name; a primitive
+// field shows its Go type, except that the composite primitive passthroughs get
+// a friendly display name — a `map[string]interface {}` (file.managed's
+// context/defaults) renders as `map` and a `[]interface {}` as `list`, instead
+// of leaking Go's reflect spelling into the docs. Scalar primitives (string,
+// bool, int, …) pass through unchanged.
+func displayParamType(f modschema.Field) string {
+	if f.SemanticType != "" {
+		return f.SemanticType
+	}
+	switch f.GoType {
+	case "map[string]interface {}":
+		return "map"
+	case "[]interface {}":
+		return "list"
+	default:
+		return f.GoType
+	}
+}
+
+// blockquoteBody prefixes EVERY line of a Note body with a blockquote marker so
+// a multi-paragraph or fenced-code body stays inside ONE `>` callout. In
+// CommonMark a bare blank line (no `>`) terminates a blockquote, so a body with
+// a fenced code block or a trailing paragraph would otherwise escape the callout
+// after its first line (the file.managed "Worked source-template render" bug):
+// blank lines render as a lone `>` and every other line — fenced-code delimiters
+// and their contents included — as `> <line>`.
+func blockquoteBody(body string) string {
+	lines := strings.Split(body, "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if line == "" {
+			b.WriteByte('>')
+			continue
+		}
+		b.WriteString("> ")
+		b.WriteString(line)
+	}
+	return b.String()
 }
 
 // paramDefaultCell renders the Default column. A sensitive parameter's

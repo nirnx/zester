@@ -37,6 +37,16 @@ func TestFixtureSchemaAgreement(t *testing.T) {
 
 			for _, fx := range fixtures {
 				fx := fx
+				// EMPTY-STRING RULE (§3): an empty string is the framework's
+				// "undeclared" sentinel, intercepted BEFORE the type's
+				// schema-described coercion. It is intentionally NOT a schema-valid
+				// declared value (a group name has minLength 1, an octal mode is
+				// non-empty, …), so an accepting empty-string fixture is exempt from
+				// fixture↔schema agreement — the schema describes declared values,
+				// not the not-provided sentinel.
+				if s, ok := fx.YAML.(string); ok && s == "" && !fx.WantErr {
+					continue
+				}
 				input := yamlParse(t, fx.YAML)
 				inst := jsonInstance(t, input)
 				err := sch.Validate(inst)

@@ -161,6 +161,58 @@ func TestDecodeAmendedPrimaryAndNilAbsent(t *testing.T) {
 	})
 }
 
+// TestDecodeEmptyStringFallsThroughToAlias pins the §2.1/§2.2 source-resolution
+// amendment (the file.managed gate): an EMPTY-STRING value at a source falls
+// THROUGH to the next source exactly like absence, so an empty canonical name
+// with a non-empty alias resolves to the ALIAS (not the state ID), and only an
+// all-sources-empty primary falls back to the ID.
+func TestDecodeEmptyStringFallsThroughToAlias(t *testing.T) {
+	type proto struct {
+		Name string `zester:"name,primary,aliases=path"`
+	}
+	cs := mustCompile(t, proto{})
+
+	t.Run("empty name + alias set -> alias wins", func(t *testing.T) {
+		var dst proto
+		if _, err := cs.Decode("theid", map[string]any{"name": "", "path": "/etc/x"}, &dst, DecodeOptions{}); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if dst.Name != "/etc/x" {
+			t.Fatalf("empty name should fall through to the path alias, got %q", dst.Name)
+		}
+	})
+
+	t.Run("empty name + empty alias -> id", func(t *testing.T) {
+		var dst proto
+		if _, err := cs.Decode("theid", map[string]any{"name": "", "path": ""}, &dst, DecodeOptions{}); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if dst.Name != "theid" {
+			t.Fatalf("all-empty primary should fall back to id, got %q", dst.Name)
+		}
+	})
+
+	t.Run("absent name + alias -> alias", func(t *testing.T) {
+		var dst proto
+		if _, err := cs.Decode("theid", map[string]any{"path": "/etc/y"}, &dst, DecodeOptions{}); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if dst.Name != "/etc/y" {
+			t.Fatalf("absent name should resolve via the path alias, got %q", dst.Name)
+		}
+	})
+
+	t.Run("empty name + nil alias -> id", func(t *testing.T) {
+		var dst proto
+		if _, err := cs.Decode("theid", map[string]any{"name": "", "path": nil}, &dst, DecodeOptions{}); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if dst.Name != "theid" {
+			t.Fatalf("empty name + nil alias should fall back to id, got %q", dst.Name)
+		}
+	})
+}
+
 func TestDecodeRequiredMissing(t *testing.T) {
 	type proto struct {
 		X string `zester:"x,required"`
