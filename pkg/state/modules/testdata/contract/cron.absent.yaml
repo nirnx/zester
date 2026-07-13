@@ -1,0 +1,178 @@
+module: cron.absent
+# Permanent differential contract for the cron.absent migration. cron.absent has
+# a primary `name` (defaulting to the state ID), an eager `default=root` user, and
+# a `required` command. These cases were approved by the legacy-vs-new
+# equivalence comparison while the legacy constructor still existed (see the
+# migration changelog); after its deletion RunContract replays them as the
+# permanent regression guard. Accept cases pin the decoded exported-field
+# projection; reject cases pin the error kind.
+#   BD-6 (APPROVED) — a numeric `name` is coerced to its string form and a
+#                     composite `name` is rejected, instead of silently falling
+#                     back to the state ID; a numeric `command`/`user` is coerced
+#                     to its string form (an ERROR->ACCEPT flip on the REQUIRED
+#                     `command`, which legacy hard-errored 'command is required');
+#   §2.1 empty/nil-primary + required (PARITY, not a BD) — an empty/nil `name`
+#                     falls back to the state ID; an absent/empty `command` is a
+#                     missing_required error, as legacy did.
+cases:
+  # ============================ name (primary) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: old-job
+      command: /usr/bin/old.sh
+    want:
+      CronName: old-job
+      Command: /usr/bin/old.sh
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: old-job
+      command: /usr/bin/old.sh
+    want:
+      CronName: old-job
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: old-job
+      command: /usr/bin/old.sh
+    want:
+      CronName: old-job
+
+  # Parity: no name key -> primary falls back to the state ID.
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: remove-legacy
+    input:
+      command: /usr/bin/old.sh
+    want:
+      CronName: remove-legacy
+  # An EMPTY-STRING name falls back to the state ID (§2.1 primary idiom) — parity.
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: remove-legacy
+    input:
+      name: ""
+      command: /usr/bin/old.sh
+    want:
+      CronName: remove-legacy
+
+  # BD-6: a numeric name is coerced to its string form (was fallback-to-id).
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      command: /x
+    want:
+      CronName: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      command: /x
+    want:
+      CronName: "123"
+  # BD-6: a composite name is rejected with a typed error (was fallback-to-id).
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      command: /x
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      command: /x
+    want_error: wrong_type
+
+  # ========================== user (eager root) ==========================
+  - label: user-string-yaml
+    universe: yaml
+    id: web
+    input:
+      command: /x
+      user: alice
+    want:
+      User: alice
+  - label: user-default-root-yaml
+    universe: yaml
+    id: web
+    input:
+      command: /x
+    want:
+      User: root
+  # BD-6: a numeric `user` is coerced to its string form (yaml + msgpack sized-int),
+  # where legacy `config["user"].(string)` dropped it to "" and then to "root".
+  - label: user-numeric-accepted-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      command: /x
+      user: 123
+    want:
+      User: "123"
+  - label: user-numeric-accepted-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      command: /x
+      user: 123
+    want:
+      User: "123"
+
+  # =========================== command (required) ===========================
+  - label: command-missing-rejected-yaml
+    universe: yaml
+    id: web
+    input: {}
+    want_error: missing_required
+  - label: command-empty-rejected-yaml
+    universe: yaml
+    id: web
+    input:
+      command: ""
+    want_error: missing_required
+  - label: command-missing-rejected-msgpack
+    universe: msgpack
+    id: web
+    input: {}
+    want_error: missing_required
+  # BD-6 (ERROR->ACCEPT flip on a REQUIRED param): a numeric `command` (yaml +
+  # msgpack sized-int) is coerced to its string form "123" and ACCEPTED, where
+  # legacy `config["command"].(string)` missed the non-string and hard-errored
+  # 'command is required'. An accept-direction change on a required param — the
+  # sign-off sheet must not miss it.
+  - label: command-numeric-accepted-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      command: 123
+    want:
+      Command: "123"
+  - label: command-numeric-accepted-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      command: 123
+    want:
+      Command: "123"

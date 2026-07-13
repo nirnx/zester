@@ -1,0 +1,101 @@
+module: group.absent
+# Permanent differential contract for the group.absent migration. group.absent
+# has only the primary `name` (defaulting to the state ID). These cases were
+# approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accept cases pin the
+# decoded exported-field projection; reject cases pin the error kind.
+#   BD-6 (APPROVED) — a numeric `name` is coerced to its string form and a
+#                     composite `name` is rejected, instead of silently falling
+#                     back to the state ID;
+#   §2.1 empty/nil-primary (PARITY, not a BD) — an empty/nil `name` falls back to
+#                     the state ID, as legacy did.
+cases:
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: oldgroup
+    want:
+      GroupName: oldgroup
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: oldgroup
+    want:
+      GroupName: oldgroup
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: oldgroup
+    want:
+      GroupName: oldgroup
+  # Parity: no name key -> primary falls back to the state ID.
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: oldgroup
+    input: {}
+    want:
+      GroupName: oldgroup
+  # An EMPTY-STRING name falls back to the state ID (§2.1 primary idiom) — parity.
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: oldgroup
+    input:
+      name: ""
+    want:
+      GroupName: oldgroup
+  # A NIL name (YAML null / trailing-colon) is absent, falls back to the ID.
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: oldgroup
+    input:
+      name:
+    want:
+      GroupName: oldgroup
+  # BD-6: a numeric name is coerced to its string form (was fallback-to-id).
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      GroupName: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      GroupName: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      GroupName: "123"
+  # BD-6: a composite name is rejected with a typed error (was fallback-to-id).
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type

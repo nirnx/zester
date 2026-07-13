@@ -1,23 +1,57 @@
 ---
 title: "cron.present"
-description: "Ensures a crontab entry exists for a user with the specified schedule and command."
+description: "Ensure a crontab entry exists for a user with the given schedule and command."
+---
+
+{/* zester-docgen:managed module="cron.present" */}
+
+**Source**: `pkg/state/modules/cron_present.go`
+
+---
+
+`cron.present` ensures a single crontab entry exists in the target user's crontab. The entry's IDENTITY is the state's `name` (defaulting to the state ID), stamped as a `# ZESTER_CRON_ID:` marker comment on the line — so editing the `command` under an unchanged name REPLACES the old line in place instead of orphaning it, and two states with distinct names but the same command coexist. `command` is required; `user` defaults to `root` and each of the five schedule fields (`minute`, `hour`, `daymonth`, `month`, `dayweek`) defaults to `*`.
+
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Label / comment for the cron entry |
-| `user` | string | `root` | User whose crontab is managed |
-| `command` | string | — | **Required.** Command to run |
-| `minute` | string | `*` | Minute field (0-59 or `*`) |
-| `hour` | string | `*` | Hour field (0-23 or `*`) |
-| `daymonth` | string | `*` | Day-of-month field (1-31 or `*`) |
-| `month` | string | `*` | Month field (1-12 or `*`) |
-| `dayweek` | string | `*` | Day-of-week field (0-7 or `*`) |
-| `require` | list | — | Requisite states |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | identifier comment stamped on the crontab line (its Salt-identifier identity); defaults to the state ID |
+| `user` | `string` | No | `root` | user whose crontab is managed; defaults to root |
+| `command` | `string` | Yes | *(none)* | command line to run on the schedule (required) |
+| `minute` | `string` | No | `*` | minute field (0-59 or *); defaults to * |
+| `hour` | `string` | No | `*` | hour field (0-23 or *); defaults to * |
+| `daymonth` | `string` | No | `*` | day-of-month field (1-31 or *); defaults to * |
+| `month` | `string` | No | `*` | month field (1-12 or *); defaults to * |
+| `dayweek` | `string` | No | `*` | day-of-week field (0-7 or *); defaults to * |
 
-## Example
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Lists the user's crontab and locates the entry sharing this state's identity — the marker comment when present, or, as an adoption fallback, an exact command match among label-less (hand-written) lines. Reports a change when no such entry exists, or when the located entry's command (compared with internal whitespace collapsed, matching the crontab parser), schedule fields, or identifier comment drift from the declared values.
+
+### Apply
+
+Re-lists the crontab (a self-contained flow: a watch-forced Apply bypasses Check). An already-converged entry is a clean no-op — no crontab rewrite, no lying change. Otherwise it writes the desired entry, stamping the identifier comment (adopting a matching label-less line rather than duplicating it), and memoizes the replaced or adopted original for revert. Reports the user, command, and schedule in its details.
+
+### Revert
+
+Undoes only what this run's Apply wrote. An entry created under the same identity as a prior one is restored in place; an adopted label-less line is put back; a freshly created entry is removed by its (command-scoped) line, preserving other names' same-command entries which are re-added. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never deletes an entry by bare command.
+
+
+---
+
+## Examples
+
+### Nightly database backup
+
+command is required; the schedule fields default to * where omitted.
 
 ```yaml
 backup-db:
@@ -27,11 +61,51 @@ backup-db:
     - minute: "0"
     - hour: "3"
     - require:
-      - pkg.installed:postgresql
+      - "pkg.installed:postgresql"
 ```
 
-## Behaviour
+### Run a command every five minutes
 
-- Check: finds entry by command string, compares schedule fields.
-- Apply: adds or replaces the entry via `crontab -u <user> -`.
-- Revert: removes the entry.
+A numeric minute is coerced to its string form (minute 5, not every minute — see the BD-3 divergence).
+
+```yaml
+poll:
+  cron.present:
+    - command: /usr/local/bin/poll.sh
+    - minute: 5
+```
+
+### Create a cron entry ad hoc
+
+The bare positional argument is the entry's name (its identifier comment); command is a key=value.
+
+```bash
+zester 'web*' cron.present nightly command=/usr/local/bin/nightly.sh hour=2 minute=0
+```
+
+
+---
+
+## Notes
+
+> **Identity is the name, not the command**
+>
+> The entry's identity is its `name` (stamped as a `# ZESTER_CRON_ID:` marker). Editing the `command` under an unchanged name replaces the line in place; two states with distinct names and the same command coexist as separate entries.
+
+> **An integer minute now means that minute**
+>
+> Under the uniform decoder a YAML/msgpack integer schedule value (for example `minute: 5`) coerces to "5". The legacy parser dropped a non-string value to "" and then to `*`, so `minute: 5` used to run EVERY minute. Quote schedule values you intend as strings; a numeric value now maps to that exact field (BD-3).
+
+
+---
+
+## Divergences
+
+- BD-3
+- BD-6
+
+---
+
+## See Also
+
+- [cron.absent](/docs/guides/modules/cron-absent)

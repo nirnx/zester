@@ -1,18 +1,52 @@
 ---
 title: "cron.absent"
-description: "Ensures a crontab entry does not exist for a user."
+description: "Ensure a crontab entry does not exist for a user."
+---
+
+{/* zester-docgen:managed module="cron.absent" */}
+
+**Source**: `pkg/state/modules/cron_absent.go`
+
+---
+
+`cron.absent` ensures no crontab entry with the given `command` exists in the target user's crontab. `command` is required and identifies the line to remove; `user` defaults to `root`. The `name` parameter is a label for the state only (defaulting to the state ID) — removal matches on the command, not the label.
+
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Label for the state |
-| `user` | string | `root` | User whose crontab is managed |
-| `command` | string | — | **Required.** Command to remove |
-| `require` | list | — | Requisite states |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | label for the state; defaults to the state ID |
+| `user` | `string` | No | `root` | user whose crontab is managed; defaults to root |
+| `command` | `string` | Yes | *(none)* | command line whose crontab entry is removed (required) |
 
-## Example
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Lists the user's crontab and reports a change when any entry's command matches the declared command; otherwise it reports no change.
+
+### Apply
+
+Removes the crontab entry matching the command through the cron provider. Reports the user and command in its details.
+
+### Revert
+
+Cannot restore a deleted crontab entry (the removed line's schedule is not recorded), so Revert is an explicit no-op rather than a guessed re-creation.
+
+
+---
+
+## Examples
+
+### Remove a legacy backup job
+
+The entry is identified by its command.
 
 ```yaml
 remove-legacy-backup:
@@ -21,8 +55,32 @@ remove-legacy-backup:
     - command: /usr/local/bin/old_backup.sh
 ```
 
-## Behaviour
+### Remove a cron entry ad hoc
 
-- Check: returns NeedsChange if an entry matching the command exists.
-- Apply: removes the entry.
-- Revert: no-op (cannot restore a deleted cron entry).
+The bare positional argument is the state's name; command is a key=value.
+
+```bash
+zester '*' cron.absent old-job command=/usr/local/bin/old_backup.sh
+```
+
+
+---
+
+## Notes
+
+> **Matched by command, not name**
+>
+> `cron.absent` removes the crontab line whose command equals the declared `command`. The `name` parameter labels the state; it does not select which line is removed.
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [cron.present](/docs/guides/modules/cron-present)

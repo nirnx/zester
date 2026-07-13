@@ -1,0 +1,390 @@
+module: cron.present
+# Permanent differential contract for the cron.present migration (the BD-3
+# activation surface). cron.present's schedule fields (minute/hour/daymonth/
+# month/dayweek) carry EAGER `default=*` and user an eager `default=root`;
+# `command` is `required`; `name` is the primary (defaulting to the state ID).
+# These cases were approved by the legacy-vs-new equivalence comparison while the
+# legacy constructor still existed (see the migration changelog); after its
+# deletion RunContract replays them as the permanent regression guard. Accept
+# cases pin the decoded exported-field projection; reject cases pin the error
+# kind. BD-tagged cases pin the flagged behavioral differences:
+#   BD-3 (PENDING) — a YAML/msgpack INTEGER schedule value (ANY of the five
+#                    fields minute/hour/daymonth/month/dayweek) is coerced to its
+#                    string form (`minute: 5` -> "5"), where the legacy
+#                    `config[...].(string)` assertion dropped a non-string to ""
+#                    and then to `*` (the every-minute bug that changed real
+#                    schedules). This integer-coercion arm is the ONLY change on
+#                    the BD-3 sign-off sheet (the composite-schedule REJECTION is a
+#                    wrong-typed->typed-error, refiled under the APPROVED BD-6);
+#   BD-6 (APPROVED) — a numeric `name` is coerced to its string form and a
+#                     composite `name` is rejected, instead of silently falling
+#                     back to the state ID; a numeric `command`/`user` is coerced
+#                     to its string form (an ERROR->ACCEPT flip on the REQUIRED
+#                     `command`, which legacy hard-errored 'command is required');
+#                     and a COMPOSITE schedule value (a list/map) is rejected with
+#                     a typed error (wrong-typed->typed-error is BD-6's class);
+#   §2.1 empty/nil-primary + required (PARITY, not a BD) — an empty-string or nil
+#                     `name` falls back to the state ID, and an absent/empty
+#                     `command` is a missing_required error, as legacy did.
+cases:
+  # ============================ name (primary) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: backup
+      command: /usr/bin/backup.sh
+    want:
+      Label: backup
+      Command: /usr/bin/backup.sh
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: backup
+      command: /usr/bin/backup.sh
+    want:
+      Label: backup
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: backup
+      command: /usr/bin/backup.sh
+    want:
+      Label: backup
+
+  # Parity: no name key -> primary falls back to the state ID.
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: nightly
+    input:
+      command: /usr/bin/nightly.sh
+    want:
+      Label: nightly
+  # An EMPTY-STRING name falls back to the state ID (§2.1 primary idiom) — parity.
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: nightly
+    input:
+      name: ""
+      command: /usr/bin/nightly.sh
+    want:
+      Label: nightly
+  # A NIL name (YAML null / trailing-colon) is absent, falls back to the ID.
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: nightly
+    input:
+      name:
+      command: /usr/bin/nightly.sh
+    want:
+      Label: nightly
+
+  # BD-6: a numeric name is coerced to its string form (was fallback-to-id).
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      command: /x
+    want:
+      Label: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      command: /x
+    want:
+      Label: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+      command: /x
+    want:
+      Label: "123"
+  # BD-6: a composite name is rejected with a typed error (was fallback-to-id).
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      command: /x
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      command: /x
+    want_error: wrong_type
+
+  # ========================== user (eager root) ==========================
+  - label: user-string-yaml
+    universe: yaml
+    id: web
+    input:
+      command: /x
+      user: postgres
+    want:
+      User: postgres
+  # Parity: an absent user eager-defaults to root.
+  - label: user-default-root-yaml
+    universe: yaml
+    id: web
+    input:
+      command: /x
+    want:
+      User: root
+  # An EMPTY-STRING user is absent and eager-defaults to root — parity.
+  - label: user-empty-defaults-root-yaml
+    universe: yaml
+    id: web
+    input:
+      command: /x
+      user: ""
+    want:
+      User: root
+  # BD-6: a numeric `user` is coerced to its string form (yaml + msgpack sized-int),
+  # where legacy `config["user"].(string)` dropped it to "" and then to "root".
+  - label: user-numeric-accepted-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      command: /x
+      user: 123
+    want:
+      User: "123"
+  - label: user-numeric-accepted-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      command: /x
+      user: 123
+    want:
+      User: "123"
+
+  # =========================== command (required) ===========================
+  # Parity: an absent command is a missing_required error (legacy errored too).
+  - label: command-missing-rejected-yaml
+    universe: yaml
+    id: web
+    input: {}
+    want_error: missing_required
+  # An EMPTY-STRING command falls through like absence -> missing_required (parity).
+  - label: command-empty-rejected-yaml
+    universe: yaml
+    id: web
+    input:
+      command: ""
+    want_error: missing_required
+  - label: command-missing-rejected-msgpack
+    universe: msgpack
+    id: web
+    input: {}
+    want_error: missing_required
+  # BD-6 (ERROR->ACCEPT flip on a REQUIRED param): a numeric `command` (yaml +
+  # msgpack sized-int) is coerced to its string form "123" and ACCEPTED, where
+  # legacy `config["command"].(string)` missed the non-string and hard-errored
+  # 'command is required'. An accept-direction change on a required param — the
+  # sign-off sheet must not miss it.
+  - label: command-numeric-accepted-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      command: 123
+    want:
+      Command: "123"
+  - label: command-numeric-accepted-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      command: 123
+    want:
+      Command: "123"
+
+  # ===================== schedule fields (eager default=*) =====================
+  # Parity: absent schedule fields eager-default to *.
+  - label: schedule-defaults-yaml
+    universe: yaml
+    id: web
+    input:
+      command: /x
+    want:
+      Minute: "*"
+      Hour: "*"
+      DayMonth: "*"
+      Month: "*"
+      DayWeek: "*"
+  # Parity: string schedule values decode unchanged.
+  - label: schedule-strings-yaml
+    universe: yaml
+    id: web
+    input:
+      command: /x
+      minute: "0"
+      hour: "3"
+    want:
+      Minute: "0"
+      Hour: "3"
+
+  # --- BD-3 (ACTIVATION): a YAML/msgpack INTEGER minute is coerced to "5", NOT
+  # dropped to "" and then to "*" (the legacy every-minute bug that changed real
+  # schedules). The CLI already delivers "5" as a string, so it agrees with legacy
+  # (an unmarked parity case). ---
+  - label: minute-int-yaml
+    universe: yaml
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      minute: 5
+    want:
+      Minute: "5"
+  - label: minute-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      minute: 5
+    want:
+      Minute: "5"
+  - label: minute-int-cli
+    universe: cli
+    id: web
+    input:
+      command: /x
+      minute: 5
+    want:
+      Minute: "5"
+
+  # BD-3 is per-FIELD, not representative: every one of the five schedule fields
+  # gets its own integer-coercion pin (yaml + msgpack), like minute's above. The
+  # CLI already delivers the digit as a string, so it agrees with legacy (parity,
+  # not re-pinned per field).
+  - label: hour-int-yaml
+    universe: yaml
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      hour: 3
+    want:
+      Hour: "3"
+  - label: hour-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      hour: 3
+    want:
+      Hour: "3"
+  - label: daymonth-int-yaml
+    universe: yaml
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      daymonth: 15
+    want:
+      DayMonth: "15"
+  - label: daymonth-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      daymonth: 15
+    want:
+      DayMonth: "15"
+  - label: month-int-yaml
+    universe: yaml
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      month: 6
+    want:
+      Month: "6"
+  - label: month-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      month: 6
+    want:
+      Month: "6"
+  - label: dayweek-int-yaml
+    universe: yaml
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      dayweek: 1
+    want:
+      DayWeek: "1"
+  - label: dayweek-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-3
+    input:
+      command: /x
+      dayweek: 1
+    want:
+      DayWeek: "1"
+
+  # --- BD-6 (taxonomy: wrong-typed->typed-error, the APPROVED class — NOT BD-3):
+  # a COMPOSITE schedule value (a list/map) is rejected with a typed error, where
+  # legacy dropped it to "" and then to "*". Filed under BD-6, not the BD-3
+  # sign-off sheet, which carries only the integer-coercion arm. ---
+  - label: minute-composite-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      command: /x
+      minute:
+        - a
+        - b
+    want_error: wrong_type
+  - label: minute-composite-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      command: /x
+      minute:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== misc ==============================
+  # A reserved requisite key does not break the decode (it is not a parameter).
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: web
+    input:
+      command: /x
+      require:
+        - pkg.installed:cron
+    want:
+      Command: /x
