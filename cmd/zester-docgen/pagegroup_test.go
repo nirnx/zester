@@ -260,9 +260,18 @@ func TestRenderModulePageGroup_MultiMember(t *testing.T) {
 	if n := strings.Count(got, requisitesBoilerplate); n != 1 {
 		t.Errorf("expected exactly one requisites boilerplate, got %d", n)
 	}
-	// Each member contributes its own Effects section under its banner.
-	if n := strings.Count(got, "## Effects"); n != 2 {
-		t.Errorf("expected one Effects section per member (2), got %d", n)
+	// Each member contributes its own Effects section under its banner, nested
+	// one level deeper ("### Effects") than the H2 "## `module`" banner it sits
+	// under (M5: no colliding H2s) — never as a sibling H2 "## Effects" line.
+	// ("### Effects" contains "## Effects" as a raw substring, so the negative
+	// check below is line-exact, not strings.Contains.)
+	if n := strings.Count(got, "### Effects"); n != 2 {
+		t.Errorf("expected one nested Effects section per member (2), got %d", n)
+	}
+	for line := range strings.SplitSeq(got, "\n") {
+		if line == "## Effects" {
+			t.Error("per-module Effects section must not render as an H2 (collides with the module banner)")
+		}
 	}
 	// The banners must appear AFTER the shared Parameters section (per-module
 	// behavior sections follow the shared header).
@@ -311,8 +320,15 @@ func TestRenderModulePageGroup_DistinctParamsRendersPerMember(t *testing.T) {
 
 	// Each member documents its OWN Parameters (two sections, not one shared),
 	// so mod.a's extra `char` field only appears once and mod.b never claims it.
-	if n := strings.Count(got, "## Parameters"); n != 2 {
-		t.Errorf("expected one Parameters section per member (2), got %d", n)
+	// Nested one level deeper ("### Parameters") than the "## `module`" banner
+	// (M5) — never as a colliding sibling H2.
+	if n := strings.Count(got, "### Parameters"); n != 2 {
+		t.Errorf("expected one nested Parameters section per member (2), got %d", n)
+	}
+	for line := range strings.SplitSeq(got, "\n") {
+		if line == "## Parameters" {
+			t.Error("per-module Parameters section must not render as an H2 (collides with the module banner)")
+		}
 	}
 	if n := strings.Count(got, "`char`"); n != 1 {
 		t.Errorf("expected mod.a's `char` param to appear exactly once, got %d", n)

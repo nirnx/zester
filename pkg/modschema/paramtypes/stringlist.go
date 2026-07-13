@@ -24,7 +24,7 @@ type StringList []string
 type stringListType struct{}
 
 func (stringListType) Name() string         { return "StringList" }
-func (stringListType) GoType() reflect.Type { return reflect.TypeOf(StringList(nil)) }
+func (stringListType) GoType() reflect.Type { return reflect.TypeFor[StringList]() }
 func (stringListType) Doc() string {
 	return "A list of strings. Accepts a single string (a one-element list), a " +
 		"list of strings, or a mixed scalar list whose elements are rendered to " +

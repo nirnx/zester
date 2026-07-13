@@ -236,9 +236,9 @@ func (p *PipInstalled) Revert(ctx context.Context) (state.ApplyResult, error) {
 
 // parsePipShowVersion extracts the Version field from `pip show` output.
 func parsePipShowVersion(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		if strings.HasPrefix(line, "Version:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "Version:"))
+	for line := range strings.SplitSeq(output, "\n") {
+		if rest, ok := strings.CutPrefix(line, "Version:"); ok {
+			return strings.TrimSpace(rest)
 		}
 	}
 	return ""

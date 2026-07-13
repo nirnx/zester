@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -265,12 +266,8 @@ func TestFileKeyValueContract(t *testing.T) {
 			return nil, err
 		}
 		f.Entries = paramtypes.StringMap{}
-		for k, v := range f.KeyValues {
-			f.Entries[k] = v
-		}
-		for k, v := range f.EntriesInput {
-			f.Entries[k] = v
-		}
+		maps.Copy(f.Entries, f.KeyValues)
+		maps.Copy(f.Entries, f.EntriesInput)
 		if f.Key != "" {
 			v, present := config["value"]
 			if !present || v == nil {

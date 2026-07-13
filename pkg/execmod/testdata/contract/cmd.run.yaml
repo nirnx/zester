@@ -1,0 +1,89 @@
+module: cmd.run
+# Permanent contract for the cmd.run EXECUTION spec (cmdRunExecParams). The exec
+# function reads command := argStr(args, "cmd", "command", "name", "__id__") and
+# cwd := argStr(args, "cwd", "dir"). M3 (keystone spec final fix pass): the spec
+# makes `cmd` the canonical PRIMARY (aliases `command`, `name`, in argStr's
+# exact precedence order) — NOT `command` — because modschema's source
+# resolution checks the canonical name before any alias, so the declared order
+# must mirror argStr's own precedence or a caller setting both `cmd` and
+# `command` would get the spec accepting the wrong one relative to what the
+# runtime actually executes. This deliberately differs from the cmd.run STATE
+# module's primary (`command`, BD-8) — a different surface, a different
+# runtime precedence. Pins the alias set, the cmd-beats-command precedence, the
+# request-ID fallback, and the cwd alias.
+cases:
+  - label: command-yaml
+    universe: yaml
+    id: req
+    input:
+      command: "df -h"
+    want:
+      Command: "df -h"
+  - label: command-msgpack
+    universe: msgpack
+    id: req
+    input:
+      command: "df -h"
+    want:
+      Command: "df -h"
+
+  - label: cmd-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      cmd: "uptime"
+    want:
+      Command: "uptime"
+  - label: name-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      name: "hostname"
+    want:
+      Command: "hostname"
+
+  # M3: with BOTH `cmd` and `command` set, `cmd` wins — pinning the runtime
+  # argStr precedence (argStr(args, "cmd", "command", "name", "__id__") checks
+  # "cmd" first), not YAML/config key declaration order.
+  - label: cmd-beats-command-yaml
+    universe: yaml
+    id: req
+    input:
+      cmd: "uptime"
+      command: "df -h"
+    want:
+      Command: "uptime"
+  - label: cmd-beats-command-msgpack
+    universe: msgpack
+    id: req
+    input:
+      cmd: "uptime"
+      command: "df -h"
+    want:
+      Command: "uptime"
+
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: "whoami"
+    input: {}
+    want:
+      Command: "whoami"
+
+  - label: cwd-yaml
+    universe: yaml
+    id: req
+    input:
+      command: "make"
+      cwd: /opt/src
+    want:
+      Command: "make"
+      Cwd: /opt/src
+  - label: cwd-dir-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      command: "make"
+      dir: /opt/build
+    want:
+      Command: "make"
+      Cwd: /opt/build

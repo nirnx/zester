@@ -169,7 +169,7 @@ func (s *SysctlPresent) persistedValue(ctx context.Context) (string, bool, error
 	}
 
 	val, found := "", false
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
@@ -287,7 +287,7 @@ func (s *SysctlPresent) removePersistEntry(ctx context.Context) error {
 
 	var out []string
 	removed := false
-	for _, l := range strings.Split(string(data), "\n") {
+	for l := range strings.SplitSeq(string(data), "\n") {
 		trimmed := strings.TrimSpace(l)
 		if strings.HasPrefix(trimmed, s.Key+"=") || strings.HasPrefix(trimmed, s.Key+" =") ||
 			strings.HasPrefix(trimmed, s.Key+"\t=") {

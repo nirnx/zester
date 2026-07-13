@@ -17,7 +17,10 @@ import (
 //
 // CmdRun is also its own schema proto: the tagged exported fields ARE the
 // module's parameter declaration (one schema declaration per module). `command`
-// is the primary parameter (defaults to the state ID); `args` is a
+// is the primary parameter (defaults to the state ID) and accepts the `name`
+// alias, so the Salt idiom `cmd.run: - name: <command>` runs the named command
+// (command wins if both are set — BD-8, where legacy silently ran the state ID);
+// `args` is a
 // paramtypes.StringList and `env` a paramtypes.StringMap (so a scalar list/map
 // value is rendered to a string rather than silently dropped, and a nested
 // element is a typed error — BD-5, the same class as cmd.run's execmod sibling
@@ -31,8 +34,10 @@ type CmdRun struct {
 	id   string
 	reqs state.Requisites
 
-	// Command is the command to execute; it defaults to the state ID.
-	Command string `zester:"command,primary" usage:"command to execute; defaults to the state ID"`
+	// Command is the command to execute; it defaults to the state ID. It accepts
+	// the `name` alias so the Salt idiom `cmd.run: {name: <command>}` runs the
+	// named command (command wins if both are set — see BD-8).
+	Command string `zester:"command,primary,aliases=name" usage:"command to execute; the name alias is accepted for Salt compatibility (cmd.run: - name: <command>); defaults to the state ID"`
 
 	// Args are additional arguments passed to the command. When empty the command
 	// is run via the shell (sh -c); when non-empty it is executed directly with
@@ -69,7 +74,9 @@ type CmdRun struct {
 var cmdRunSpec = mustSpec("cmd.run", modschema.KindState, CmdRun{}, modschema.Doc{
 	Summary: "Execute a command on the target system and capture its output.",
 	Description: "`cmd.run` executes a command (`command`, defaulting to the state ID) on the target and " +
-		"captures its output. Commands are not inherently idempotent, so the `creates` parameter provides " +
+		"captures its output. For Salt compatibility `command` also accepts the `name` alias, so " +
+		"`cmd.run: - name: apt-get update` runs `apt-get update` (a declared `command` wins over `name`). " +
+		"Commands are not inherently idempotent, so the `creates` parameter provides " +
 		"an idempotency mechanism: a file path that, when it already exists, means the command has already " +
 		"run and is skipped.\n\n" +
 		"When `args` is empty the command string is run through the shell (`sh -c`), so shell features " +
@@ -151,12 +158,21 @@ var cmdRunSpec = mustSpec("cmd.run", modschema.KindState, CmdRun{}, modschema.Do
 		},
 		{
 			Level: "info",
+			Title: "The name alias runs the command (Salt idiom)",
+			Body: "For Salt compatibility the primary `command` accepts the `name` alias: `cmd.run: - name: " +
+				"apt-get update` runs `apt-get update`. Zester previously read only `command` and silently ran the " +
+				"STATE ID when only `name:` was given (quietly wrong); it now executes the named command, matching " +
+				"Salt (BD-8). A declared `command` wins over `name`, and an empty-string `command` falls through to " +
+				"`name` before the state-ID fallback.",
+		},
+		{
+			Level: "info",
 			Title: "Details returned",
 			Body: "After execution the result details carry `command` (the command run), `stdout` and " +
 				"`stderr` (captured output), and `exitcode` (the process exit code as a string).",
 		},
 	},
-	Divergences: []string{"BD-5", "BD-6"},
+	Divergences: []string{"BD-5", "BD-6", "BD-8"},
 	SeeAlso:     []string{"module.run"},
 })
 

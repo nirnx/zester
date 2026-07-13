@@ -74,7 +74,7 @@ const modeSpecialBits = fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
 type fileModeType struct{}
 
 func (fileModeType) Name() string         { return "FileMode" }
-func (fileModeType) GoType() reflect.Type { return reflect.TypeOf(FileMode{}) }
+func (fileModeType) GoType() reflect.Type { return reflect.TypeFor[FileMode]() }
 func (fileModeType) Doc() string {
 	return "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", " +
 		"\"4755\") or an integer whose value is the octal mode number (a YAML octal " +

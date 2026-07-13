@@ -26,7 +26,6 @@ import (
 
 func TestFixtureSchemaAgreement(t *testing.T) {
 	for _, st := range paramtypes.All() {
-		st := st
 		fixtures, ok := typeFixtures[st.Name()]
 		if !ok {
 			t.Fatalf("no fixtures for type %q", st.Name())
@@ -36,7 +35,6 @@ func TestFixtureSchemaAgreement(t *testing.T) {
 			accepted := acceptedTypes(st.JSONSchema())
 
 			for _, fx := range fixtures {
-				fx := fx
 				// EMPTY-STRING RULE (§3): an empty string is the framework's
 				// "undeclared" sentinel, intercepted BEFORE the type's
 				// schema-described coercion. It is intentionally NOT a schema-valid

@@ -59,3 +59,22 @@ func TestSaltCompat_UnlessGuard(t *testing.T) {
 		t.Errorf("unless=true guard should skip execution (no change), got changed=true: %+v", r.Results[0])
 	}
 }
+
+// TestSaltCompat_CmdRunNameAlias pins BD-8 end to end: the Salt idiom
+// `cmd.run: - name: <command>` now RUNS the named command. Passing only
+// `name=<command>` (no bare positional, so no state ID), cmd.run resolves its
+// primary `command` from the `name` alias and executes it — the captured stdout
+// carries the marker. Under the previous quietly-wrong behavior cmd.run read
+// only `command` (else the empty state ID) and produced NO output.
+func TestSaltCompat_CmdRunNameAlias(t *testing.T) {
+	const marker = "bd8-name-alias-marker"
+	results := execCLI(t, "web-01", "cmd.run", "name=echo "+marker)
+	r := requireSuccess(t, results, "web-01")
+	if len(r.Results) == 0 {
+		t.Fatal("cmd.run name-alias returned no results")
+	}
+	if !strings.Contains(r.Results[0].Details["stdout"], marker) {
+		t.Errorf("cmd.run name alias should run the named command (BD-8); stdout = %q, want it to contain %q",
+			r.Results[0].Details["stdout"], marker)
+	}
+}

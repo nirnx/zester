@@ -17,6 +17,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/execmod"
 	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/moduledoc"
 	"github.com/nirnx/zester/pkg/state"
@@ -40,15 +41,28 @@ func liveRegistry() *state.Registry {
 	return reg
 }
 
+// liveDescribe mirrors the peel's DocSource precedence for the docdata universe:
+// docdata carries both state modules and execution-only functions, so a live
+// lookup resolves a name against the state registry first (a dual-surface module
+// like cmd.run is documented by its STATE spec — which is what docgen emitted),
+// then the execution registry.
+func liveDescribe(stateReg *state.Registry, execReg *execmod.Registry, name string) (modschema.ModuleInfo, bool) {
+	if mi, ok := stateReg.Describe(name); ok {
+		return mi, true
+	}
+	return execReg.Describe(name)
+}
+
 func TestDocdataMatchesLive(t *testing.T) {
 	reg := liveRegistry()
+	execReg := execmod.DefaultRegistry()
 	embedded := moduledoc.All()
 	if len(embedded) == 0 {
 		t.Fatal("moduledoc.All() is empty — docdata.json was never generated")
 	}
 
 	for _, want := range embedded {
-		live, ok := reg.Describe(want.Module)
+		live, ok := liveDescribe(reg, execReg, want.Module)
 		if !ok {
 			t.Errorf("docdata carries %q but the live registry has no spec for it (stale embed?)", want.Module)
 			continue
@@ -61,12 +75,20 @@ func TestDocdataMatchesLive(t *testing.T) {
 		}
 	}
 
-	// The converse: every live spec-registered module must be represented in
-	// docdata.json too — nothing spec-registered may be silently absent from
-	// the embed (docgen forgot to regenerate, or hand-edited the file).
+	// The converse: every live spec-registered module — state module AND
+	// execution function — must be represented in docdata.json too, so nothing
+	// spec-registered is silently absent from the embed (docgen forgot to
+	// regenerate, or hand-edited the file). cmd.run is dual-surface: its STATE
+	// spec is the docdata entry, so the execution-registry converse still finds
+	// it (Lookup succeeds via the state entry).
 	for _, name := range reg.SpecNames() {
 		if _, ok := moduledoc.Lookup(name); !ok {
-			t.Errorf("live registry has a spec for %q but docdata.json has no entry for it", name)
+			t.Errorf("live state registry has a spec for %q but docdata.json has no entry for it", name)
+		}
+	}
+	for _, name := range execReg.SpecNames() {
+		if _, ok := moduledoc.Lookup(name); !ok {
+			t.Errorf("live execution registry has a spec for %q but docdata.json has no entry for it", name)
 		}
 	}
 }

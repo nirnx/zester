@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/cliargs"
@@ -209,9 +210,7 @@ func flattenModuleConfig(v any) (map[string]any, error) {
 			if !ok || len(m) != 1 {
 				return nil, fmt.Errorf("expected a list of single-key maps, got %T", item)
 			}
-			for k, val := range m {
-				out[k] = val
-			}
+			maps.Copy(out, m)
 		}
 		return out, nil
 	case nil:

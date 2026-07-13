@@ -177,17 +177,18 @@ func suggestModules(module string) []string {
 // moduleFamily is the segment before the first '.' (the module family), or the
 // whole name if it has no dot.
 func moduleFamily(module string) string {
-	if i := strings.IndexByte(module, '.'); i >= 0 {
-		return module[:i]
+	family, _, found := strings.Cut(module, ".")
+	if !found {
+		return module
 	}
-	return module
+	return family
 }
 
 // firstLine returns the first non-empty line of s, trimmed.
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return strings.TrimSpace(s[:i])
+	if line, _, found := strings.Cut(s, "\n"); found {
+		return strings.TrimSpace(line)
 	}
 	return s
 }

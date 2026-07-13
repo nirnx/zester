@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"regexp"
 	"sort"
 
@@ -172,12 +173,8 @@ func NewFileKeyValueBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptio
 		// directly preserves the legacy "key requires a present, non-nil value"
 		// contract (an empty-string value is allowed; absent or nil is an error).
 		f.Entries = paramtypes.StringMap{}
-		for k, v := range f.KeyValues {
-			f.Entries[k] = v
-		}
-		for k, v := range f.EntriesInput {
-			f.Entries[k] = v
-		}
+		maps.Copy(f.Entries, f.KeyValues)
+		maps.Copy(f.Entries, f.EntriesInput)
 		if f.Key != "" {
 			v, present := config["value"]
 			if !present || v == nil {

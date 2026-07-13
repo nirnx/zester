@@ -63,7 +63,6 @@ func RunContract(t *testing.T, decode Decoder, file string) {
 	}
 
 	for _, c := range cf.Cases {
-		c := c
 		name := c.Label
 		if name == "" {
 			name = c.Universe
@@ -363,7 +362,7 @@ func fileModeMatches(fm paramtypes.FileMode, want any) bool {
 		}
 		return false
 	}
-	st, ok := paramtypes.ForGoType(reflect.TypeOf(paramtypes.FileMode{}))
+	st, ok := paramtypes.ForGoType(reflect.TypeFor[paramtypes.FileMode]())
 	if !ok {
 		return false
 	}

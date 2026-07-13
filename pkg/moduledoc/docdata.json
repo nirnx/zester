@@ -168,7 +168,7 @@
     "Kind": "state",
     "Doc": {
       "Summary": "Execute a command on the target system and capture its output.",
-      "Description": "`cmd.run` executes a command (`command`, defaulting to the state ID) on the target and captures its output. Commands are not inherently idempotent, so the `creates` parameter provides an idempotency mechanism: a file path that, when it already exists, means the command has already run and is skipped.\n\nWhen `args` is empty the command string is run through the shell (`sh -c`), so shell features (pipes, redirection, `&&`) work; when `args` is non-empty the command is executed directly with those arguments (no shell). `cwd` sets the working directory and `env` sets environment variables (merged with the peel process's environment).\n\n`cmd.run` is ALSO a remote-execution module of the same name: the state module documented here is the primary surface, and the execmod sibling is reachable from templates via `salt['cmd.run'](...)` and from the CLI as an ad-hoc `zester '<target>' cmd.run '<command>'`.",
+      "Description": "`cmd.run` executes a command (`command`, defaulting to the state ID) on the target and captures its output. For Salt compatibility `command` also accepts the `name` alias, so `cmd.run: - name: apt-get update` runs `apt-get update` (a declared `command` wins over `name`). Commands are not inherently idempotent, so the `creates` parameter provides an idempotency mechanism: a file path that, when it already exists, means the command has already run and is skipped.\n\nWhen `args` is empty the command string is run through the shell (`sh -c`), so shell features (pipes, redirection, `&&`) work; when `args` is non-empty the command is executed directly with those arguments (no shell). `cwd` sets the working directory and `env` sets environment variables (merged with the peel process's environment).\n\n`cmd.run` is ALSO a remote-execution module of the same name: the state module documented here is the primary surface, and the execmod sibling is reachable from templates via `salt['cmd.run'](...)` and from the CLI as an ad-hoc `zester '<target>' cmd.run '<command>'`.",
       "Effects": {
         "Check": "When `creates` is set and the path already exists, reports no change (the command is considered already run); a stat error other than not-exist fails the phase rather than re-running. Otherwise always reports a change — the command needs to run.",
         "Apply": "Re-evaluates the `creates` guard independently of Check (a watch-forced Apply bypasses Check, and a creates-guarded one-shot must not re-run just because a watched dependency changed): when the path exists, the command is not run and Apply is a no-op. Otherwise it runs the command — through the shell (`sh -c`) when `args` is empty, directly with the arguments otherwise — in `cwd` with `env` merged into the process environment, capturing stdout, stderr, and the exit code into its details. A non-zero exit is returned as an error (with the captured output still in details).",
@@ -219,13 +219,19 @@
         },
         {
           "Level": "info",
+          "Title": "The name alias runs the command (Salt idiom)",
+          "Body": "For Salt compatibility the primary `command` accepts the `name` alias: `cmd.run: - name: apt-get update` runs `apt-get update`. Zester previously read only `command` and silently ran the STATE ID when only `name:` was given (quietly wrong); it now executes the named command, matching Salt (BD-8). A declared `command` wins over `name`, and an empty-string `command` falls through to `name` before the state-ID fallback."
+        },
+        {
+          "Level": "info",
           "Title": "Details returned",
           "Body": "After execution the result details carry `command` (the command run), `stdout` and `stderr` (captured output), and `exitcode` (the process exit code as a string)."
         }
       ],
       "Divergences": [
         "BD-5",
-        "BD-6"
+        "BD-6",
+        "BD-8"
       ],
       "SeeAlso": [
         "module.run"
@@ -234,10 +240,12 @@
     "Params": [
       {
         "Name": "command",
-        "Aliases": null,
+        "Aliases": [
+          "name"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "command to execute; defaults to the state ID",
+        "Usage": "command to execute; the name alias is accepted for Salt compatibility (cmd.run: - name: <command>); defaults to the state ID",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -649,6 +657,60 @@
         "Sensitive": false,
         "HasDefault": true,
         "Default": "*",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "disk.usage",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Report filesystem disk usage.",
+      "Description": "`disk.usage` returns portable `df -P` output. With a `path` argument (or a request ID) it reports the filesystem containing that path; with neither, it reports every mounted filesystem.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Runs `df -P` (appending the shell-quoted `path` when given) through the command provider and returns its output with the trailing newline trimmed. Errors when no command provider is available."
+      },
+      "Examples": [
+        {
+          "Title": "Report usage for all filesystems",
+          "Kind": "cli",
+          "Explanation": "With no path, every mounted filesystem is reported.",
+          "Code": "zester '*' disk.usage"
+        },
+        {
+          "Title": "Report usage for one path",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the path to report.",
+          "Code": "zester 'web-01' disk.usage /var"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "path",
+        "Aliases": [
+          "name"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "filesystem path to report usage for; defaults to the request ID, and when neither is given every mounted filesystem is reported",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
         "JSONSchema": {
           "type": "string"
         }
@@ -3177,6 +3239,87 @@
     "AlsoExecmod": false
   },
   {
+    "Module": "grains.item",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Look up a single fact (grain) by dotted key.",
+      "Description": "`grains.item` resolves a dotted fact key (Salt calls facts \"grains\") against the peel's in-memory facts and returns its value. The key defaults to the request ID. A missing key returns an empty string, not an error.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Resolves the dotted `key` against the peel's facts map (segment by segment) and returns the value — scalars directly, composite values as trimmed YAML. A missing key or segment returns the empty string. Errors only when no key (or request ID) is given."
+      },
+      "Examples": [
+        {
+          "Title": "Read a nested fact",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the dotted fact key.",
+          "Code": "zester '*' grains.item os.family"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "grains.items"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "key",
+        "Aliases": [
+          "name"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "dotted grain (fact) key to look up (e.g. os.family); defaults to the request ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "grains.items",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Return all facts (grains) for the peel.",
+      "Description": "`grains.items` returns the peel's entire in-memory facts map rendered as YAML. It takes no arguments.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Renders the peel's full facts map as trimmed YAML and returns it. Returns the empty string when no facts are available; it never fails."
+      },
+      "Examples": [
+        {
+          "Title": "Dump every fact",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester 'web-01' grains.items"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "grains.item"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "group.absent",
     "Kind": "state",
     "Doc": {
@@ -4324,6 +4467,37 @@
     "AlsoExecmod": false
   },
   {
+    "Module": "pkg.list_pkgs",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "List every installed package and its version.",
+      "Description": "`pkg.list_pkgs` returns one `name version` line per installed package, queried through the host's detected package manager. It takes no arguments.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Lists installed packages per detected manager: apt via `dpkg-query -W`, dnf/yum via `rpm -qa`, brew via `brew list --versions`; with no detected provider it falls back to probing dpkg then rpm. Returns the package listing (trailing newline trimmed); errors when no command provider is available."
+      },
+      "Examples": [
+        {
+          "Title": "List installed packages",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester 'web-01' pkg.list_pkgs"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "pkg.installed"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "pkg.purged",
     "Kind": "state",
     "Doc": {
@@ -4459,6 +4633,57 @@
         "GoType": "string",
         "SemanticType": "",
         "Usage": "package to remove (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "pkg.version",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Report the installed version of a package.",
+      "Description": "`pkg.version` queries the installed version of the named package through the host's detected package manager. The package name defaults to the request ID, so `zester '*' pkg.version nginx` reports nginx's version.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Probes the installed version per detected manager: apt via `dpkg-query -W -f='${Version}'`, dnf/yum via `rpm -q --qf '%{VERSION}-%{RELEASE}'`, brew via `brew list --versions`. When no package provider is detected it falls back to probing dpkg then rpm in turn. Returns the trimmed version string; errors when no package name (or request ID) is given, when no command provider is available, or when the package is not installed."
+      },
+      "Examples": [
+        {
+          "Title": "Query a package version",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the package name.",
+          "Code": "zester '*' pkg.version nginx"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "pkg.installed"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "package",
+          "pkg"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "package name to query; defaults to the request ID",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -4917,6 +5142,56 @@
     "AlsoExecmod": false
   },
   {
+    "Module": "service.restart",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Restart a service.",
+      "Description": "`service.restart` restarts the named service (defaulting to the request ID) through the service provider, falling back to `systemctl restart` when only a command provider is available.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Restarts the service via the service provider (or `systemctl restart <name>` as a fallback) and returns `restarted <name>`. Errors when no service name (or request ID) is given, when neither provider is available, or when the restart command exits non-zero."
+      },
+      "Examples": [
+        {
+          "Title": "Restart a service",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester 'web-01' service.restart nginx"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "service.running"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "service"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "service name; defaults to the request ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "service.running",
     "Kind": "state",
     "Doc": {
@@ -5067,6 +5342,156 @@
         }
       }
     ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "service.start",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Start a service.",
+      "Description": "`service.start` starts the named service (defaulting to the request ID) through the service provider, falling back to `systemctl start` when only a command provider is available. Unlike `service.running`, it is imperative and non-idempotent — it always issues the start.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Starts the service via the service provider (or `systemctl start <name>` as a fallback) and returns `started <name>`. Errors when no service name (or request ID) is given, when neither provider is available, or when the start command exits non-zero."
+      },
+      "Examples": [
+        {
+          "Title": "Start a service",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester 'web-01' service.start nginx"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "service.running"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "service"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "service name; defaults to the request ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "service.status",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Report whether a service is running.",
+      "Description": "`service.status` reports the running state of the named service (defaulting to the request ID). Through the service provider it returns `running` or `stopped`; when only a command provider is available it falls back to `systemctl is-active` and returns that word (or `unknown`).",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Queries the service provider's running state and returns `running` or `stopped`. With no service provider it runs `systemctl is-active <name>` and returns the reported word (`unknown` when empty). Errors when no service name (or request ID) is given, or when neither a service nor a command provider is available."
+      },
+      "Examples": [
+        {
+          "Title": "Check a service's status",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the service name.",
+          "Code": "zester 'web-01' service.status nginx"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "service.running"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "service"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "service name; defaults to the request ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "service.stop",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Stop a service.",
+      "Description": "`service.stop` stops the named service (defaulting to the request ID) through the service provider, falling back to `systemctl stop` when only a command provider is available. It is imperative and non-idempotent — the counterpart of `service.dead` for ad-hoc use.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Stops the service via the service provider (or `systemctl stop <name>` as a fallback) and returns `stopped <name>`. Errors when no service name (or request ID) is given, when neither provider is available, or when the stop command exits non-zero."
+      },
+      "Examples": [
+        {
+          "Title": "Stop a service",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester 'web-01' service.stop nginx"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "service.dead"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "service"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "service name; defaults to the request ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
     "HasSpec": true,
     "AlsoExecmod": false
   },
@@ -5317,6 +5742,93 @@
     "AlsoExecmod": false
   },
   {
+    "Module": "sys.doc",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Render a module's documentation, or the unified index.",
+      "Description": "`sys.doc <module>` renders the named module's documentation — the SAME self-documenting metadata `zester doc` and the generated reference pages are built from — as plain text. With no module named, it returns the unified index of every callable surface (identical to `sys.list_functions`). It answers even during a long-running state run (it is a read-only surface).",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Looks the module up following the peel's dispatch precedence (dispatch specials, then state modules, then execution functions) and renders its ModuleInfo through the shared text renderer. With no module named, returns the unified index. Errors when the named module has no documentation."
+      },
+      "Examples": [
+        {
+          "Title": "Document a module",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the module name to document.",
+          "Code": "zester 'web-01' sys.doc pkg.installed"
+        },
+        {
+          "Title": "Show the unified index",
+          "Kind": "cli",
+          "Explanation": "With no module named, sys.doc lists every callable surface.",
+          "Code": "zester 'web-01' sys.doc"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "sys.list_functions"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "module"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "module name to document; when omitted, the unified index of every callable surface is returned",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "sys.list_functions",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "List every callable module and function on the peel.",
+      "Description": "`sys.list_functions` returns the sorted names of every callable surface — state modules, execution functions, and the peel's dispatch specials (facts.*, settings.*, …) — one per line. It takes no arguments.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the sorted, newline-joined names of every callable surface the peel exposes. It touches no providers and never fails."
+      },
+      "Examples": [
+        {
+          "Title": "List callable functions",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester 'web-01' sys.list_functions"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "sys.doc"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "sysctl.present",
     "Kind": "state",
     "Doc": {
@@ -5508,6 +6020,54 @@
     "AlsoExecmod": false
   },
   {
+    "Module": "test.echo",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Echo the supplied text back unchanged.",
+      "Description": "`test.echo` returns its `text` argument verbatim — a trivial round-trip diagnostic. With no `text` (or `name`) argument it echoes the request ID, so a bare positional is echoed as-is.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the `text` argument (falling back to `name`, then the request ID) unchanged. It touches no providers and never fails."
+      },
+      "Examples": [
+        {
+          "Title": "Echo a string",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is echoed back.",
+          "Code": "zester '*' test.echo hello"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "text",
+        "Aliases": [
+          "name"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "text to echo back; defaults to the request ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "test.fail_without_changes",
     "Kind": "state",
     "Doc": {
@@ -5560,6 +6120,37 @@
         }
       }
     ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "test.false",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Always return the string \"false\".",
+      "Description": "`test.false` unconditionally returns `\"false\"`. It takes no arguments and is a companion to `test.true`. It returns a string, not a non-zero exit — the call itself still succeeds.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the literal string \"false\". It touches no providers and never fails."
+      },
+      "Examples": [
+        {
+          "Title": "Return false",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester '*' test.false"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "test.true"
+      ]
+    },
+    "Params": null,
     "SemTypes": null,
     "HasSpec": true,
     "AlsoExecmod": false
@@ -5694,6 +6285,66 @@
         }
       }
     ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "test.true",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Always return the string \"true\".",
+      "Description": "`test.true` unconditionally returns `\"true\"`. It takes no arguments and is a companion to `test.false` for exercising success paths and pipelines.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the literal string \"true\". It touches no providers and never fails."
+      },
+      "Examples": [
+        {
+          "Title": "Return true",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester '*' test.true"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "test.false"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "test.version",
+    "Kind": "exec",
+    "Doc": {
+      "Summary": "Report the peel's Zester build version.",
+      "Description": "`test.version` returns the running peel binary's Zester version string (the same value injected at build time via `internal/version`). It takes no arguments.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the peel's compiled-in version string. It touches no providers and never fails."
+      },
+      "Examples": [
+        {
+          "Title": "Report the version of every peel",
+          "Kind": "cli",
+          "Explanation": "Useful for confirming a fleet is on the expected build.",
+          "Code": "zester '*' test.version"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": null
+    },
+    "Params": null,
     "SemTypes": null,
     "HasSpec": true,
     "AlsoExecmod": false

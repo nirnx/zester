@@ -1,6 +1,7 @@
 package starmod
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -187,11 +188,9 @@ func (l *Loader) loadFile(absPath string, registry *state.Registry) (int, error)
 		if strings.HasPrefix(name, "_") {
 			continue
 		}
-		if strings.HasSuffix(name, "_check") {
-			base := strings.TrimSuffix(name, "_check")
+		if base, ok := strings.CutSuffix(name, "_check"); ok {
 			checkFns[base] = fn
-		} else if strings.HasSuffix(name, "_revert") {
-			base := strings.TrimSuffix(name, "_revert")
+		} else if base, ok := strings.CutSuffix(name, "_revert"); ok {
 			revertFns[base] = fn
 		} else {
 			applyFns[name] = fn
@@ -285,13 +284,28 @@ func (l *Loader) registerStarModule(registry *state.Registry, moduleName string,
 
 // validatingBuilder wraps a Starlark builder so that, when the module declared
 // its parameters (PARAMS / <fn>_params), each construction runs the compiled
-// schema's Decode purely to surface unknown-key warnings through the configured
-// DecodeOptions. The decoded proto is discarded — the Starlark module reads the
-// raw config — and a type/required mismatch is logged at debug, never fatal
-// (the module is dynamically typed).
+// schema's Decode against the configured DecodeOptions. The decoded proto is
+// discarded — the Starlark module reads the raw config.
+//
+// Unknown-key handling honors the policy exactly like a built-in state module:
+// under PolicyError (strict_params) an unknown parameter is a HARD build failure
+// (the typed UnknownKeyError, naming the key and a did-you-mean suggestion — the
+// typo guard applies to Starlark modules that declared PARAMS too); under
+// PolicyWarn/Ignore it is logged/warned and the build proceeds. A type or
+// required-field mismatch, by contrast, is ALWAYS non-fatal (logged at debug):
+// the Starlark module is dynamically typed and reads the raw config itself, so a
+// proto-shaped decode failure that is not an unknown key must never block
+// construction — even under strict.
 func (l *Loader) validatingBuilder(spec *modschema.Spec, inner state.Builder) state.Builder {
 	return func(id string, config map[string]any) (state.State, error) {
 		if _, err := spec.Decode(id, config, spec.NewParams(), l.decodeOpts()); err != nil {
+			var unknown *modschema.UnknownKeyError
+			if errors.As(err, &unknown) {
+				// PolicyError produced an unknown-key error: fail the build. (Under
+				// PolicyWarn/Ignore Decode never returns an UnknownKeyError, so this
+				// branch is strict-only.)
+				return nil, err
+			}
 			l.config.Logger.Debug("starmod: parameter validation reported issues",
 				"module", spec.Module, "id", id, "error", err)
 		}

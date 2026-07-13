@@ -71,8 +71,27 @@ cases:
       url: https://github.com/example/repo
     want:
       Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      url: https://github.com/example/repo
+    want:
+      Path: "123"
   - label: composite-name-rejected-yaml
     universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      url: https://github.com/example/repo
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
     id: web
     bd: BD-6
     input:

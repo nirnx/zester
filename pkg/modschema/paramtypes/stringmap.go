@@ -20,7 +20,7 @@ type StringMap map[string]string
 type stringMapType struct{}
 
 func (stringMapType) Name() string         { return "StringMap" }
-func (stringMapType) GoType() reflect.Type { return reflect.TypeOf(StringMap(nil)) }
+func (stringMapType) GoType() reflect.Type { return reflect.TypeFor[StringMap]() }
 func (stringMapType) Doc() string {
 	return "A map of string keys to string values. Scalar values are rendered to " +
 		"strings; a nested map or list value is rejected. Not expressible as a CLI " +

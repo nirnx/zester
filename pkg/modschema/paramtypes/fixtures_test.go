@@ -134,7 +134,6 @@ func TestParamtypesConformance(t *testing.T) {
 // CLI) for every registered semantic type.
 func TestTypeFixtures(t *testing.T) {
 	for _, st := range paramtypes.All() {
-		st := st
 		fx, ok := typeFixtures[st.Name()]
 		if !ok {
 			t.Fatalf("no fixtures for type %q", st.Name())

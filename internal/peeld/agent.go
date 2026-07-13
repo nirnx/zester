@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,6 +52,7 @@ import (
 	"github.com/nirnx/zester/pkg/execmod"
 	"github.com/nirnx/zester/pkg/facts"
 	"github.com/nirnx/zester/pkg/facts/collectors"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/proto"
 	"github.com/nirnx/zester/pkg/schedule"
 	"github.com/nirnx/zester/pkg/settings"
@@ -120,6 +122,13 @@ type Agent struct {
 	mgr      *facts.Manager
 	mctx     *exec.ModuleContext
 	registry *state.Registry
+
+	// decodeOpts is the peel's module-parameter decode policy (from the
+	// strict_params knob), computed once in the local phase and shared by BOTH
+	// the built-in state-module registration and every Starlark loader the peel
+	// (re)builds — so the two decode surfaces agree on reserved keys and on how
+	// an unknown parameter is treated (PolicyError under strict, else PolicyWarn).
+	decodeOpts modschema.DecodeOptions
 
 	// mctxTemplate is an immutable snapshot of the module context taken right
 	// after construction (with RenderTemplate already set) and BEFORE any
@@ -437,9 +446,15 @@ func (a *Agent) Run(ctx context.Context) error {
 	providers := exec.DetectProviders(mgr.GetFacts(), logger)
 	a.mctx = exec.NewModuleContext(providers, mgr.GetFacts(), nil, logger)
 
+	// Resolve the module-parameter decode policy once (strict_params, default
+	// on): the same DecodeOptions drive the built-in state modules and every
+	// Starlark loader below, so an unknown parameter is treated identically
+	// wherever a module is built.
+	a.decodeOpts = decodeOptions(cfg.StrictParams, logger)
+
 	// Register state modules with injected execution providers.
 	a.registry = state.NewRegistry()
-	registerStateModules(a.registry, a.mctx, logger)
+	registerStateModules(a.registry, a.mctx, a.decodeOpts)
 
 	logger.Info("registered state modules", "modules", a.registry.Modules())
 
@@ -529,11 +544,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	// executions derive their contexts from this snapshot.
 	a.mctxTemplate = a.mctx.WithFactsSettings(nil, nil)
 
-	// Create Starlark module loader for custom .star modules.
+	// Create Starlark module loader for custom .star modules. The decode policy
+	// threads through so a Starlark module that declared PARAMS gets the same
+	// strict/unknown-key treatment as a built-in.
 	a.starLoader = starmod.NewLoader(starmod.LoaderConfig{
 		StatesDir:     a.effectiveStatesDir,
 		ModuleContext: a.mctx,
 		Logger:        logger,
+		DecodeOptions: a.decodeOpts,
 	})
 
 	// Phase 1: load global _modules/ at startup.
@@ -857,8 +875,8 @@ func (a *Agent) runCleanups() {
 	a.cleanups = nil
 	a.cleanupsClosed = true
 	a.cleanupMu.Unlock()
-	for i := len(fns) - 1; i >= 0; i-- {
-		fns[i]()
+	for _, fn := range slices.Backward(fns) {
+		fn()
 	}
 }
 

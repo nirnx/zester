@@ -62,17 +62,34 @@ func run(root string, claimed map[string]bool) error {
 		stateSpecd = append(stateSpecd, mi)
 	}
 
+	// State module names, so a dual-surface module (cmd.run — both a state and
+	// an execution module) is documented by its STATE page/schema/docdata and
+	// its execution spec is excluded from the exec surface (it would otherwise
+	// duplicate the module name in the schema $defs and docdata).
+	stateNames := map[string]bool{}
+	for _, mi := range stateSpecd {
+		stateNames[mi.Module] = true
+	}
+
 	execReg := buildExecmodRegistry()
-	var execSpecd []modschema.ModuleInfo
+	var execOnly []modschema.ModuleInfo // execution-only: the exec page + docdata set
 	for _, name := range execmodSpecNames(execReg) {
 		mi, ok := execReg.Describe(name)
 		if !ok {
 			continue
 		}
-		execSpecd = append(execSpecd, mi)
+		if stateNames[mi.Module] {
+			continue // dual-surface (cmd.run): the state page/schema/docdata own it
+		}
+		execOnly = append(execOnly, mi)
 	}
 
-	allInfos := append(append([]modschema.ModuleInfo(nil), stateSpecd...), execSpecd...)
+	// allInfos drives Effects-by-kind coverage and docdata (both kind-agnostic):
+	// every migrated state module plus every execution-only function. The JSON
+	// Schema artifact, by contrast, is a STATE-FILE schema (state ID -> module ->
+	// params) — execution functions are never state-file constructs, so they are
+	// excluded from it and only stateSpecd feeds renderModuleSchemaArtifact.
+	allInfos := append(append([]modschema.ModuleInfo(nil), stateSpecd...), execOnly...)
 
 	// Effects-by-kind coverage (§4/§9 gate 3) — a module reaching docgen with
 	// an incomplete or fake Doc.Effects fails generation loudly rather than
@@ -93,7 +110,7 @@ func run(root string, claimed map[string]bool) error {
 			fmt.Fprintf(os.Stderr, "zester-docgen: %s: example %q recorded-skipped: %s\n", s.Module, s.Title, s.Reason)
 		}
 	}
-	for _, mi := range execSpecd {
+	for _, mi := range execOnly {
 		skips, err := validateNonStateExamples(mi.Module, mi.Doc.Examples, sensitiveExampleKeys(mi.Params))
 		if err != nil {
 			return err
@@ -137,8 +154,20 @@ func run(root string, claimed map[string]bool) error {
 		}
 	}
 
-	// Combined JSON Schema artifact: gated on spec presence.
-	schemaJSON, err := renderModuleSchemaArtifact(allInfos)
+	// The FIRST-EVER execution-module reference page: ONE combined page under
+	// guides/ (a flat .mdx like reactor.mdx / scheduling.mdx), covering every
+	// execution-only function. Additive — no state page or URL changes.
+	if len(execOnly) > 0 {
+		guidesDir := filepath.Join(root, "website", "content", "docs", "guides")
+		execPath := filepath.Join(guidesDir, execPageSlug+".mdx")
+		if err := writeExecModulesPage(execPath, execOnly, claimed[execPageSlug]); err != nil {
+			return err
+		}
+	}
+
+	// Combined JSON Schema artifact (state-file schema): gated on spec presence,
+	// STATE modules only (execution functions have no state-file representation).
+	schemaJSON, err := renderModuleSchemaArtifact(stateSpecd)
 	if err != nil {
 		return err
 	}

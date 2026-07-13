@@ -44,7 +44,7 @@
             "description": "additional arguments passed to the command; when empty the command runs via the shell (sh -c), when non-empty it is executed directly with these arguments"
           },
           "command": {
-            "description": "command to execute; defaults to the state ID",
+            "description": "command to execute; the name alias is accepted for Salt compatibility (cmd.run: - name: <command>); defaults to the state ID",
             "type": "string"
           },
           "creates": {

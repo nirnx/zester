@@ -39,6 +39,30 @@ func hasManagedMarker(content []byte) bool {
 const requisitesBoilerplate = "All states also accept the full set of requisite parameters and " +
 	"Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies)."
 
+// Heading-level constants for the shared section renderers (M5: function
+// banners H2, their sections H3 — no colliding H2s). A standalone single-module
+// page (renderModulePage) and a page group's ONE shared Parameters/Parameter
+// Types section (renderSharedParamPageGroup — not nested under any module
+// banner) render their sections at pageSectionLevel ("## Parameters"). Anything
+// rendered UNDER a "## `module`" banner — a page group's per-module behavior
+// sections, and the combined execution-modules page's per-function body — must
+// nest one level deeper (nestedSectionLevel, "### Parameters") so the section
+// heading never collides with the module banner's own H2.
+const (
+	moduleBannerLevel  = 2
+	pageSectionLevel   = 2
+	nestedSectionLevel = moduleBannerLevel + 1
+)
+
+// heading returns a Markdown ATX heading prefix of level hashes: heading(2) is
+// "##", heading(3) is "###". Every shared section renderer takes its own
+// heading level as a parameter and renders its subsections one level deeper, so
+// the same renderer produces a correctly nested anatomy whether it is called at
+// the top of a standalone page or underneath a "## `module`" banner.
+func heading(level int) string {
+	return strings.Repeat("#", level)
+}
+
 // renderModulePage renders the full MDX page for mi per the §8 page anatomy:
 // frontmatter → marker → **Source**: → Description → Parameters table →
 // auto requisites boilerplate → Parameter Types → Effects (by kind) →
@@ -52,13 +76,13 @@ func renderModulePage(mi modschema.ModuleInfo) (string, error) {
 	fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(mi.Kind, mi.Module))
 
 	renderDescriptionSection(&b, mi.Doc.Description)
-	renderParamsSection(&b, mi)
-	renderParamTypesSection(&b, mi)
-	renderPageEffects(&b, mi.Doc.Effects)
-	renderExamplesSection(&b, mi.Doc.Examples)
-	renderNotesSection(&b, mi.Doc.Notes)
-	renderDivergencesSection(&b, mi.Doc.Divergences)
-	if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso); err != nil {
+	renderParamsSection(&b, mi, pageSectionLevel)
+	renderParamTypesSection(&b, mi, pageSectionLevel)
+	renderPageEffects(&b, mi.Doc.Effects, pageSectionLevel)
+	renderExamplesSection(&b, mi.Doc.Examples, pageSectionLevel)
+	renderNotesSection(&b, mi.Doc.Notes, pageSectionLevel)
+	renderDivergencesSection(&b, mi.Doc.Divergences, pageSectionLevel)
+	if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso, pageSectionLevel); err != nil {
 		return "", err
 	}
 
@@ -122,21 +146,23 @@ func renderSharedParamPageGroup(mis []modschema.ModuleInfo) (string, error) {
 	// members share one proto, asserted by the caller).
 	b.WriteString("\n---\n\n")
 	fmt.Fprintf(&b, "%s share the same parameters and implementation.\n", joinWithAnd(quoted))
-	renderParamsSection(&b, head)
-	renderParamTypesSection(&b, head)
+	renderParamsSection(&b, head, pageSectionLevel)
+	renderParamTypesSection(&b, head, pageSectionLevel)
 
-	// Per-module behavior sections under a module banner.
+	// Per-module behavior sections under a module banner: nested one level
+	// deeper than the shared Parameters section above, so "### Effects" never
+	// collides with the "## `module`" banner it sits under (M5).
 	for _, mi := range mis {
 		fmt.Fprintf(&b, "\n---\n\n## `%s`\n\n", mi.Module)
 		if mi.Doc.Description != "" {
 			b.WriteString(mi.Doc.Description)
 			b.WriteString("\n")
 		}
-		renderPageEffects(&b, mi.Doc.Effects)
-		renderExamplesSection(&b, mi.Doc.Examples)
-		renderNotesSection(&b, mi.Doc.Notes)
-		renderDivergencesSection(&b, mi.Doc.Divergences)
-		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso); err != nil {
+		renderPageEffects(&b, mi.Doc.Effects, nestedSectionLevel)
+		renderExamplesSection(&b, mi.Doc.Examples, nestedSectionLevel)
+		renderNotesSection(&b, mi.Doc.Notes, nestedSectionLevel)
+		renderDivergencesSection(&b, mi.Doc.Divergences, nestedSectionLevel)
+		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso, nestedSectionLevel); err != nil {
 			return "", err
 		}
 	}
@@ -171,13 +197,13 @@ func renderDistinctParamPageGroup(mis []modschema.ModuleInfo) (string, error) {
 		fmt.Fprintf(&b, "\n---\n\n## `%s`\n\n", mi.Module)
 		fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(mi.Kind, mi.Module))
 		renderDescriptionSection(&b, mi.Doc.Description)
-		renderParamsSection(&b, mi)
-		renderParamTypesSection(&b, mi)
-		renderPageEffects(&b, mi.Doc.Effects)
-		renderExamplesSection(&b, mi.Doc.Examples)
-		renderNotesSection(&b, mi.Doc.Notes)
-		renderDivergencesSection(&b, mi.Doc.Divergences)
-		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso); err != nil {
+		renderParamsSection(&b, mi, nestedSectionLevel)
+		renderParamTypesSection(&b, mi, nestedSectionLevel)
+		renderPageEffects(&b, mi.Doc.Effects, nestedSectionLevel)
+		renderExamplesSection(&b, mi.Doc.Examples, nestedSectionLevel)
+		renderNotesSection(&b, mi.Doc.Notes, nestedSectionLevel)
+		renderDivergencesSection(&b, mi.Doc.Divergences, nestedSectionLevel)
+		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso, nestedSectionLevel); err != nil {
 			return "", err
 		}
 	}
@@ -266,7 +292,8 @@ func renderDescriptionSection(b *strings.Builder, description string) {
 	b.WriteString("\n")
 }
 
-func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo) {
+func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo, level int) {
+	h := heading(level)
 	if len(mi.Params) == 0 {
 		// A parameterless STATE module (test.ping, test.nop, module.run) still
 		// documents that it accepts the requisite / Salt-parity attribute set —
@@ -274,7 +301,7 @@ func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo) {
 		// boilerplate. A non-state surface (dispatch/exec) has no requisites, so
 		// it renders nothing here.
 		if mi.Kind == modschema.KindState {
-			b.WriteString("\n---\n\n## Parameters\n\n")
+			fmt.Fprintf(b, "\n---\n\n%s Parameters\n\n", h)
 			b.WriteString("This module takes no parameters of its own.\n")
 			b.WriteString("\n")
 			b.WriteString(requisitesBoilerplate)
@@ -282,7 +309,7 @@ func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo) {
 		}
 		return
 	}
-	b.WriteString("\n---\n\n## Parameters\n\n")
+	fmt.Fprintf(b, "\n---\n\n%s Parameters\n\n", h)
 	b.WriteString("| Parameter | Type | Required | Default | Description |\n")
 	b.WriteString("|---|---|---|---|---|\n")
 	for _, f := range mi.Params {
@@ -291,8 +318,8 @@ func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo) {
 		if f.Required {
 			required = "Yes"
 		}
-		def := paramDefaultCell(f)
-		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s | %s |\n", f.Name, typ, required, def, f.Usage)
+		def := paramDefaultCellKind(f, mi.Kind)
+		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s | %s |\n", f.Name, typ, required, def, escapeUsageCell(f.Usage))
 	}
 	if mi.Kind == modschema.KindState {
 		b.WriteString("\n")
@@ -301,23 +328,25 @@ func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo) {
 	}
 }
 
-func renderParamTypesSection(b *strings.Builder, mi modschema.ModuleInfo) {
+func renderParamTypesSection(b *strings.Builder, mi modschema.ModuleInfo, level int) {
 	if len(mi.SemTypes) == 0 {
 		return
 	}
-	b.WriteString("\n---\n\n## Parameter Types\n\n")
+	h, sub := heading(level), heading(level+1)
+	fmt.Fprintf(b, "\n---\n\n%s Parameter Types\n\n", h)
 	for _, st := range mi.SemTypes {
-		fmt.Fprintf(b, "### %s\n\n%s\n\n", st.Name, st.Doc)
+		fmt.Fprintf(b, "%s %s\n\n%s\n\n", sub, st.Name, st.Doc)
 	}
 }
 
-func renderExamplesSection(b *strings.Builder, examples []modschema.Example) {
+func renderExamplesSection(b *strings.Builder, examples []modschema.Example, level int) {
 	if len(examples) == 0 {
 		return
 	}
-	b.WriteString("\n---\n\n## Examples\n\n")
+	h, sub := heading(level), heading(level+1)
+	fmt.Fprintf(b, "\n---\n\n%s Examples\n\n", h)
 	for _, ex := range examples {
-		fmt.Fprintf(b, "### %s\n\n", ex.Title)
+		fmt.Fprintf(b, "%s %s\n\n", sub, ex.Title)
 		if ex.Explanation != "" {
 			fmt.Fprintf(b, "%s\n\n", ex.Explanation)
 		}
@@ -329,37 +358,45 @@ func renderExamplesSection(b *strings.Builder, examples []modschema.Example) {
 	}
 }
 
-func renderNotesSection(b *strings.Builder, notes []modschema.Note) {
+func renderNotesSection(b *strings.Builder, notes []modschema.Note, level int) {
 	if len(notes) == 0 {
 		return
 	}
-	b.WriteString("\n---\n\n## Notes\n\n")
+	fmt.Fprintf(b, "\n---\n\n%s Notes\n\n", heading(level))
 	for _, n := range notes {
 		fmt.Fprintf(b, "> **%s**\n>\n%s\n\n", n.Title, blockquoteBody(n.Body))
 	}
 }
 
-func renderDivergencesSection(b *strings.Builder, divergences []string) {
+func renderDivergencesSection(b *strings.Builder, divergences []string, level int) {
 	if len(divergences) == 0 {
 		return
 	}
-	b.WriteString("\n---\n\n## Divergences\n\n")
+	fmt.Fprintf(b, "\n---\n\n%s Divergences\n\n", heading(level))
 	for _, d := range divergences {
 		fmt.Fprintf(b, "- %s\n", d)
 	}
 }
 
-func renderSeeAlsoSection(b *strings.Builder, module string, seeAlso []string) error {
+func renderSeeAlsoSection(b *strings.Builder, module string, seeAlso []string, level int) error {
 	if len(seeAlso) == 0 {
 		return nil
 	}
-	b.WriteString("\n---\n\n## See Also\n\n")
+	fmt.Fprintf(b, "\n---\n\n%s See Also\n\n", heading(level))
 	for _, s := range seeAlso {
-		slug, ok := moduleToSlug[s]
-		if !ok {
-			return fmt.Errorf("docgen: module %s: see-also target %q does not resolve to any page", module, s)
+		// A state module resolves to its own page; an execution-only module
+		// resolves to the shared execution-modules page. cmd.run is in
+		// moduleToSlug (the state page is its canonical surface), so it resolves
+		// as a state target even when named from an execution spec.
+		if slug, ok := moduleToSlug[s]; ok {
+			fmt.Fprintf(b, "- [%s](/docs/guides/modules/%s)\n", s, slug)
+			continue
 		}
-		fmt.Fprintf(b, "- [%s](/docs/guides/modules/%s)\n", s, slug)
+		if execModuleSet[s] {
+			fmt.Fprintf(b, "- [%s](%s)\n", s, execPageURL)
+			continue
+		}
+		return fmt.Errorf("docgen: module %s: see-also target %q does not resolve to any page", module, s)
 	}
 	return nil
 }
@@ -478,6 +515,41 @@ func blockquoteBody(body string) string {
 // paramDefaultCell renders the Default column. A sensitive parameter's
 // Default is already redacted to empty by the schema layer (§2.5); this never
 // prints a value for one regardless.
+// usageCellEscaper escapes a Field.Usage string for embedding, verbatim, into
+// a generated Markdown table cell. Usage is plain help prose from a module's
+// `usage:"..."` tag, not authored CommonMark (unlike Description/Effects/
+// Notes, whose authors deliberately backtick-wrap any placeholder like
+// `<hex>` or `<branch>`) — a usage string is free to contain a BARE
+// "<placeholder>" token (see archive.extracted's "sha256=<hex>", cmd.run's
+// "name: <command>", git.latest's "origin/<branch>") or a bare "${name}"-style
+// backreference token (see file.replace's "$1/${name} backreferences"). MDX
+// (unlike plain Markdown, see the managedMarkerPrefix comment above for the
+// same class of gotcha) parses a bare "<word>" ANYWHERE in the document as an
+// unclosed JSX tag, and a bare "{word}" as a JavaScript expression container
+// (evaluated as a reference to an undefined identifier at prerender time) —
+// either fails the site build outright rather than just rendering oddly, so
+// every angle bracket and curly brace in this untrusted-w.r.t.-markup text
+// must be escaped. Curly braces use numeric character references (no named
+// HTML entity exists for them). "&" is escaped too (so an already-escaped
+// sequence is never double-unescaped) and "|" is escaped (a literal pipe
+// would otherwise terminate the table cell early). Entities decode back to
+// the literal characters in the rendered page, so this is visually a no-op
+// for any usage string that happens not to need it.
+var usageCellEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	"{", "&#123;",
+	"}", "&#125;",
+	"|", "\\|",
+)
+
+// escapeUsageCell applies usageCellEscaper to a Field.Usage value before it is
+// embedded in a generated Markdown table cell.
+func escapeUsageCell(usage string) string {
+	return usageCellEscaper.Replace(usage)
+}
+
 func paramDefaultCell(f modschema.Field) string {
 	if f.Sensitive {
 		return "*(sensitive — not shown)*"
@@ -494,22 +566,32 @@ func paramDefaultCell(f modschema.Field) string {
 	return "*(none)*"
 }
 
-func renderPageEffects(b *strings.Builder, e modschema.Effects) {
+// paramDefaultCellKind is the Kind-aware variant: an execution function's
+// primary falls back to the request ID / bare positional, not a state ID.
+func paramDefaultCellKind(f modschema.Field, kind modschema.Kind) string {
+	if f.Primary && !f.Sensitive && !(f.HasDefault && f.Default != "") && kind == modschema.KindExec {
+		return "Request ID (bare positional)"
+	}
+	return paramDefaultCell(f)
+}
+
+func renderPageEffects(b *strings.Builder, e modschema.Effects, level int) {
 	if e.Check == "" && e.Apply == "" && e.Revert == "" && e.Execution == "" {
 		return
 	}
-	b.WriteString("\n---\n\n## Effects\n\n")
+	h, sub := heading(level), heading(level+1)
+	fmt.Fprintf(b, "\n---\n\n%s Effects\n\n", h)
 	if e.Check != "" {
-		fmt.Fprintf(b, "### Check\n\n%s\n\n", e.Check)
+		fmt.Fprintf(b, "%s Check\n\n%s\n\n", sub, e.Check)
 	}
 	if e.Apply != "" {
-		fmt.Fprintf(b, "### Apply\n\n%s\n\n", e.Apply)
+		fmt.Fprintf(b, "%s Apply\n\n%s\n\n", sub, e.Apply)
 	}
 	if e.Revert != "" {
-		fmt.Fprintf(b, "### Revert\n\n%s\n\n", e.Revert)
+		fmt.Fprintf(b, "%s Revert\n\n%s\n\n", sub, e.Revert)
 	}
 	if e.Execution != "" {
-		fmt.Fprintf(b, "### Execution\n\n%s\n\n", e.Execution)
+		fmt.Fprintf(b, "%s Execution\n\n%s\n\n", sub, e.Execution)
 	}
 }
 

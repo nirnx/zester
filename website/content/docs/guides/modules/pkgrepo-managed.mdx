@@ -42,10 +42,10 @@ gpgkey=<key_url>          # only when key_url is set
 | `baseurl` | `string` | No | *(none)* | the repository line — on apt the full "deb ..." source line, on yum the baseurl= value |
 | `ppa` | `string` | No | *(none)* | apt PPA reference (e.g. "ppa:user/name"); when set and baseurl is empty the repo is added via add-apt-repository, and it forces the Debian code path when the OS family cannot be detected |
 | `file` | `string` | No | *(none)* | override the default repository definition file path |
-| `key_url` | `string` | No | *(none)* | signing-key URL; on apt it is fetched to /etc/apt/keyrings/zester-<name>.gpg and imported via apt-key add, on yum it becomes the gpgkey= field |
+| `key_url` | `string` | No | *(none)* | signing-key URL; on apt it is fetched to /etc/apt/keyrings/zester-&lt;name&gt;.gpg and imported via apt-key add, on yum it becomes the gpgkey= field |
 | `enabled` | `bool` | No | `true` | the yum enabled= field (1/0), ignored on apt; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
 | `gpgcheck` | `bool` | No | `true` | the yum gpgcheck= field (1/0), ignored on apt; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
-| `refresh` | `bool` | No | `true` | refresh the package cache after writing the repo (apt-get update / <mgr> makecache); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `refresh` | `bool` | No | `true` | refresh the package cache after writing the repo (apt-get update / &lt;mgr&gt; makecache); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

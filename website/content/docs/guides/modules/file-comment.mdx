@@ -32,26 +32,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Reads the file (a missing file needs no change; any other read error fails the check) and computes the result in memory: a change is needed when any uncommented line matching `regex` would be prefixed with the comment character.
 
-### Apply
+#### Apply
 
 Reads the file (capturing the original for revert). Prefixes every uncommented line matching `regex` with `char`, leaving already-commented lines untouched, and writes the result with mode 0644, preserving the trailing newline. A missing file is a no-op.
 
-### Revert
+#### Revert
 
 Restores the file's captured prior content from this run's Apply. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
 
 
 ---
 
-## Examples
+### Examples
 
-### Disable a directive by commenting it
+#### Disable a directive by commenting it
 
 Lines matching regex are prefixed with the comment character.
 
@@ -61,7 +61,7 @@ Lines matching regex are prefixed with the comment character.
     - regex: "^PermitRootLogin"
 ```
 
-### Comment with a custom character
+#### Comment with a custom character
 
 char overrides the default # prefix (here a semicolon for an INI file).
 
@@ -72,7 +72,7 @@ char overrides the default # prefix (here a semicolon for an INI file).
     - char: ";"
 ```
 
-### Comment a line ad hoc
+#### Comment a line ad hoc
 
 The bare positional is the path; regex is a key=value arg.
 
@@ -83,7 +83,7 @@ zester 'web*' file.comment /etc/fstab regex='\sswap\s'
 
 ---
 
-## Notes
+### Notes
 
 > **regex matches the uncommented line**
 >
@@ -96,13 +96,13 @@ zester 'web*' file.comment /etc/fstab regex='\sswap\s'
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-6
 
 ---
 
-## See Also
+### See Also
 
 - [file.uncomment](/docs/guides/modules/file-comment)
 - [file.line](/docs/guides/modules/file-line)
@@ -116,26 +116,26 @@ zester 'web*' file.comment /etc/fstab regex='\sswap\s'
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Reads the file (a missing file needs no change; any other read error fails the check) and computes the result in memory: a change is needed when a commented line, once its comment character is stripped, matches `regex`.
 
-### Apply
+#### Apply
 
 Reads the file (capturing the original for revert). Removes a single leading `char` (after optional whitespace, preserving indentation) from every commented line whose uncommented text matches `regex`, and writes the result with mode 0644, preserving the trailing newline. A missing file is a no-op.
 
-### Revert
+#### Revert
 
 Restores the file's captured prior content from this run's Apply. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
 
 
 ---
 
-## Examples
+### Examples
 
-### Re-enable a commented directive
+#### Re-enable a commented directive
 
 regex is matched against the uncommented text, so the leading # is stripped from the matching line.
 
@@ -145,7 +145,7 @@ regex is matched against the uncommented text, so the leading # is stripped from
     - regex: "net.ipv4.ip_forward"
 ```
 
-### Uncomment with a custom character
+#### Uncomment with a custom character
 
 char selects which comment prefix to strip (a semicolon here).
 
@@ -156,7 +156,7 @@ char selects which comment prefix to strip (a semicolon here).
     - char: ";"
 ```
 
-### Uncomment a line ad hoc
+#### Uncomment a line ad hoc
 
 The bare positional is the path; regex is a key=value arg.
 
@@ -167,7 +167,7 @@ zester 'web*' file.uncomment /etc/apt/sources.list regex='deb-src'
 
 ---
 
-## Notes
+### Notes
 
 > **regex matches the uncommented line**
 >
@@ -180,13 +180,13 @@ zester 'web*' file.uncomment /etc/apt/sources.list regex='deb-src'
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-6
 
 ---
 
-## See Also
+### See Also
 
 - [file.comment](/docs/guides/modules/file-comment)
 - [file.line](/docs/guides/modules/file-line)

@@ -21,7 +21,7 @@ description: "Ensure a Git repository is cloned at a target directory and kept u
 | `target` | `string` | Yes | *(none)* | filesystem path for the working tree; required |
 | `branch` | `string` | No | *(none)* | branch to track; used for git clone --branch, checkout, and the remote-tip comparison |
 | `rev` | `string` | No | *(none)* | pin to a specific commit/ref; when set, the up-to-date check is a local HEAD comparison (no network) |
-| `force` | `bool` | No | *(none)* | discard local changes: update with git reset --hard (to rev, origin/<branch>, or origin/HEAD) instead of a fast-forward merge; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `force` | `bool` | No | *(none)* | discard local changes: update with git reset --hard (to rev, origin/&lt;branch&gt;, or origin/HEAD) instead of a fast-forward merge; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

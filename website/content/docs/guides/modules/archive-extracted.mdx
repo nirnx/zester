@@ -21,7 +21,7 @@ description: "Extract a tar or zip archive (from a local path or URL) into a tar
 | `source` | `string` | Yes | *(none)* | local file path, or an http/https/ftp URL to the archive; required |
 | `archive_format` | `string` | No | `auto` | archive format: tar, zip, or auto (inferred from the source name); defaults to auto |
 | `if_missing` | `string` | No | *(none)* | path whose existence means the archive is already extracted; when set, it is the sole idempotency check (besides source_hash) |
-| `source_hash` | `string` | No | *(none)* | declared hash of the source archive (e.g. sha256=<hex>); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes |
+| `source_hash` | `string` | No | *(none)* | declared hash of the source archive (e.g. sha256=&lt;hex&gt;); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes |
 | `makedirs` | `bool` | No | *(none)* | create the target directory (and parents, mode 0755) before extracting; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).

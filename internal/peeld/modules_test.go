@@ -40,9 +40,11 @@ func (h *capturingHandler) messages() []string {
 }
 
 // registerForTest wires the peel's real registration path (registerStateModules)
-// with a capturing logger, returning the registry and the handler so a test can
-// build a module and inspect the warnings the decode emitted.
-func registerForTest(t *testing.T) (*state.Registry, *capturingHandler) {
+// with a capturing logger and the decode policy the strict_params knob would
+// produce (strict=true → PolicyError, strict=false → PolicyWarn), returning the
+// registry and the handler so a test can build a module and inspect the errors
+// or warnings the decode emitted.
+func registerForTest(t *testing.T, strict bool) (*state.Registry, *capturingHandler) {
 	t.Helper()
 	h := &capturingHandler{}
 	logger := slog.New(h)
@@ -51,15 +53,16 @@ func registerForTest(t *testing.T) (*state.Registry, *capturingHandler) {
 		&exec.ProviderSet{Package: exectest.NewFakePackageExec("apt")},
 		map[string]any{}, nil, logger,
 	)
-	registerStateModules(registry, mctx, logger)
+	registerStateModules(registry, mctx, decodeOptions(strict, logger))
 	return registry, h
 }
 
-// TestRegisterStateModules_UnknownKeyWarns asserts the Phase-1 activation: a
-// typo'd parameter on a migrated (Spec-carrying) module logs a Warn through the
-// peel's slog logger and the state STILL builds — warn-only, never fatal.
+// TestRegisterStateModules_UnknownKeyWarns asserts the relaxed policy
+// (strict_params: false → PolicyWarn): a typo'd parameter on a migrated
+// (Spec-carrying) module logs a Warn through the peel's slog logger and the
+// state STILL builds — warn-only, never fatal.
 func TestRegisterStateModules_UnknownKeyWarns(t *testing.T) {
-	registry, h := registerForTest(t)
+	registry, h := registerForTest(t, false)
 
 	// pkg.removed is a migrated module (carries a Spec). "nmae" is a typo of the
 	// real "name" parameter and matches no reserved key.
@@ -91,25 +94,35 @@ func TestRegisterStateModules_UnknownKeyWarns(t *testing.T) {
 
 // TestRegisterStateModules_ReservedKeysNoWarn asserts that the fleet-wide
 // reserved keys (a requisite, a generic attribute) and the exec-layer "test"
-// dry-run flag are known-not-parameters: none produce an unknown-key warning,
-// and the state builds.
+// dry-run flag are known-not-parameters under BOTH policies: none produce an
+// unknown-key warning (relaxed) OR error (strict), and the state builds. This is
+// the core audit invariant behind the strict flip — reserved/injected keys must
+// never false-positive even when unknown parameters are fatal.
 func TestRegisterStateModules_ReservedKeysNoWarn(t *testing.T) {
-	registry, h := registerForTest(t)
+	for _, strict := range []bool{false, true} {
+		name := "relaxed"
+		if strict {
+			name = "strict"
+		}
+		t.Run(name, func(t *testing.T) {
+			registry, h := registerForTest(t, strict)
 
-	s, err := registry.Build("pkg.removed", "telnet", map[string]any{
-		"name":    "telnet",
-		"require": []any{"cmd.run:stop-telnet"}, // requisite (Reserved)
-		"onlyif":  "true",                       // generic attribute (Reserved)
-		"test":    true,                         // exec-layer flag (ExtraReserved)
-	})
-	if err != nil {
-		t.Fatalf("build must not error: %v", err)
-	}
-	if s == nil {
-		t.Fatal("state must build")
-	}
+			s, err := registry.Build("pkg.removed", "telnet", map[string]any{
+				"name":    "telnet",
+				"require": []any{"cmd.run:stop-telnet"}, // requisite (Reserved)
+				"onlyif":  "true",                       // generic attribute (Reserved)
+				"test":    true,                         // exec-layer flag (ExtraReserved)
+			})
+			if err != nil {
+				t.Fatalf("build must not error under strict=%v: %v", strict, err)
+			}
+			if s == nil {
+				t.Fatal("state must build")
+			}
 
-	if warns := h.messages(); len(warns) != 0 {
-		t.Fatalf("reserved keys must not warn, got %d: %v", len(warns), warns)
+			if warns := h.messages(); len(warns) != 0 {
+				t.Fatalf("reserved keys must not warn, got %d: %v", len(warns), warns)
+			}
+		})
 	}
 }

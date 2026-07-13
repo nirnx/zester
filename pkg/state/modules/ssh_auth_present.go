@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -325,10 +326,5 @@ func lineHasKey(line, keyBlob string) bool {
 	if keyBlob == "" {
 		return false
 	}
-	for _, f := range strings.Fields(line) {
-		if f == keyBlob {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Fields(line), keyBlob)
 }

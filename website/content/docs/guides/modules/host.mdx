@@ -20,7 +20,7 @@ description: "Ensure a hostname is absent from the hosts file. Ensure a hostname
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -31,26 +31,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Reads the hosts file (a non-not-exist read error fails the phase). Reports no change when the file does not exist or the hostname is already absent; otherwise reports a change.
 
-### Apply
+#### Apply
 
 Reads the hosts file and, when the hostname is present, memoizes the prior content for revert and rewrites the file with the hostname removed from every line (dropping any line left with no names). A missing file or an already-absent hostname is a clean no-op. Reports the hostname and path in its details.
 
-### Revert
+#### Revert
 
 Restores the hosts file to the content this run's Apply captured before removing the hostname. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a hosts file it did not touch.
 
 
 ---
 
-## Examples
+### Examples
 
-### Remove a hostname
+#### Remove a hostname
 
 The hostname defaults to the state ID.
 
@@ -59,7 +59,7 @@ old-host:
   host.absent: []
 ```
 
-### Remove a host mapping ad hoc
+#### Remove a host mapping ad hoc
 
 The bare positional argument is the hostname.
 
@@ -70,7 +70,7 @@ zester '*' host.absent old-host
 
 ---
 
-## Notes
+### Notes
 
 > **Comment and blank lines are preserved**
 >
@@ -79,13 +79,13 @@ zester '*' host.absent old-host
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-6
 
 ---
 
-## See Also
+### See Also
 
 - [host.present](/docs/guides/modules/host)
 
@@ -101,7 +101,7 @@ zester '*' host.absent old-host
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -113,26 +113,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Reads the hosts file (a non-not-exist read error fails the phase rather than risking a blind overwrite) and computes the desired content. Reports a change when the desired mapping is not already present — the hostname is absent, mapped to a different IP, or on a line that would be rewritten.
 
-### Apply
+#### Apply
 
 Reads the hosts file, memoizes its prior content (or that it did not exist) for revert, and rewrites it so the hostname maps to `ip`: the hostname is added to the existing line for that IP or a new line is appended, and it is dropped from any line for a different IP (a line left with no names is removed). An already-correct mapping is a clean no-op. Reports the hostname, IP, and path in its details.
 
-### Revert
+#### Revert
 
 Restores what this run's Apply changed: a hosts file that pre-existed is rewritten with its captured prior content; a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites or deletes a hosts file it did not touch.
 
 
 ---
 
-## Examples
+### Examples
 
-### Map a hostname to an IP
+#### Map a hostname to an IP
 
 The hostname defaults to the state ID; ip is required.
 
@@ -142,7 +142,7 @@ web1:
     - ip: 10.0.0.5
 ```
 
-### Manage an alternate hosts file
+#### Manage an alternate hosts file
 
 config (or its path alias) overrides the default /etc/hosts.
 
@@ -153,7 +153,7 @@ db-primary:
     - config: /etc/hosts
 ```
 
-### Add a host mapping ad hoc
+#### Add a host mapping ad hoc
 
 The bare positional argument is the hostname; ip is a key=value.
 
@@ -164,7 +164,7 @@ zester '*' host.present web1 ip=10.0.0.5
 
 ---
 
-## Notes
+### Notes
 
 > **A hostname is moved, not duplicated**
 >
@@ -185,12 +185,12 @@ zester '*' host.present web1 ip=10.0.0.5
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-6
 
 ---
 
-## See Also
+### See Also
 
 - [host.absent](/docs/guides/modules/host)

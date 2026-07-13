@@ -94,6 +94,15 @@ type ModuleInfo struct {
 	SemTypes    []SemanticTypeInfo
 	HasSpec     bool
 	AlsoExecmod bool
+	// OpenParams mirrors Spec.OpenParams: a passthrough module (module.run) that
+	// forwards arbitrary keys and skips unknown-key validation. It is a
+	// live-registry-only property — a signal for machinery that walks the schema
+	// (the compiler's names: expansion, which keeps injecting the "name"
+	// passthrough selector into an OpenParams module rather than treating it as a
+	// no-primary module). It is excluded from docdata.json (json:"-"): the offline
+	// docs render through RenderText, which does not consult it, so carrying it in
+	// the embed would only churn the artifact.
+	OpenParams bool `json:"-"`
 }
 
 // Info derives the ModuleInfo view of this Spec: its documentation, its ordered
@@ -102,11 +111,12 @@ type ModuleInfo struct {
 // struct tags.
 func (s *Spec) Info() ModuleInfo {
 	mi := ModuleInfo{
-		Module:  s.Module,
-		Kind:    s.Kind,
-		Doc:     s.Doc,
-		Params:  append([]Field(nil), s.plan.schema.Fields...),
-		HasSpec: true,
+		Module:     s.Module,
+		Kind:       s.Kind,
+		Doc:        s.Doc,
+		Params:     append([]Field(nil), s.plan.schema.Fields...),
+		HasSpec:    true,
+		OpenParams: s.OpenParams,
 	}
 	seen := map[string]struct{}{}
 	for i := range s.plan.fields {

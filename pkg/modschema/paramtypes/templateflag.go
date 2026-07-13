@@ -36,7 +36,7 @@ func (t TemplateFlag) Enabled() bool { return t.enabled }
 type templateFlagType struct{}
 
 func (templateFlagType) Name() string         { return "TemplateFlag" }
-func (templateFlagType) GoType() reflect.Type { return reflect.TypeOf(TemplateFlag{}) }
+func (templateFlagType) GoType() reflect.Type { return reflect.TypeFor[TemplateFlag]() }
 func (templateFlagType) Doc() string {
 	return "A template-rendering flag. Accepts a bool, the string \"jinja\", or " +
 		"any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders " +

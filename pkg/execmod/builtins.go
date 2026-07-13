@@ -15,41 +15,15 @@ import (
 // providers on *exec.ModuleContext (Package/Service/Command/File) and its
 // Facts map, shelling out via CommandExec where a provider method does not
 // already expose the query.
+//
+// Every built-in function is self-documenting: it is registered via
+// RegisterSpec together with its compiled modschema.Spec (see specs.go), so
+// Describe, SpecNames, sys.doc, and docgen all see it. sys.doc is registered
+// with a nil-DocSource placeholder function here; the peel swaps it for the
+// cross-surface variant via wireDocSource, preserving the spec.
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
-
-	// test.* — trivial diagnostics.
-	r.Register("test.echo", testEcho)
-	r.Register("test.version", testVersion)
-	r.Register("test.true", testTrue)
-	r.Register("test.false", testFalse)
-
-	// pkg.* — package queries.
-	r.Register("pkg.version", pkgVersion)
-	r.Register("pkg.list_pkgs", pkgListPkgs)
-
-	// service.* — init-system control.
-	r.Register("service.status", serviceStatus)
-	r.Register("service.start", serviceStart)
-	r.Register("service.stop", serviceStop)
-	r.Register("service.restart", serviceRestart)
-
-	// disk.* — disk usage.
-	r.Register("disk.usage", diskUsage)
-
-	// cmd.* — arbitrary command execution.
-	r.Register("cmd.run", cmdRun)
-
-	// grains.* — host facts.
-	r.Register("grains.item", grainsItem)
-	r.Register("grains.items", grainsItems)
-
-	// sys.* — introspection. Closes over r so the list reflects everything
-	// registered above (and any later registrations on this instance).
-	r.Register("sys.list_functions", func(_ context.Context, _ *exec.ModuleContext, _ map[string]any) (string, error) {
-		return strings.Join(r.Names(), "\n"), nil
-	})
-
+	registerBuiltinSpecs(r)
 	return r
 }
 
@@ -323,7 +297,7 @@ func argStr(args map[string]any, keys ...string) string {
 // map, returning nil if any segment is missing.
 func factLookup(facts map[string]any, key string) any {
 	var current any = facts
-	for _, part := range strings.Split(key, ".") {
+	for part := range strings.SplitSeq(key, ".") {
 		m, ok := current.(map[string]any)
 		if !ok {
 			return nil

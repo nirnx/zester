@@ -1,0 +1,51 @@
+module: service.status
+# Permanent contract for the shared service.* execution proto (serviceNameParams):
+# argStr(args, "name", "service", "__id__"). service.status/start/stop/restart all
+# decode through this same shape, so the contract is replayed against each of the
+# four specs (see specs_test.go). Pins the `service` alias, the request-ID
+# fallback, and numeric coercion.
+cases:
+  - label: name-yaml
+    universe: yaml
+    id: req
+    input:
+      name: nginx
+    want:
+      Name: nginx
+  - label: name-msgpack
+    universe: msgpack
+    id: req
+    input:
+      name: nginx
+    want:
+      Name: nginx
+  - label: name-cli
+    universe: cli
+    id: req
+    input:
+      name: nginx
+    want:
+      Name: nginx
+
+  - label: service-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      service: sshd
+    want:
+      Name: sshd
+
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: nginx
+    input: {}
+    want:
+      Name: nginx
+
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: req
+    input:
+      name: 42
+    want:
+      Name: "42"

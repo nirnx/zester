@@ -64,7 +64,7 @@ func (a *Agent) resolveStatesDir() string {
 // an error or an empty directory.
 func resolveStatesDirWith(cacheDir, bakedDir string, attempts int, delay time.Duration,
 	readDir func(string) ([]os.DirEntry, error), sleep func(time.Duration)) (string, bool) {
-	for i := 0; i < attempts; i++ {
+	for i := range attempts {
 		if i > 0 {
 			sleep(delay)
 		}
@@ -285,6 +285,7 @@ func (a *Agent) execModule(execCtx context.Context, req proto.ExecRequest) (prot
 				StatesDir:     d,
 				ModuleContext: a.mctx,
 				Logger:        logger,
+				DecodeOptions: a.decodeOpts,
 			})
 			if _, lErr := a.starLoader.LoadGlobal(a.registry); lErr != nil {
 				logger.Warn("starlark global module reload had errors", "error", lErr)

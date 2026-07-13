@@ -1,0 +1,26 @@
+module: sys.doc
+# Permanent contract for the sys.doc execution spec: argStr(args, "name",
+# "module", "__id__"). Pins the `module` alias and the request-ID fallback (a
+# bare `sys.doc pkg.installed` positional resolves to the module name via the
+# request ID).
+cases:
+  - label: name-yaml
+    universe: yaml
+    id: req
+    input:
+      name: pkg.installed
+    want:
+      Name: pkg.installed
+  - label: module-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      module: file.managed
+    want:
+      Name: file.managed
+  - label: primary-fallback-cli
+    universe: cli
+    id: pkg.installed
+    input: {}
+    want:
+      Name: pkg.installed

@@ -206,7 +206,7 @@ func (l *LocalePresent) localeGenEnabled(ctx context.Context) (enabled, exists b
 		}
 		return false, false, fmt.Errorf("locale.present: read %s: %w", localeGenPath, err)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -349,7 +349,7 @@ func localeGenLineMatches(line, locale string) bool {
 // It normalises the locale name for comparison (e.g. "en_US.utf8" vs "en_US.UTF-8").
 func localeInOutput(output, locale string) bool {
 	normalised := normalizeLocale(locale)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if normalizeLocale(strings.TrimSpace(line)) == normalised {
 			return true
 		}

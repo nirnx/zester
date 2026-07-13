@@ -17,8 +17,10 @@ var _ state.State = (*CmdRun)(nil)
 // regression guard for cmd.run's decode behavior — including the flagged BD-5 (an
 // args StringList scalar element is rendered to a string, a nested element is
 // rejected, a bare-string value activates a single-element list, and a composite
-// env StringMap value is rejected) and BD-6 (a wrong-typed command/cwd/creates is
-// coerced or rejected instead of silently zeroing) divergences.
+// env StringMap value is rejected), BD-6 (a wrong-typed command/cwd/creates is
+// coerced or rejected instead of silently zeroing), and BD-8 (the `name` alias
+// runs the named command — the Salt idiom — with command-beats-name precedence
+// and empty-command fall-through to name) divergences.
 func TestCmdRunContract(t *testing.T) {
 	decode := func(id string, config map[string]any) (any, error) {
 		var c CmdRun

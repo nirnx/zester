@@ -205,7 +205,7 @@ func (p *PkgPurged) needsPurge(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, nil // ran, non-zero exit: no dpkg record at all
 		}
-		for _, line := range strings.Split(res.Stdout, "\n") {
+		for line := range strings.SplitSeq(res.Stdout, "\n") {
 			s := strings.TrimSpace(line)
 			// Any live status — installed, config-files ('rc'), half-*,
 			// unpacked — leaves state behind that purge clears.

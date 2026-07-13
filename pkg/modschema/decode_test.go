@@ -326,7 +326,7 @@ func TestDecodeSensitiveRedaction(t *testing.T) {
 	// The semantic-dispatch wrap path (decode.go): a semantic type whose Decode
 	// error echoes the raw value must still be redacted for a sensitive field.
 	t.Run("semantic dispatch wrap path", func(t *testing.T) {
-		gt := reflect.TypeOf(semVal{})
+		gt := reflect.TypeFor[semVal]()
 		remove := paramtypes.RegisterTestType("SensSem", gt, func(in paramtypes.Input) (any, error) {
 			return nil, fmt.Errorf("semantic rejected value %v", in.Raw) // deliberately echoes the secret
 		}, "sensitive semantic type", map[string]any{"type": "string"})
@@ -405,6 +405,50 @@ func TestDecodeUnknownKeyPolicies(t *testing.T) {
 	}
 }
 
+// TestDecodeExtraReservedYieldsToDeclaredField pins M1's ordering requirement
+// (keystone spec final fix pass — the Salt universal `name:` anchor):
+// checkUnknownKeys only ever reaches Reserved/ExtraReserved for a config key no
+// field already CONSUMED, so a module that declares its own "name" parameter
+// (or alias) still decodes the value into that field even when the caller's
+// ExtraReserved also lists "name" — the declared field wins before the
+// reserved-key excuse is ever consulted. A module that declares NO such field
+// gets the opposite outcome: the value is excused as reserved rather than
+// failing strict as unknown (this is what lets internal/peeld add "name" to
+// ExtraReserved so `test.nop: - name: anchor` builds under strict without
+// opening every module up to an arbitrary "name" key).
+func TestDecodeExtraReservedYieldsToDeclaredField(t *testing.T) {
+	type withName struct {
+		Name string `zester:"name"`
+	}
+	cs := mustCompile(t, withName{})
+	var dst withName
+	if _, err := cs.Decode("id", map[string]any{"name": "explicit"}, &dst, DecodeOptions{
+		Unknown:       PolicyError,
+		ExtraReserved: []string{"name"},
+	}); err != nil {
+		t.Fatalf("declared name field must decode even when ExtraReserved also lists it: %v", err)
+	}
+	if dst.Name != "explicit" {
+		t.Fatalf("Name = %q, want %q (declared field must win over the reserved excuse)", dst.Name, "explicit")
+	}
+
+	type noName struct {
+		Other string `zester:"other"`
+	}
+	cs2 := mustCompile(t, noName{})
+	var dst2 noName
+	rep, err := cs2.Decode("id", map[string]any{"name": "anchor"}, &dst2, DecodeOptions{
+		Unknown:       PolicyError,
+		ExtraReserved: []string{"name"},
+	})
+	if err != nil {
+		t.Fatalf("a no-name-field module must not fail strict when ExtraReserved excuses %q: %v", "name", err)
+	}
+	if len(rep.UnknownKeys) != 0 {
+		t.Fatalf("UnknownKeys = %v, want none (excused by ExtraReserved)", rep.UnknownKeys)
+	}
+}
+
 func TestUnknownKeyErrorKnownSorted(t *testing.T) {
 	// Fields declared out of alphabetical order; UnknownKeyError.Known must still
 	// be sorted per its documented contract (F6).
@@ -457,7 +501,7 @@ type semVal struct {
 
 func registerSemType(t *testing.T) reflect.Type {
 	t.Helper()
-	gt := reflect.TypeOf(semVal{})
+	gt := reflect.TypeFor[semVal]()
 	remove := paramtypes.RegisterTestType("TestSem", gt, func(in paramtypes.Input) (any, error) {
 		s := fmt.Sprint(in.Raw)
 		if s == "boom" {

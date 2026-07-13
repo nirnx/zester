@@ -18,7 +18,7 @@ type fixtureMode struct{}
 type fixtureModeValue struct{ n int }
 
 func (fixtureMode) Name() string         { return "FixtureMode" }
-func (fixtureMode) GoType() reflect.Type { return reflect.TypeOf(fixtureModeValue{}) }
+func (fixtureMode) GoType() reflect.Type { return reflect.TypeFor[fixtureModeValue]() }
 func (fixtureMode) Decode(in Input) (any, error) {
 	return fixtureModeValue{n: len(in.Key)}, nil
 }
@@ -41,7 +41,7 @@ func TestRegisterLookupForGoTypeAll(t *testing.T) {
 	}
 
 	// ForGoType by the distinct dispatch type.
-	byType, ok := ForGoType(reflect.TypeOf(fixtureModeValue{}))
+	byType, ok := ForGoType(reflect.TypeFor[fixtureModeValue]())
 	if !ok {
 		t.Fatal("ForGoType: fixtureModeValue not found")
 	}
@@ -71,7 +71,7 @@ func TestRegisterLookupForGoTypeAll(t *testing.T) {
 }
 
 func TestForGoTypeUnknown(t *testing.T) {
-	if _, ok := ForGoType(reflect.TypeOf("")); ok {
+	if _, ok := ForGoType(reflect.TypeFor[string]()); ok {
 		t.Fatal("ForGoType(string) unexpectedly registered")
 	}
 	if _, ok := Lookup("does-not-exist"); ok {
@@ -97,7 +97,7 @@ func TestRegisterDuplicateNamePanics(t *testing.T) {
 type distinctNameSameType struct{}
 
 func (distinctNameSameType) Name() string         { return "OtherName" }
-func (distinctNameSameType) GoType() reflect.Type { return reflect.TypeOf(fixtureModeValue{}) }
+func (distinctNameSameType) GoType() reflect.Type { return reflect.TypeFor[fixtureModeValue]() }
 func (distinctNameSameType) Decode(in Input) (any, error) {
 	return fixtureModeValue{}, nil
 }
@@ -165,14 +165,14 @@ func TestRegisterTestTypeGuardedByTesting(t *testing.T) {
 	if !testing.Testing() {
 		t.Fatal("testing.Testing() must be true inside go test")
 	}
-	remove := RegisterTestType("GuardDoc", reflect.TypeOf(fixtureModeValue{}),
+	remove := RegisterTestType("GuardDoc", reflect.TypeFor[fixtureModeValue](),
 		func(in Input) (any, error) { return fixtureModeValue{}, nil },
 		"guard-doc test type", map[string]any{"type": "integer"})
 	remove()
 }
 
 func TestRegisterTestTypeSeam(t *testing.T) {
-	gt := reflect.TypeOf(fixtureModeValue{})
+	gt := reflect.TypeFor[fixtureModeValue]()
 	remove := RegisterTestType("SeamType", gt,
 		func(in Input) (any, error) { return fixtureModeValue{n: 7}, nil },
 		"seam doc", map[string]any{"type": "integer"})

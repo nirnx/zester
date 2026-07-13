@@ -186,22 +186,17 @@ func TestRegistrySpec_Concurrent(t *testing.T) {
 	specs := []string{"a.one", "b.two", "c.three", "d.four"}
 	var wg sync.WaitGroup
 	for _, name := range specs {
-		name := name
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = r.RegisterSpec(newTestSpec(t, name), testBuilder)
-		}()
+		})
 	}
 	// Concurrent readers race against the writers (run under -race).
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 8 {
+		wg.Go(func() {
 			_ = r.SpecNames()
 			_, _ = r.Describe("a.one")
 			_ = r.Has("b.two")
-		}()
+		})
 	}
 	wg.Wait()
 	if names := r.SpecNames(); len(names) != len(specs) {

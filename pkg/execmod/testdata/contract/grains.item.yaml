@@ -1,0 +1,35 @@
+module: grains.item
+# Permanent contract for the grains.item execution spec: argStr(args, "key",
+# "name", "__id__"). Pins the `name` alias, the request-ID fallback, and that a
+# dotted key survives decode verbatim (it is resolved segment-by-segment at
+# runtime, not by the schema).
+cases:
+  - label: key-yaml
+    universe: yaml
+    id: req
+    input:
+      key: os.family
+    want:
+      Key: os.family
+  - label: key-cli
+    universe: cli
+    id: req
+    input:
+      key: os.family
+    want:
+      Key: os.family
+
+  - label: name-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      name: kernel
+    want:
+      Key: kernel
+
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: num_cpus
+    input: {}
+    want:
+      Key: num_cpus

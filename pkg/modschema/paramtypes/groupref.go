@@ -45,7 +45,7 @@ func (g GroupRef) Name() string { return g.name }
 type groupRefType struct{}
 
 func (groupRefType) Name() string         { return "GroupRef" }
-func (groupRefType) GoType() reflect.Type { return reflect.TypeOf(GroupRef{}) }
+func (groupRefType) GoType() reflect.Type { return reflect.TypeFor[GroupRef]() }
 func (groupRefType) Doc() string {
 	return "A group reference, given as a non-negative integer GID or a group " +
 		"name. An all-digit string is treated as a numeric GID, so \"1000\" and the " +

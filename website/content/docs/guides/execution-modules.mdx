@@ -1,0 +1,648 @@
+---
+title: "Execution Modules"
+description: "Imperative remote-execution functions (Salt-style ad-hoc commands) — query and action modules with no state lifecycle."
+---
+
+{/* zester-docgen:managed module="test.echo" */}
+{/* zester-docgen:managed module="test.version" */}
+{/* zester-docgen:managed module="test.true" */}
+{/* zester-docgen:managed module="test.false" */}
+{/* zester-docgen:managed module="pkg.version" */}
+{/* zester-docgen:managed module="pkg.list_pkgs" */}
+{/* zester-docgen:managed module="service.status" */}
+{/* zester-docgen:managed module="service.start" */}
+{/* zester-docgen:managed module="service.stop" */}
+{/* zester-docgen:managed module="service.restart" */}
+{/* zester-docgen:managed module="disk.usage" */}
+{/* zester-docgen:managed module="grains.item" */}
+{/* zester-docgen:managed module="grains.items" */}
+{/* zester-docgen:managed module="sys.doc" */}
+{/* zester-docgen:managed module="sys.list_functions" */}
+
+Execution modules are Zester's imperative remote-execution functions — the Salt-style ad-hoc commands you run directly against peels, without writing a state file. Unlike state modules they have no Check/Apply/Revert lifecycle: each call runs a query or action and returns a plain string result.
+
+Invoke one from the CLI as `zester '<target>' <module.function> [id] [key=value ...]`. The first positional argument becomes the request ID, which is also the primary parameter's default (the package name, service name, fact key, and so on). A name that matches an execution function and is not a registered state module dispatches here; state-module names (like `cmd.run`) always win, so `cmd.run` is documented on its [state module page](/docs/guides/modules/cmd-run).
+
+---
+
+## `test.echo`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`test.echo` returns its `text` argument verbatim — a trivial round-trip diagnostic. With no `text` (or `name`) argument it echoes the request ID, so a bare positional is echoed as-is.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `text` | `string` | No | Request ID (bare positional) | text to echo back; defaults to the request ID |
+
+---
+
+### Effects
+
+#### Execution
+
+Returns the `text` argument (falling back to `name`, then the request ID) unchanged. It touches no providers and never fails.
+
+
+---
+
+### Examples
+
+#### Echo a string
+
+The bare positional argument is echoed back.
+
+```bash
+zester '*' test.echo hello
+```
+
+
+---
+
+## `test.version`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`test.version` returns the running peel binary's Zester version string (the same value injected at build time via `internal/version`). It takes no arguments.
+
+---
+
+### Effects
+
+#### Execution
+
+Returns the peel's compiled-in version string. It touches no providers and never fails.
+
+
+---
+
+### Examples
+
+#### Report the version of every peel
+
+Useful for confirming a fleet is on the expected build.
+
+```bash
+zester '*' test.version
+```
+
+
+---
+
+## `test.true`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`test.true` unconditionally returns `"true"`. It takes no arguments and is a companion to `test.false` for exercising success paths and pipelines.
+
+---
+
+### Effects
+
+#### Execution
+
+Returns the literal string "true". It touches no providers and never fails.
+
+
+---
+
+### Examples
+
+#### Return true
+
+```bash
+zester '*' test.true
+```
+
+
+---
+
+### See Also
+
+- [test.false](/docs/guides/execution-modules)
+
+---
+
+## `test.false`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`test.false` unconditionally returns `"false"`. It takes no arguments and is a companion to `test.true`. It returns a string, not a non-zero exit — the call itself still succeeds.
+
+---
+
+### Effects
+
+#### Execution
+
+Returns the literal string "false". It touches no providers and never fails.
+
+
+---
+
+### Examples
+
+#### Return false
+
+```bash
+zester '*' test.false
+```
+
+
+---
+
+### See Also
+
+- [test.true](/docs/guides/execution-modules)
+
+---
+
+## `pkg.version`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`pkg.version` queries the installed version of the named package through the host's detected package manager. The package name defaults to the request ID, so `zester '*' pkg.version nginx` reports nginx's version.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | Request ID (bare positional) | package name to query; defaults to the request ID |
+
+---
+
+### Effects
+
+#### Execution
+
+Probes the installed version per detected manager: apt via `dpkg-query -W -f='${Version}'`, dnf/yum via `rpm -q --qf '%{VERSION}-%{RELEASE}'`, brew via `brew list --versions`. When no package provider is detected it falls back to probing dpkg then rpm in turn. Returns the trimmed version string; errors when no package name (or request ID) is given, when no command provider is available, or when the package is not installed.
+
+
+---
+
+### Examples
+
+#### Query a package version
+
+The bare positional argument is the package name.
+
+```bash
+zester '*' pkg.version nginx
+```
+
+
+---
+
+### See Also
+
+- [pkg.installed](/docs/guides/modules/pkg-installed)
+
+---
+
+## `pkg.list_pkgs`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`pkg.list_pkgs` returns one `name version` line per installed package, queried through the host's detected package manager. It takes no arguments.
+
+---
+
+### Effects
+
+#### Execution
+
+Lists installed packages per detected manager: apt via `dpkg-query -W`, dnf/yum via `rpm -qa`, brew via `brew list --versions`; with no detected provider it falls back to probing dpkg then rpm. Returns the package listing (trailing newline trimmed); errors when no command provider is available.
+
+
+---
+
+### Examples
+
+#### List installed packages
+
+```bash
+zester 'web-01' pkg.list_pkgs
+```
+
+
+---
+
+### See Also
+
+- [pkg.installed](/docs/guides/modules/pkg-installed)
+
+---
+
+## `service.status`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`service.status` reports the running state of the named service (defaulting to the request ID). Through the service provider it returns `running` or `stopped`; when only a command provider is available it falls back to `systemctl is-active` and returns that word (or `unknown`).
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | Request ID (bare positional) | service name; defaults to the request ID |
+
+---
+
+### Effects
+
+#### Execution
+
+Queries the service provider's running state and returns `running` or `stopped`. With no service provider it runs `systemctl is-active <name>` and returns the reported word (`unknown` when empty). Errors when no service name (or request ID) is given, or when neither a service nor a command provider is available.
+
+
+---
+
+### Examples
+
+#### Check a service's status
+
+The bare positional argument is the service name.
+
+```bash
+zester 'web-01' service.status nginx
+```
+
+
+---
+
+### See Also
+
+- [service.running](/docs/guides/modules/service-running)
+
+---
+
+## `service.start`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`service.start` starts the named service (defaulting to the request ID) through the service provider, falling back to `systemctl start` when only a command provider is available. Unlike `service.running`, it is imperative and non-idempotent — it always issues the start.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | Request ID (bare positional) | service name; defaults to the request ID |
+
+---
+
+### Effects
+
+#### Execution
+
+Starts the service via the service provider (or `systemctl start <name>` as a fallback) and returns `started <name>`. Errors when no service name (or request ID) is given, when neither provider is available, or when the start command exits non-zero.
+
+
+---
+
+### Examples
+
+#### Start a service
+
+```bash
+zester 'web-01' service.start nginx
+```
+
+
+---
+
+### See Also
+
+- [service.running](/docs/guides/modules/service-running)
+
+---
+
+## `service.stop`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`service.stop` stops the named service (defaulting to the request ID) through the service provider, falling back to `systemctl stop` when only a command provider is available. It is imperative and non-idempotent — the counterpart of `service.dead` for ad-hoc use.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | Request ID (bare positional) | service name; defaults to the request ID |
+
+---
+
+### Effects
+
+#### Execution
+
+Stops the service via the service provider (or `systemctl stop <name>` as a fallback) and returns `stopped <name>`. Errors when no service name (or request ID) is given, when neither provider is available, or when the stop command exits non-zero.
+
+
+---
+
+### Examples
+
+#### Stop a service
+
+```bash
+zester 'web-01' service.stop nginx
+```
+
+
+---
+
+### See Also
+
+- [service.dead](/docs/guides/modules/service-dead)
+
+---
+
+## `service.restart`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`service.restart` restarts the named service (defaulting to the request ID) through the service provider, falling back to `systemctl restart` when only a command provider is available.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | Request ID (bare positional) | service name; defaults to the request ID |
+
+---
+
+### Effects
+
+#### Execution
+
+Restarts the service via the service provider (or `systemctl restart <name>` as a fallback) and returns `restarted <name>`. Errors when no service name (or request ID) is given, when neither provider is available, or when the restart command exits non-zero.
+
+
+---
+
+### Examples
+
+#### Restart a service
+
+```bash
+zester 'web-01' service.restart nginx
+```
+
+
+---
+
+### See Also
+
+- [service.running](/docs/guides/modules/service-running)
+
+---
+
+## `disk.usage`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`disk.usage` returns portable `df -P` output. With a `path` argument (or a request ID) it reports the filesystem containing that path; with neither, it reports every mounted filesystem.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `path` | `string` | No | Request ID (bare positional) | filesystem path to report usage for; defaults to the request ID, and when neither is given every mounted filesystem is reported |
+
+---
+
+### Effects
+
+#### Execution
+
+Runs `df -P` (appending the shell-quoted `path` when given) through the command provider and returns its output with the trailing newline trimmed. Errors when no command provider is available.
+
+
+---
+
+### Examples
+
+#### Report usage for all filesystems
+
+With no path, every mounted filesystem is reported.
+
+```bash
+zester '*' disk.usage
+```
+
+#### Report usage for one path
+
+The bare positional argument is the path to report.
+
+```bash
+zester 'web-01' disk.usage /var
+```
+
+
+---
+
+## `grains.item`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`grains.item` resolves a dotted fact key (Salt calls facts "grains") against the peel's in-memory facts and returns its value. The key defaults to the request ID. A missing key returns an empty string, not an error.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `key` | `string` | No | Request ID (bare positional) | dotted grain (fact) key to look up (e.g. os.family); defaults to the request ID |
+
+---
+
+### Effects
+
+#### Execution
+
+Resolves the dotted `key` against the peel's facts map (segment by segment) and returns the value — scalars directly, composite values as trimmed YAML. A missing key or segment returns the empty string. Errors only when no key (or request ID) is given.
+
+
+---
+
+### Examples
+
+#### Read a nested fact
+
+The bare positional argument is the dotted fact key.
+
+```bash
+zester '*' grains.item os.family
+```
+
+
+---
+
+### See Also
+
+- [grains.items](/docs/guides/execution-modules)
+
+---
+
+## `grains.items`
+
+**Source**: `pkg/execmod/builtins.go`
+
+---
+
+`grains.items` returns the peel's entire in-memory facts map rendered as YAML. It takes no arguments.
+
+---
+
+### Effects
+
+#### Execution
+
+Renders the peel's full facts map as trimmed YAML and returns it. Returns the empty string when no facts are available; it never fails.
+
+
+---
+
+### Examples
+
+#### Dump every fact
+
+```bash
+zester 'web-01' grains.items
+```
+
+
+---
+
+### See Also
+
+- [grains.item](/docs/guides/execution-modules)
+
+---
+
+## `sys.doc`
+
+**Source**: `pkg/execmod/sysdoc.go`
+
+---
+
+`sys.doc <module>` renders the named module's documentation — the SAME self-documenting metadata `zester doc` and the generated reference pages are built from — as plain text. With no module named, it returns the unified index of every callable surface (identical to `sys.list_functions`). It answers even during a long-running state run (it is a read-only surface).
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | Request ID (bare positional) | module name to document; when omitted, the unified index of every callable surface is returned |
+
+---
+
+### Effects
+
+#### Execution
+
+Looks the module up following the peel's dispatch precedence (dispatch specials, then state modules, then execution functions) and renders its ModuleInfo through the shared text renderer. With no module named, returns the unified index. Errors when the named module has no documentation.
+
+
+---
+
+### Examples
+
+#### Document a module
+
+The bare positional argument is the module name to document.
+
+```bash
+zester 'web-01' sys.doc pkg.installed
+```
+
+#### Show the unified index
+
+With no module named, sys.doc lists every callable surface.
+
+```bash
+zester 'web-01' sys.doc
+```
+
+
+---
+
+### See Also
+
+- [sys.list_functions](/docs/guides/execution-modules)
+
+---
+
+## `sys.list_functions`
+
+**Source**: `pkg/execmod/sysdoc.go`
+
+---
+
+`sys.list_functions` returns the sorted names of every callable surface — state modules, execution functions, and the peel's dispatch specials (facts.*, settings.*, …) — one per line. It takes no arguments.
+
+---
+
+### Effects
+
+#### Execution
+
+Returns the sorted, newline-joined names of every callable surface the peel exposes. It touches no providers and never fails.
+
+
+---
+
+### Examples
+
+#### List callable functions
+
+```bash
+zester 'web-01' sys.list_functions
+```
+
+
+---
+
+### See Also
+
+- [sys.doc](/docs/guides/execution-modules)

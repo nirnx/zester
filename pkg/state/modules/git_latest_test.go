@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -63,10 +64,8 @@ func gitLatestRespond(url, head, remoteTip string) func([]string) *exec.CommandR
 // gitLatestHasCall reports whether any recorded call's args contain sub.
 func gitLatestHasCall(calls []exec.CommandOpts, sub string) bool {
 	for _, c := range calls {
-		for _, a := range c.Args {
-			if a == sub {
-				return true
-			}
+		if slices.Contains(c.Args, sub) {
+			return true
 		}
 	}
 	return false

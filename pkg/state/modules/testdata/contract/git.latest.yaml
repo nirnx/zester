@@ -76,8 +76,27 @@ cases:
       target: /opt/app
     want:
       URL: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      target: /opt/app
+    want:
+      URL: "123"
   - label: composite-name-rejected-yaml
     universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      target: /opt/app
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
     id: web
     bd: BD-6
     input:

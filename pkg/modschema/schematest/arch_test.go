@@ -96,10 +96,7 @@ func TestArchSchematestExternalImports(t *testing.T) {
 // (its first path segment is a domain, i.e. contains a dot) rather than the
 // standard library (whose first segment never does).
 func isExternalModule(importPath string) bool {
-	first := importPath
-	if i := strings.IndexByte(importPath, '/'); i >= 0 {
-		first = importPath[:i]
-	}
+	first, _, _ := strings.Cut(importPath, "/")
 	return strings.Contains(first, ".")
 }
 

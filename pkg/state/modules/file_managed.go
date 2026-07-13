@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"strconv"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -257,12 +258,8 @@ func mergeDefaults(defaults, context map[string]any) map[string]any {
 		return nil
 	}
 	merged := make(map[string]any)
-	for k, v := range defaults {
-		merged[k] = v
-	}
-	for k, v := range context {
-		merged[k] = v
-	}
+	maps.Copy(merged, defaults)
+	maps.Copy(merged, context)
 	return merged
 }
 

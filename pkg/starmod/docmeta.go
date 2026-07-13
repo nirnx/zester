@@ -237,17 +237,17 @@ func buildFieldTag(d paramDecl, gt reflect.Type) string {
 func goTypeFor(typ string) reflect.Type {
 	switch strings.ToLower(strings.TrimSpace(typ)) {
 	case "bool", "boolean":
-		return reflect.TypeOf(false)
+		return reflect.TypeFor[bool]()
 	case "int", "integer":
-		return reflect.TypeOf(int(0))
+		return reflect.TypeFor[int]()
 	case "float", "number":
-		return reflect.TypeOf(float64(0))
+		return reflect.TypeFor[float64]()
 	case "list", "array":
-		return reflect.TypeOf([]any{})
+		return reflect.TypeFor[[]any]()
 	case "dict", "map", "object":
-		return reflect.TypeOf(map[string]any{})
+		return reflect.TypeFor[map[string]any]()
 	default: // "", "str", "string", or anything unrecognized
-		return reflect.TypeOf("")
+		return reflect.TypeFor[string]()
 	}
 }
 

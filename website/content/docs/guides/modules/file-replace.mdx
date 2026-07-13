@@ -19,7 +19,7 @@ description: "Regular-expression search-and-replace within a file."
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
 | `pattern` | `string` | Yes | *(none)* | search regular expression (RE2); anchored per-line (Salt's re.MULTILINE default) |
-| `repl` | `string` | No | *(none)* | replacement text; $1/${name} backreferences are expanded |
+| `repl` | `string` | No | *(none)* | replacement text; $1/$&#123;name&#125; backreferences are expanded |
 | `count` | `int` | No | *(none)* | maximum number of replacements to perform; 0 (the default) replaces every match |
 | `append_if_not_found` | `bool` | No | *(none)* | when the pattern is not found, append not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false) |
 | `prepend_if_not_found` | `bool` | No | *(none)* | when the pattern is not found, prepend not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false) |

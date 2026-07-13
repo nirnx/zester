@@ -294,9 +294,10 @@ func TestHandleExecRequestDuplicateJobRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Worker drains the queue synchronously for the test.
-	workerCtx, stopWorker := context.WithCancel(context.Background())
-	defer stopWorker()
+	// Worker drains the queue synchronously for the test. t.Context() is
+	// canceled automatically at test cleanup, standing in for the explicit
+	// WithCancel/defer pair (stopWorker was never called early, only deferred).
+	workerCtx := t.Context()
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)

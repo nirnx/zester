@@ -88,6 +88,18 @@ func TestSysDocExecutes(t *testing.T) {
 	if !strings.Contains(doc, "facts.get (dispatch)") {
 		t.Errorf("sys.doc facts.get missing dispatch header:\n%s", doc)
 	}
+
+	// sys.doc for an EXECUTION module → its exec spec, rendered through the same
+	// RenderText: the header carries the exec kind and the Execution effect (not
+	// a state Check/Apply). This pins that self-documenting execution specs are
+	// reachable end-to-end via sys.doc / Describe.
+	execDoc := runReadOnly(t, a, proto.ExecRequest{ID: "pkg.version", Module: "sys.doc"})
+	if !strings.Contains(execDoc, "pkg.version (exec)") {
+		t.Errorf("sys.doc pkg.version missing exec header:\n%s", execDoc)
+	}
+	if !strings.Contains(execDoc, "Execution") {
+		t.Errorf("sys.doc pkg.version missing Execution effect:\n%s", execDoc)
+	}
 }
 
 // TestUnknownFamilySubfunctionError pins that an unrecognized subfunction still
@@ -186,9 +198,12 @@ func TestPeelDocSourcePrecedence(t *testing.T) {
 		t.Error("RenderText(cmd.run) missing dual-surface appendix")
 	}
 
-	// 3. An execmod-only function (no state spec) is described from execmod.
-	//    grains.item is a plain (spec-less) execmod fn, so it is NOT described;
-	//    an unknown name is likewise not found.
+	// 3. An execmod-only function (no state spec) is described from execmod: every
+	//    built-in execution function now carries a modschema.Spec, so grains.item
+	//    resolves to its exec ModuleInfo, while an unknown name is not found.
+	if mi, ok := src.Describe("grains.item"); !ok || mi.Kind != modschema.KindExec {
+		t.Errorf("Describe(grains.item) = %+v ok=%v, want an exec ModuleInfo", mi, ok)
+	}
 	if _, ok := src.Describe("nope.fn"); ok {
 		t.Error("Describe(nope.fn) should be false")
 	}

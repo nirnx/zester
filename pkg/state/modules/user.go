@@ -6,13 +6,10 @@ package modules
 // (rather than duplicating them per module) mirrors how git.go retains the
 // shared rev-comparison helpers after the git.cloned/git.latest split.
 
+import "slices"
+
 func containsString(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ss, s)
 }
 
 func stringSliceEqual(a, b []string) bool {

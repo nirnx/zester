@@ -1,0 +1,67 @@
+module: pkg.version
+# Permanent contract for the pkg.version execution spec: argStr(args, "name",
+# "package", "pkg", "__id__"). Pins that both aliases (package, pkg) resolve to
+# the Name primary, the request ID fills it when absent, an empty value falls
+# through, and a numeric scalar coerces to its string form (argStr parity).
+cases:
+  - label: name-yaml
+    universe: yaml
+    id: req
+    input:
+      name: nginx
+    want:
+      Name: nginx
+  - label: name-msgpack
+    universe: msgpack
+    id: req
+    input:
+      name: nginx
+    want:
+      Name: nginx
+  - label: name-cli
+    universe: cli
+    id: req
+    input:
+      name: nginx
+    want:
+      Name: nginx
+
+  - label: package-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      package: vim
+    want:
+      Name: vim
+  - label: pkg-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      pkg: curl
+    want:
+      Name: curl
+
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: nginx
+    input: {}
+    want:
+      Name: nginx
+
+  # An empty-string name falls through to the request ID (§2.1 empty-source
+  # amendment; mirrors the legacy argStr "skip empty" behavior).
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: nginx
+    input:
+      name: ""
+    want:
+      Name: nginx
+
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: req
+    input:
+      name: 7
+    want:
+      Name: "7"

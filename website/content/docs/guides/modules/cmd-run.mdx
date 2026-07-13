@@ -9,7 +9,7 @@ description: "Execute a command on the target system and capture its output."
 
 ---
 
-`cmd.run` executes a command (`command`, defaulting to the state ID) on the target and captures its output. Commands are not inherently idempotent, so the `creates` parameter provides an idempotency mechanism: a file path that, when it already exists, means the command has already run and is skipped.
+`cmd.run` executes a command (`command`, defaulting to the state ID) on the target and captures its output. For Salt compatibility `command` also accepts the `name` alias, so `cmd.run: - name: apt-get update` runs `apt-get update` (a declared `command` wins over `name`). Commands are not inherently idempotent, so the `creates` parameter provides an idempotency mechanism: a file path that, when it already exists, means the command has already run and is skipped.
 
 When `args` is empty the command string is run through the shell (`sh -c`), so shell features (pipes, redirection, `&&`) work; when `args` is non-empty the command is executed directly with those arguments (no shell). `cwd` sets the working directory and `env` sets environment variables (merged with the peel process's environment).
 
@@ -21,7 +21,7 @@ When `args` is empty the command string is run through the shell (`sh -c`), so s
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `command` | `string` | No | State ID | command to execute; defaults to the state ID |
+| `command` | `string` | No | State ID | command to execute; the name alias is accepted for Salt compatibility (cmd.run: - name: &lt;command&gt;); defaults to the state ID |
 | `args` | `StringList` | No | *(none)* | additional arguments passed to the command; when empty the command runs via the shell (sh -c), when non-empty it is executed directly with these arguments |
 | `cwd` | `string` | No | *(none)* | working directory for the command; defaults to the peel process's working directory |
 | `env` | `StringMap` | No | *(none)* | environment variables to set for the command; merged with the peel process's environment |
@@ -129,6 +129,10 @@ run_migrations:
 >
 > `cmd.run` is also an execution module of the same name — reachable from templates via `salt['cmd.run'](...)` and from the CLI as `zester '<target>' cmd.run '<command>'`. The state module documented here (with `creates` idempotency and the Check/Apply/Revert lifecycle) is the primary surface.
 
+> **The name alias runs the command (Salt idiom)**
+>
+> For Salt compatibility the primary `command` accepts the `name` alias: `cmd.run: - name: apt-get update` runs `apt-get update`. Zester previously read only `command` and silently ran the STATE ID when only `name:` was given (quietly wrong); it now executes the named command, matching Salt (BD-8). A declared `command` wins over `name`, and an empty-string `command` falls through to `name` before the state-ID fallback.
+
 > **Details returned**
 >
 > After execution the result details carry `command` (the command run), `stdout` and `stderr` (captured output), and `exitcode` (the process exit code as a string).
@@ -140,6 +144,7 @@ run_migrations:
 
 - BD-5
 - BD-6
+- BD-8
 
 ---
 

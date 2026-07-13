@@ -347,7 +347,10 @@ strings) · BD-3 `minute: 5` = minute 5, not `*` · BD-4 all-digit string gid = 
 GID · BD-5 StringList sprints scalars / errors on nested (was silent drop) · BD-6
 wrong-typed values produce typed errors (was silent zero) · BD-7 boolean integer
 coercion: `1` = true, `0` = false, any other integer a typed error (was: ints silently
-ignored). SCOPE (orchestrator ruling 2026-07-12, under the maintainer's TriState 1/0
+ignored) · BD-8 `cmd.run` `command` gains the `name` alias, so the Salt idiom
+`cmd.run: - name: <command>` RUNS the named command (was: `name:` silently ignored,
+the STATE ID executed instead); precedence is command-beats-name, empty `command`
+falls through to `name` (Salt-parity ruling 2026-07-13, standing grant). SCOPE (orchestrator ruling 2026-07-12, under the maintainer's TriState 1/0
 approval + the approved coercion table): applies to ALL boolean-typed parameters —
 primitive `bool` and TriState alike — one consistent rule. PINNING STANDARD (ruling
 2026-07-13): per-PARAM, not representative — EVERY boolean parameter of a migrated

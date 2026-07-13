@@ -22,7 +22,7 @@ description: "Result and change reporting fully driven by config. Always fails, 
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -34,26 +34,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Always reports that a change is needed so Apply runs and fully controls the reported outcome.
 
-### Apply
+#### Apply
 
 When `result` is true, succeeds with Changed set to `changes` and Details `{"result": "true"}` (plus `comment` when set). When `result` is false, fails: returns an error carrying `comment` (or `configured failure`) together with Changed set to `changes` and Details `{"result": "false"}` (plus `comment` when set) — so a change and the comment can be reported on failure too.
 
-### Revert
+#### Revert
 
 No-op (Changed: false).
 
 
 ---
 
-## Examples
+### Examples
 
-### Succeed without reporting a change
+#### Succeed without reporting a change
 
 result true + changes false models a healthy, unchanged resource.
 
@@ -68,7 +68,7 @@ scenario:
 
 ---
 
-## Notes
+### Notes
 
 > **Boolean parameters accept 1/0 and truthy strings**
 >
@@ -77,7 +77,7 @@ scenario:
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-2
 - BD-6
@@ -85,7 +85,7 @@ scenario:
 
 ---
 
-## See Also
+### See Also
 
 - [test.succeed_with_changes](/docs/guides/modules/test-helpers)
 - [test.fail_without_changes](/docs/guides/modules/test-helpers)
@@ -102,7 +102,7 @@ scenario:
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -112,26 +112,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Always reports that a change is needed so Apply runs and the failure is surfaced.
 
-### Apply
+#### Apply
 
 Always fails: returns an error carrying `comment` (or `failure without changes` when unset) together with Details `{"result": "false", "comment": <message>}`, and Changed: false.
 
-### Revert
+#### Revert
 
 No-op (Changed: false).
 
 
 ---
 
-## Examples
+### Examples
 
-### Simulate a failure
+#### Simulate a failure
 
 The comment becomes the error message.
 
@@ -144,7 +144,7 @@ simulated-failure:
 
 ---
 
-## Notes
+### Notes
 
 > **Use in onfail chains**
 >
@@ -161,13 +161,13 @@ simulated-failure:
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-6
 
 ---
 
-## See Also
+### See Also
 
 - [test.succeed_with_changes](/docs/guides/modules/test-helpers)
 - [test.configurable_test_state](/docs/guides/modules/test-helpers)
@@ -184,7 +184,7 @@ simulated-failure:
 
 ---
 
-## Parameters
+### Parameters
 
 This module takes no parameters of its own.
 
@@ -192,26 +192,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Reports NeedsChange: false — the state is always already satisfied, so the runner normally skips Apply entirely.
 
-### Apply
+#### Apply
 
 If reached (for example via a watch-forced apply), performs no work: returns Changed: false with Details `{"result": "true"}`.
 
-### Revert
+#### Revert
 
 No-op (Changed: false).
 
 
 ---
 
-## Examples
+### Examples
 
-### An inert placeholder
+#### An inert placeholder
 
 test.nop is satisfied immediately and never touches the system.
 
@@ -223,7 +223,7 @@ placeholder:
 
 ---
 
-## Notes
+### Notes
 
 > **Unimplemented Salt test states**
 >
@@ -232,7 +232,7 @@ placeholder:
 
 ---
 
-## See Also
+### See Also
 
 - [test.ping](/docs/guides/modules/test-ping)
 - [test.succeed_with_changes](/docs/guides/modules/test-helpers)
@@ -251,7 +251,7 @@ placeholder:
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -261,26 +261,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Always reports that a change is needed so Apply runs.
 
-### Apply
+#### Apply
 
 Always succeeds with Changed: true and Details `{"result": "true"}` (plus `comment` when set).
 
-### Revert
+#### Revert
 
 No-op (Changed: false).
 
 
 ---
 
-## Examples
+### Examples
 
-### Simulate a change
+#### Simulate a change
 
 The state always reports Changed: true.
 
@@ -292,7 +292,7 @@ simulated-change:
 
 ---
 
-## Notes
+### Notes
 
 > **Use in watch / onchanges chains**
 >
@@ -309,13 +309,13 @@ simulated-change:
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-6
 
 ---
 
-## See Also
+### See Also
 
 - [test.fail_without_changes](/docs/guides/modules/test-helpers)
 - [test.configurable_test_state](/docs/guides/modules/test-helpers)

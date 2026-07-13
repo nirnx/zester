@@ -46,7 +46,7 @@ func (t TriState) ValueOr(def bool) bool {
 type triStateType struct{}
 
 func (triStateType) Name() string         { return "TriState" }
-func (triStateType) GoType() reflect.Type { return reflect.TypeOf(TriState{}) }
+func (triStateType) GoType() reflect.Type { return reflect.TypeFor[TriState]() }
 func (triStateType) Doc() string {
 	return "A three-valued boolean: unset, true, or false. Accepts a bool; the " +
 		"truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); " +

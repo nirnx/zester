@@ -20,7 +20,7 @@ description: "Ensure an SSH public key is absent from a user's authorized_keys. 
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -32,26 +32,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Resolves the authorized_keys path (from `config`, or the `user`'s home) and reads it (a non-not-exist read error fails the phase). Reports no change when the file does not exist or no line carries the key blob; otherwise reports a change.
 
-### Apply
+#### Apply
 
 Reads authorized_keys and, when a line carries the key blob, memoizes the prior content for revert and rewrites the file with every matching line removed. A missing file or an already-absent key is a clean no-op. Reports the path and user in its details.
 
-### Revert
+#### Revert
 
 Restores the authorized_keys content this run's Apply captured before removing the key (with 0600 mode). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a user's authorized_keys it did not touch.
 
 
 ---
 
-## Examples
+### Examples
 
-### Revoke a key for a user
+#### Revoke a key for a user
 
 name is the key blob to remove; matched on the blob.
 
@@ -61,7 +61,7 @@ AAAAB3NzaC1yc2EAAAADAQABAAAB...:
     - user: deploy
 ```
 
-### Revoke a key ad hoc
+#### Revoke a key ad hoc
 
 The bare positional argument is the key blob; user is a key=value.
 
@@ -72,7 +72,7 @@ zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
 
 ---
 
-## Notes
+### Notes
 
 > **Comment and blank lines are preserved**
 >
@@ -85,13 +85,13 @@ zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-6
 
 ---
 
-## See Also
+### See Also
 
 - [ssh_auth.present](/docs/guides/modules/ssh-auth)
 
@@ -107,7 +107,7 @@ zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -121,26 +121,26 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Resolves the authorized_keys path (from `config`, or the `user`'s home) and reads it (a non-not-exist read error fails the phase). Reports a change when no line carries the desired key blob, or when the matching line differs from the desired line (a changed comment or encoding).
 
-### Apply
+#### Apply
 
 Ensures `~/.ssh` exists (0700), reads authorized_keys, memoizes its prior content (or that it did not exist) for revert, and rewrites it so a single line carries the key blob — replacing any existing line for the same blob and deduplicating, or writing the file (0600) when absent. An already-present identical line is a clean no-op. Reports the path and user in its details.
 
-### Revert
+#### Revert
 
 Restores what this run's Apply changed: an authorized_keys that pre-existed is rewritten with its captured prior content and 0600 mode; a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a user's authorized_keys it did not touch.
 
 
 ---
 
-## Examples
+### Examples
 
-### Authorize a key for a user
+#### Authorize a key for a user
 
 name is the key blob; enc defaults to ssh-rsa; comment labels the line.
 
@@ -151,7 +151,7 @@ AAAAB3NzaC1yc2EAAAADAQABAAAB...:
     - comment: deploy@ci
 ```
 
-### Authorize a full ed25519 key line
+#### Authorize a full ed25519 key line
 
 A full "ssh-… AAAA… comment" line is used verbatim; enc/comment are ignored.
 
@@ -161,7 +161,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... alice@laptop:
     - user: alice
 ```
 
-### Authorize a key ad hoc
+#### Authorize a key ad hoc
 
 The bare positional argument is the key blob; user/enc/comment are key=values.
 
@@ -172,7 +172,7 @@ zester 'web*' ssh_auth.present AAAAB3Nza... user=deploy enc=ssh-rsa
 
 ---
 
-## Notes
+### Notes
 
 > **Identity is the key blob**
 >
@@ -193,12 +193,12 @@ zester 'web*' ssh_auth.present AAAAB3Nza... user=deploy enc=ssh-rsa
 
 ---
 
-## Divergences
+### Divergences
 
 - BD-6
 
 ---
 
-## See Also
+### See Also
 
 - [ssh_auth.absent](/docs/guides/modules/ssh-auth)

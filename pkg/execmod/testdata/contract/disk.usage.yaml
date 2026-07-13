@@ -1,0 +1,43 @@
+module: disk.usage
+# Permanent contract for the disk.usage execution spec: argStr(args, "path",
+# "name", "__id__"). Pins the `name` alias, the request-ID fallback, and — the
+# distinctive case — that an ABSENT path with an EMPTY request ID leaves Path
+# empty (df then reports every filesystem).
+cases:
+  - label: path-yaml
+    universe: yaml
+    id: req
+    input:
+      path: /var
+    want:
+      Path: /var
+  - label: path-cli
+    universe: cli
+    id: req
+    input:
+      path: /var
+    want:
+      Path: /var
+
+  - label: name-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      name: /srv
+    want:
+      Path: /srv
+
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /home
+    input: {}
+    want:
+      Path: /home
+
+  # No path and no request ID -> Path stays empty (report all filesystems).
+  - label: empty-id-leaves-path-empty-yaml
+    universe: yaml
+    id: ""
+    input: {}
+    want:
+      Path: ""

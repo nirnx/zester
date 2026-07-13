@@ -33,6 +33,67 @@ func TestPeelDefaults(t *testing.T) {
 	if cfg.LogFormat != "json" {
 		t.Errorf("LogFormat = %q, want %q", cfg.LogFormat, "json")
 	}
+	// StrictParams defaults ON: an unknown state-module parameter fails the
+	// build (the strict flip, keystone spec §5 endgame).
+	if !cfg.StrictParams {
+		t.Error("StrictParams = false, want true by default")
+	}
+}
+
+// TestLoadPeelStrictParams covers the strict_params knob: it defaults on when
+// unset (a config that omits it keeps the fail-on-unknown-parameter default),
+// and an explicit strict_params: false relaxes it to Warn-and-continue.
+func TestLoadPeelStrictParams(t *testing.T) {
+	t.Run("unset keeps default true", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "peel.yaml")
+		if err := os.WriteFile(path, []byte("id: web-01\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadPeel(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.StrictParams {
+			t.Error("StrictParams = false, want true when unset in YAML")
+		}
+	})
+
+	t.Run("explicit false relaxes", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "peel.yaml")
+		if err := os.WriteFile(path, []byte("id: web-01\nstrict_params: false\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadPeel(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.StrictParams {
+			t.Error("StrictParams = true, want false when strict_params: false")
+		}
+	})
+
+	t.Run("flag beats YAML", func(t *testing.T) {
+		// The generated --strict-params flag (BindFlags/ApplyVisited) overrides a
+		// YAML strict_params: true, exercising the tag on the real PeelConfig.
+		cfg := PeelDefaults() // StrictParams true
+		fs := newFlagSet(t)
+		if err := BindFlags(fs, &cfg); err != nil {
+			t.Fatalf("BindFlags: %v", err)
+		}
+		if err := fs.Parse([]string{"--strict-params=false"}); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		// Simulate YAML load setting it true (the default), then flag apply.
+		cfg.StrictParams = true
+		if err := ApplyVisited(fs, &cfg); err != nil {
+			t.Fatalf("ApplyVisited: %v", err)
+		}
+		if cfg.StrictParams {
+			t.Error("StrictParams = true, want the --strict-params=false flag to win over YAML")
+		}
+	})
 }
 
 func TestLoadPeelMasterURLsAndLogging(t *testing.T) {

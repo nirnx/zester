@@ -1,0 +1,69 @@
+module: test.echo
+# Permanent contract for the test.echo execution spec. These cases pin the
+# argStr-compatible alias resolution (text -> name -> request ID) through the
+# compiled schema decoder across yaml/msgpack/cli. Execution functions still
+# resolve arguments through argStr at runtime; the spec decodes the same alias
+# set, and both coerce a numeric scalar to its string form, so there is no BD
+# divergence to flag here — these are parity pins.
+cases:
+  - label: text-yaml
+    universe: yaml
+    id: req
+    input:
+      text: hello
+    want:
+      Text: hello
+  - label: text-msgpack
+    universe: msgpack
+    id: req
+    input:
+      text: hello
+    want:
+      Text: hello
+  - label: text-cli
+    universe: cli
+    id: req
+    input:
+      text: hello
+    want:
+      Text: hello
+
+  # name is the first alias of the text primary.
+  - label: name-alias-yaml
+    universe: yaml
+    id: req
+    input:
+      name: aliased
+    want:
+      Text: aliased
+
+  # No text/name -> primary falls back to the request ID.
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: from-id
+    input: {}
+    want:
+      Text: from-id
+  - label: primary-fallback-cli
+    universe: cli
+    id: from-id
+    input: {}
+    want:
+      Text: from-id
+
+  # A numeric scalar coerces to its string form (argStr does the same via
+  # fmt.Sprintf — parity, not a divergence).
+  - label: numeric-text-coerced-yaml
+    universe: yaml
+    id: req
+    input:
+      text: 123
+    want:
+      Text: "123"
+  - label: numeric-text-coerced-msgpack
+    universe: msgpack
+    id: req
+    input:
+      text: 123
+    want:
+      Text: "123"

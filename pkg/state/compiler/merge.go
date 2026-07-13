@@ -1,6 +1,10 @@
 package compiler
 
-import "github.com/nirnx/zester/pkg/state"
+import (
+	"maps"
+
+	"github.com/nirnx/zester/pkg/state"
+)
 
 // requisiteKeys are the same-state requisite declarations appended (not
 // replaced) during extend merging. It is DERIVED from state.RequisiteKeys()
@@ -70,9 +74,7 @@ func mergeArgsList(base, overlay []map[string]any) []map[string]any {
 func flattenArgsList(args []map[string]any) map[string]any {
 	result := make(map[string]any)
 	for _, item := range args {
-		for k, v := range item {
-			result[k] = v
-		}
+		maps.Copy(result, item)
 	}
 	return result
 }

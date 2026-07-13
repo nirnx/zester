@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -247,10 +248,8 @@ func (f *FileLine) computeEnsure(lines []string) ([]string, bool) {
 }
 
 func (f *FileLine) computeInsert(lines []string) ([]string, bool) {
-	for _, l := range lines {
-		if l == f.Content {
-			return lines, false
-		}
+	if slices.Contains(lines, f.Content) {
+		return lines, false
 	}
 	return f.insert(lines), true
 }
