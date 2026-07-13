@@ -84,7 +84,7 @@ type grainsItemParams struct {
 // sysDocParams is sys.doc's schema proto: argStr(args, "name", "module",
 // "__id__"). With no module named, sys.doc returns the unified index.
 type sysDocParams struct {
-	Name string `zester:"name,primary,aliases=module" usage:"module name to document; when omitted, the unified index of every callable surface is returned"`
+	Name string `zester:"name,primary,aliases=module" usage:"module name — or bare family name, rendering every member — to document; when omitted, the unified index of every callable surface is returned"`
 }
 
 // mustExecSpec compiles an execution-module spec at package init, panicking on a

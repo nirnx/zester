@@ -432,6 +432,14 @@ If your module needs a provider beyond the nine existing interfaces (Package/Fil
 - [ ] Wrap errors `fmt.Errorf("module.function: op: %w", err)`.
 - [ ] Register in `pkg/state/modules/register.go`'s `registrations` table
       (`module.run` stays last); bump the count pin.
+- [ ] Parameter names pass the PARAMETER-VOCABULARY gate
+      (`TestParameterVocabularyConsistency` in `cmd/zester-docgen`): the same
+      key — canonical name or alias — must carry the SAME schema in every
+      module that uses it. On a collision: reuse the existing semantic type,
+      pick a non-colliding name, or add a justified, participant-pinned entry
+      to the exception table. (Distinct from the SEMANTIC-TYPE vocabulary in
+      `paramtypes/vocabulary.go` — that one registers types; this one governs
+      parameter KEY reuse across modules.)
 - [ ] Unit tests (name, primary-default, requisites, check both ways, apply,
       apply-error, revert, provider-missing, convergence).
 - [ ] Permanent contract fixture `testdata/contract/<module>.yaml` +

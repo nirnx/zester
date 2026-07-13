@@ -502,7 +502,7 @@
       }
     ],
     "HasSpec": true,
-    "AlsoExecmod": false
+    "AlsoExecmod": true
   },
   {
     "Module": "cron.absent",
@@ -1157,10 +1157,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path to the file or directory to remove (defaults to the state ID)",
+        "Usage": "absolute path to the file or directory to remove (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -1242,10 +1244,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path to the target file (defaults to the state ID)",
+        "Usage": "absolute path to the target file (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -1393,10 +1397,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path to the target file; defaults to the state ID",
+        "Usage": "absolute path to the target file; defaults to the state ID; the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -1972,10 +1978,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path to the target directory (defaults to the state ID)",
+        "Usage": "absolute path to the target directory (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -3050,10 +3058,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "destination directory path (defaults to the state ID)",
+        "Usage": "destination directory path (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -3616,10 +3626,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path for the symbolic link (defaults to the state ID)",
+        "Usage": "absolute path for the symbolic link (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -7738,7 +7750,7 @@
         ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "module name to document; when omitted, the unified index of every callable surface is returned",
+        "Usage": "module name — or bare family name, rendering every member — to document; when omitted, the unified index of every callable surface is returned",
         "Required": false,
         "Primary": true,
         "Lazy": false,

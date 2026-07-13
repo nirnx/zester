@@ -46,12 +46,16 @@ func liveRegistry() *state.Registry {
 // execution-only functions — resolution order matches sys.doc's (dispatch
 // specials first, then the state registry — a dual-surface module like cmd.run
 // is documented by its STATE spec, which is what docgen emitted — then the
-// execution registry).
+// execution registry). Like the peel's DocSource (internal/peeld/sysdoc.go),
+// a state module that is ALSO an execmod function gets the AlsoExecmod
+// overlay — docgen emits it into docdata, so the parity check includes the
+// dual-surface header (PR-19 review: live and offline cmd.run agree).
 func liveDescribe(stateReg *state.Registry, execReg *execmod.Registry, name string) (modschema.ModuleInfo, bool) {
 	if mi, ok := modules.DispatchInfo(name); ok {
 		return mi, true
 	}
 	if mi, ok := stateReg.Describe(name); ok {
+		mi.AlsoExecmod = execReg.Has(name)
 		return mi, true
 	}
 	return execReg.Describe(name)

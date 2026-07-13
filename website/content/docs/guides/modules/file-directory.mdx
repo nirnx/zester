@@ -17,7 +17,7 @@ description: "Ensure a directory exists with the desired permissions and ownersh
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | absolute path to the target directory (defaults to the state ID) |
+| `name` | `string` | No | State ID | absolute path to the target directory (defaults to the state ID); the path alias is accepted |
 | `mode` | `FileMode` | No | `0755` (lazy) | directory permission mode in octal ("0755", "0700"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755 |
 | `user` | `string` | No | *(none)* | directory owner username; ownership is left unchanged when unset |
 | `group` | `string` | No | *(none)* | directory group name; ownership is left unchanged when unset |

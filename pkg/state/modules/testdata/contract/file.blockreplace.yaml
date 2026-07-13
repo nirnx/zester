@@ -4,9 +4,11 @@ module: file.blockreplace
 # constructor still existed (see the migration changelog); after its deletion
 # RunContract replays them as the permanent regression guard. Accepting cases pin
 # the decoded Path/Content/MarkerStart/MarkerEnd/AppendIfNotFound/AppendNewline
-# projection; rejecting cases pin the error kind. Unlike the fsxResolvePath-based
-# file modules, `name` has NO `path` alias (the legacy constructor read `name`
-# only) — the path-is-not-an-alias case pins that. `marker_start`/`marker_end`
+# projection; rejecting cases pin the error kind. `name` historically had NO
+# `path` alias here (the legacy constructor read `name` only); the vocabulary
+# unification (PR-19 review) added the alias family-wide, and the
+# path-alias-* cases pin the NEW behavior (the old path-is-not-an-alias pin
+# was retired with it — see the CHANGELOG). `marker_start`/`marker_end`
 # carry eager defaults (# START/END managed zone). BD-tagged cases pin the
 # flagged behavioral differences:
 #   BD-2 (APPROVED) — a CLI bool-string append_if_not_found/append_newline is
@@ -100,17 +102,6 @@ cases:
       content: body
     want:
       Path: /etc/conf
-
-  # --- parity: `path` is NOT an alias here — it is an inert key, so the primary
-  # falls back to the state ID (contrast the fsxResolvePath modules) ---
-  - label: path-is-not-an-alias-yaml
-    universe: yaml
-    id: /the/id
-    input:
-      path: /etc/conf
-      content: body
-    want:
-      Path: /the/id
 
   # --- parity: append/newline as native bools ---
   - label: append-true-yaml
@@ -368,3 +359,28 @@ cases:
       marker_end: 5
     want:
       MarkerEnd: "5"
+
+  # --- Vocabulary unification (PR-19 review): the `path` alias for the primary
+  # is now accepted by EVERY file.* module, not just the 7 that had it —
+  # `- path: <p>` behaves identically across the family. ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Path: /srv/aliased
+  - label: path-alias-cli
+    universe: cli
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Path: /srv/aliased
+  - label: path-alias-msgpack
+    universe: msgpack
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Path: /srv/aliased

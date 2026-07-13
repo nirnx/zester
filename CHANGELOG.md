@@ -7,6 +7,14 @@ All notable changes to Zester are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`path` alias unified across the whole file family.** All 13 `file.*`
+  modules now accept `path` as an alias of their primary — previously 7 did
+  and 6 (absent, append, blockreplace, directory, recurse, symlink) rejected
+  it under strict params (or, on blockreplace, deliberately ignored it), so
+  `- path: /srv/www` worked on `file.managed` but failed on `file.directory`.
+  Pinned by three-universe contract fixtures per module; blockreplace's old
+  "path is not an alias" pin is retired by this change.
+
 - **Family form for the doc surfaces (Salt parity).** `zester '<target>'
   sys.doc ssh_auth` and the offline `zester doc ssh_auth` now render every
   documented `ssh_auth.*` module as one document (sorted, shared
@@ -23,7 +31,13 @@ All notable changes to Zester are documented here. The format follows
   exceptions (`mode` in file.line = action selector; `gid` in group.present =
   numeric-only create id; `text` in test.echo = scalar echo string), each
   justified in the exception table, which also refuses stale entries. The
-  developing guide documents the rule.
+  developing guide documents the rule. Exceptions are participant-pinned:
+  the exception covers only the known divergence, so a NEW module reusing an
+  excepted key (e.g. a third `mode` shape) still fails until the pin is
+  deliberately updated. Dual-surface modules (`cmd.run`) now carry their
+  "also reachable as an execution module" header in the OFFLINE docs too —
+  the embedded docdata gains the same AlsoExecmod overlay live sys.doc
+  renders, and the docdata↔live parity test covers it.
 
 ## [0.6.0] - 2026-07-13
 

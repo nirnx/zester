@@ -29,7 +29,7 @@ type FileAppend struct {
 
 	// Path is the absolute path to the target file; it defaults to the
 	// state ID.
-	Path string `zester:"name,primary" usage:"absolute path to the target file (defaults to the state ID)"`
+	Path string `zester:"name,primary,aliases=path" usage:"absolute path to the target file (defaults to the state ID); the path alias is accepted"`
 
 	// Text is the set of lines that must be present in the file. Each line
 	// is checked independently; only missing lines are appended.

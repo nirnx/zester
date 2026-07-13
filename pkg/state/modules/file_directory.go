@@ -32,7 +32,7 @@ type FileDirectory struct {
 	reqs state.Requisites
 
 	// Path is the absolute path to the directory; it defaults to the state ID.
-	Path string `zester:"name,primary" usage:"absolute path to the target directory (defaults to the state ID)"`
+	Path string `zester:"name,primary,aliases=path" usage:"absolute path to the target directory (defaults to the state ID); the path alias is accepted"`
 	// Mode is the directory permission mode; it defaults to 0755 (applied lazily).
 	// The dir_mode alias is accepted as a fallback source (mode wins when both set).
 	Mode paramtypes.FileMode `zester:"mode,lazy,default=0755,aliases=dir_mode" usage:"directory permission mode in octal (\"0755\", \"0700\"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755"`

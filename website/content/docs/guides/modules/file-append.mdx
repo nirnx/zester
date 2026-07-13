@@ -17,7 +17,7 @@ description: "Ensure specific lines are present in a file, appending any that ar
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | absolute path to the target file (defaults to the state ID) |
+| `name` | `string` | No | State ID | absolute path to the target file (defaults to the state ID); the path alias is accepted |
 | `text` | `StringList` | No | *(none)* | lines that must be present in the file; each line is checked independently and only missing lines are appended |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).

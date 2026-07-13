@@ -245,6 +245,14 @@ func TestCompleteExecModule(t *testing.T) {
 	if !contains(got, "pkg.installed") {
 		t.Errorf("second positional completion missing pkg.installed: %v", got)
 	}
+	// Families are DOC-surface queries, not callable exec surfaces: the exec
+	// positional must never complete a bare family name (PR-19 review — a
+	// completed `zester 'web' ssh_auth` always fails on the peel).
+	if famGot, _ := completeExecModule(nil, []string{"*"}, "ssh_"); contains(famGot, "ssh_auth") {
+		t.Errorf("exec completion offered the bare family name ssh_auth: %v", famGot)
+	} else if !contains(famGot, "ssh_auth.present") {
+		t.Errorf("exec completion missing ssh_auth.present: %v", famGot)
+	}
 	// Third+ positional (module args): no module completion.
 	if got, _ := completeExecModule(nil, []string{"*", "pkg.installed"}, ""); got != nil {
 		t.Errorf("third positional: got %v, want nil", got)

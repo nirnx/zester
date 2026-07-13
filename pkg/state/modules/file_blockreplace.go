@@ -33,7 +33,7 @@ type FileBlockReplace struct {
 	reqs state.Requisites
 
 	// Path is the file path to manage; it defaults to the state ID.
-	Path string `zester:"name,primary" usage:"absolute path to the target file; defaults to the state ID"`
+	Path string `zester:"name,primary,aliases=path" usage:"absolute path to the target file; defaults to the state ID; the path alias is accepted"`
 
 	// Content is the desired content between the markers.
 	Content string `zester:"content" usage:"desired content placed between the marker lines"`

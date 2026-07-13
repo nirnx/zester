@@ -72,8 +72,10 @@ func runDoc(cmd *cobra.Command, args []string) error {
 	if !ok {
 		// FAMILY form (Salt parity): `zester doc ssh_auth` renders every
 		// documented ssh_auth.* module. moduledoc.All() is sorted by module
-		// name, so the family document is deterministic and byte-shaped like
-		// the live `sys.doc <family>` (both go through RenderTextAll).
+		// name, so the family document is deterministic and shares the live
+		// `sys.doc <family>` shape (both go through RenderTextAll; the live
+		// render may additionally carry the AlsoExecmod header overlay for
+		// dual-surface modules, which the embedded docdata does not).
 		if infos := familyModules(module); len(infos) > 0 {
 			if jsonOut {
 				return writeDocJSON(out, infos)
@@ -276,7 +278,23 @@ func completeExecModule(cmd *cobra.Command, args []string, toComplete string) ([
 	if len(args) != 1 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return moduleNameCandidates(toComplete), cobra.ShellCompDirectiveNoFileComp
+	// Modules only — a bare family name is a valid `zester doc` query but NOT
+	// a callable exec surface (the peel dispatches nothing named "ssh_auth"),
+	// so completing it here would build a command that always fails
+	// (PR-19 adversarial review).
+	return execModuleCandidates(toComplete), cobra.ShellCompDirectiveNoFileComp
+}
+
+// execModuleCandidates returns documented module.function names with the
+// given prefix — no family names (those are doc-surface queries only).
+func execModuleCandidates(prefix string) []string {
+	var out []string
+	for _, mi := range moduledoc.All() {
+		if strings.HasPrefix(mi.Module, prefix) {
+			out = append(out, mi.Module)
+		}
+	}
+	return out
 }
 
 // moduleNameCandidates returns documented module names (and family names —

@@ -17,7 +17,7 @@ description: "Recursively copy a source directory tree to a destination director
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | destination directory path (defaults to the state ID) |
+| `name` | `string` | No | State ID | destination directory path (defaults to the state ID); the path alias is accepted |
 | `source` | `string` | No | *(none)* | source directory path to copy from (required at run time) |
 | `dir_mode` | `FileMode` | No | `0755` (lazy) | directory permission mode for managed directories (octal); DECLARED-ONLY — undeclared, existing directory modes are left alone (used only as the creation mode for new directories, defaulting to 0755) |
 | `file_mode` | `FileMode` | No | `0644` (lazy) | permission mode for copied files in octal ("0644"); always enforced; defaults to 0644 |

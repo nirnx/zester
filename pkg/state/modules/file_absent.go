@@ -22,7 +22,7 @@ type FileAbsent struct {
 
 	// Path is the absolute path to the file or directory to remove; it
 	// defaults to the state ID.
-	Path string `zester:"name,primary" usage:"absolute path to the file or directory to remove (defaults to the state ID)"`
+	Path string `zester:"name,primary,aliases=path" usage:"absolute path to the file or directory to remove (defaults to the state ID); the path alias is accepted"`
 
 	// file is the injected file execution provider.
 	file exec.FileExec

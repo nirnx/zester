@@ -17,7 +17,7 @@ description: "Manage a block of content between marker lines in a file."
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | absolute path to the target file; defaults to the state ID |
+| `name` | `string` | No | State ID | absolute path to the target file; defaults to the state ID; the path alias is accepted |
 | `content` | `string` | No | *(none)* | desired content placed between the marker lines |
 | `marker_start` | `string` | No | `# START managed zone` | line that starts the managed block |
 | `marker_end` | `string` | No | `# END managed zone` | line that ends the managed block |

@@ -484,3 +484,28 @@ cases:
       source: /srv/app
       makedirs: 2
     want_error: value_invalid
+
+  # --- Vocabulary unification (PR-19 review): the `path` alias for the primary
+  # is now accepted by EVERY file.* module, not just the 7 that had it —
+  # `- path: <p>` behaves identically across the family. ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Dest: /srv/aliased
+  - label: path-alias-cli
+    universe: cli
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Dest: /srv/aliased
+  - label: path-alias-msgpack
+    universe: msgpack
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Dest: /srv/aliased

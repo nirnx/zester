@@ -73,16 +73,29 @@ func run(root string, claimed map[string]bool) error {
 	}
 
 	execReg := buildExecmodRegistry()
+	execNames := map[string]bool{}
 	var execOnly []modschema.ModuleInfo // execution-only: the exec page + docdata set
 	for _, name := range execmodSpecNames(execReg) {
 		mi, ok := execReg.Describe(name)
 		if !ok {
 			continue
 		}
+		execNames[mi.Module] = true
 		if stateNames[mi.Module] {
 			continue // dual-surface (cmd.run): the state page/schema/docdata own it
 		}
 		execOnly = append(execOnly, mi)
+	}
+
+	// Dual-surface overlay, mirroring the peel's DocSource (internal/peeld/
+	// sysdoc.go): a state module whose name is ALSO an execmod function gets
+	// AlsoExecmod, so the embedded offline docs render the same "also
+	// reachable as an execution module" header live sys.doc renders — offline
+	// and live views of cmd.run agree byte-for-byte (PR-19 review).
+	for i := range stateSpecd {
+		if execNames[stateSpecd[i].Module] {
+			stateSpecd[i].AlsoExecmod = true
+		}
 	}
 
 	// allInfos drives Effects-by-kind coverage and docdata (both kind-agnostic):

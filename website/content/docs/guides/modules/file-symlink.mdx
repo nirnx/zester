@@ -17,7 +17,7 @@ description: "Ensure a symbolic link exists at a path, pointing to a target."
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | absolute path for the symbolic link (defaults to the state ID) |
+| `name` | `string` | No | State ID | absolute path for the symbolic link (defaults to the state ID); the path alias is accepted |
 | `target` | `string` | No | *(none)* | destination the symlink should point to |
 | `force` | `bool` | No | *(none)* | replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false) |
 | `makedirs` | `bool` | No | *(none)* | create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |

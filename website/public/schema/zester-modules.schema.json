@@ -408,7 +408,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "absolute path to the file or directory to remove (defaults to the state ID)"
+              "description": "absolute path to the file or directory to remove (defaults to the state ID); the path alias is accepted"
             }
           },
           "type": "object"
@@ -432,7 +432,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "absolute path to the target file (defaults to the state ID)"
+              "description": "absolute path to the target file (defaults to the state ID); the path alias is accepted"
             },
             "text": {
               "$ref": "#/$defs/semanticTypes/StringList",
@@ -540,7 +540,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "absolute path to the target file; defaults to the state ID"
+              "description": "absolute path to the target file; defaults to the state ID; the path alias is accepted"
             }
           },
           "type": "object"
@@ -786,7 +786,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "absolute path to the target directory (defaults to the state ID)"
+              "description": "absolute path to the target directory (defaults to the state ID); the path alias is accepted"
             },
             "user": {
               "anyOf": [
@@ -1167,7 +1167,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "destination directory path (defaults to the state ID)"
+              "description": "destination directory path (defaults to the state ID); the path alias is accepted"
             },
             "source": {
               "anyOf": [
@@ -1392,7 +1392,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "absolute path for the symbolic link (defaults to the state ID)"
+              "description": "absolute path for the symbolic link (defaults to the state ID); the path alias is accepted"
             },
             "target": {
               "anyOf": [

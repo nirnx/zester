@@ -5,15 +5,6 @@ import (
 	"strings"
 )
 
-// RenderText renders a ModuleInfo as deterministic plain text: the same
-// currency sys.doc, `zester doc`, and docgen's page anatomy are derived from,
-// rendered without any markup. Output depends only on mi's fields, never on
-// ambient state, so a live Spec.Info() and its embedded pkg/moduledoc
-// projection render identically (TestDocdataMatchesLive, §7).
-//
-// Sensitive fields never expose a value: Field.Default is already redacted to
-// empty at the schema layer (§2.5), and RenderText additionally never renders
-// anything else about a sensitive field beyond its name, type, and flags.
 // RenderTextAll renders several modules' documentation as ONE document — each
 // through RenderText, joined by a blank line and a rule — in the given order.
 // It backs the FAMILY form of the doc surfaces (`sys.doc ssh_auth` /
@@ -27,6 +18,15 @@ func RenderTextAll(infos []ModuleInfo) string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
+// RenderText renders a ModuleInfo as deterministic plain text: the same
+// currency sys.doc, `zester doc`, and docgen's page anatomy are derived from,
+// rendered without any markup. Output depends only on mi's fields, never on
+// ambient state, so a live Spec.Info() and its embedded pkg/moduledoc
+// projection render identically (TestDocdataMatchesLive, §7).
+//
+// Sensitive fields never expose a value: Field.Default is already redacted to
+// empty at the schema layer (§2.5), and RenderText additionally never renders
+// anything else about a sensitive field beyond its name, type, and flags.
 func RenderText(mi ModuleInfo) string {
 	var b strings.Builder
 

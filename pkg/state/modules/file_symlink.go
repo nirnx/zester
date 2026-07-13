@@ -23,7 +23,7 @@ type FileSymlink struct {
 
 	// Path is the absolute path for the symbolic link; it defaults to the
 	// state ID.
-	Path string `zester:"name,primary" usage:"absolute path for the symbolic link (defaults to the state ID)"`
+	Path string `zester:"name,primary,aliases=path" usage:"absolute path for the symbolic link (defaults to the state ID); the path alias is accepted"`
 
 	// Target is the destination the symlink should point to.
 	Target string `zester:"target" usage:"destination the symlink should point to"`

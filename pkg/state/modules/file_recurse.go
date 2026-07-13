@@ -40,7 +40,7 @@ type FileRecurse struct {
 	reqs state.Requisites
 
 	// Dest is the destination directory path; it defaults to the state ID.
-	Dest string `zester:"name,primary" usage:"destination directory path (defaults to the state ID)"`
+	Dest string `zester:"name,primary,aliases=path" usage:"destination directory path (defaults to the state ID); the path alias is accepted"`
 
 	// Source is the source directory path to copy from. An empty source is a
 	// run-time error (kept as a plain string for legacy parity), not a
