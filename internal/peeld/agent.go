@@ -149,6 +149,12 @@ type Agent struct {
 	// compile time — are never shadowed by a same-named execmod function.
 	execReg *execmod.Registry
 
+	// specialHandlers binds each modules.DispatchSpecials name to the peel
+	// handler that runs it, driving execModule's dispatch (LookupDispatch → a
+	// bound handler) in place of the legacy if/else chain. Built once from the
+	// table in New; TestDispatchTableBound pins handlers↔table 1:1.
+	specialHandlers map[string]specialHandler
+
 	runner *state.Runner
 
 	// resolver is nil when peel-side settings rendering is disabled (a
@@ -249,7 +255,7 @@ func New(cfg *config.PeelConfig, logger *slog.Logger) *Agent {
 	if cfg.DataDir == "" {
 		cfg.DataDir = defaultDataDir
 	}
-	return &Agent{
+	a := &Agent{
 		cfg:                  cfg,
 		logger:               logger,
 		peelID:               cfg.ID,
@@ -259,6 +265,11 @@ func New(cfg *config.PeelConfig, logger *slog.Logger) *Agent {
 		settingsSnapshotPath: filepath.Join(cfg.DataDir, settingsSnapshotFileName),
 		bakedStatesDir:       filepath.Join(cfg.DataDir, bakedStatesDirName),
 	}
+	// Bind the dispatch-special handlers from the shared DispatchSpecials table.
+	// The handler method values close over a, so later field assignments
+	// (registry, execReg, mctx, …) are observed at call time.
+	a.specialHandlers = a.buildSpecialHandlers()
+	return a
 }
 
 // Run starts the peel daemon and blocks until ctx is cancelled (main cancels
@@ -437,6 +448,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.guardRunner = state.GuardRunnerFunc(a.runGuard)
 
 	a.execReg = execmod.DefaultRegistry()
+
+	// Wire sys.doc (and the merged sys.list_functions) now that both the state
+	// registry and the execmod registry exist. This must run after both are set
+	// so the DocSource sees every surface (§7).
+	a.wireDocSource()
 
 	// Set up peel-side settings resolver. The engine and resolver only need
 	// local inputs; the master curve public key (KV) is loaded in the

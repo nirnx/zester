@@ -31,6 +31,7 @@ func newTestAgent(t *testing.T) *Agent {
 	a.execReg = execmod.DefaultRegistry()
 	a.registry = state.NewRegistry()
 	a.registry.Register("test.ping", modules.NewTestPing)
+	a.wireDocSource() // registers sys.doc + merged sys.list_functions on execReg
 	a.runner = state.NewRunner(discardLogger())
 
 	js := bustest.NewFakeJS()
@@ -49,16 +50,20 @@ func newTestAgent(t *testing.T) *Agent {
 
 // TestReadOnlyModuleClassification pins the exact read-only set: facts.*
 // EXCEPT the mutating facts.set (C7), settings.*/pillar.*, test.ping,
-// sys.list_functions, grains.* — and nothing else.
+// sys.list_functions, sys.doc, grains.* — and nothing else. The
+// facts./settings./pillar. classification is now derived from the shared
+// modules.DispatchSpecials table (IsReadOnlyDispatch).
 func TestReadOnlyModuleClassification(t *testing.T) {
 	a := newTestAgent(t)
 
 	readOnly := []string{
 		"facts.get", "facts.items", "facts.keys",
+		"facts.bogus_query", // unknown facts subfunction still routes read-only (family catch-all)
 		"settings.get", "settings.items", "settings.keys",
 		"pillar.get", "pillar.items",
 		"test.ping",
 		"sys.list_functions",
+		"sys.doc",
 		"grains.item", "grains.items",
 	}
 	for _, m := range readOnly {
