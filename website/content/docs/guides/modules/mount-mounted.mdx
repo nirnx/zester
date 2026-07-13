@@ -1,22 +1,58 @@
 ---
 title: "mount.mounted"
-description: "Ensures a filesystem is mounted and optionally present in /etc/fstab."
+description: "Ensure a filesystem is mounted at a mount point and recorded in fstab."
+---
+
+{/* zester-docgen:managed module="mount.mounted" */}
+
+**Source**: `pkg/state/modules/mount_mounted.go`
+
+---
+
+`mount.mounted` ensures SOMETHING is mounted at the mount point and, with `persist` (the default), that the declared fstab entry — `device`, `fstype`, `opts`, `dump`, and `pass` — is present. The mount point defaults to the state ID. `device` is required; `fstype` defaults to `ext4` and `opts` to `defaults`.
+
+**Deliberately not compared:** the LIVE mount's device/fstype/options. Comparing the declared fstab-language configuration against the kernel's `/proc/mounts` view needs Salt-style normalization (fstab-only options like `nofail`/`_netdev` never appear in `/proc/mounts`, negotiated fstypes like `nfs`→`nfs4`, `UUID=`/`LABEL=` device aliasing) — without it every mismatch would escalate to an unmount+remount of a live production filesystem on every run. That facet is deferred until the normalization exists; silent blindness beats production unmounts.
+
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Mount point path |
-| `device` | string | — | **Required.** Device or UUID |
-| `fstype` | string | `ext4` | Filesystem type |
-| `opts` | string | `defaults` | Mount options |
-| `dump` | int | `0` | Fstab dump field |
-| `pass` | int | `0` | Fstab pass field |
-| `persist` | bool | `true` | Add/update entry in `/etc/fstab` |
-| `require` | list | — | Requisite states |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | mount point path; defaults to the state ID |
+| `device` | `string` | Yes | *(none)* | device or source to mount (a block device, UUID=/LABEL= alias, or NFS export); required |
+| `fstype` | `string` | No | `ext4` | filesystem type (ext4, xfs, nfs, …); defaults to ext4 |
+| `opts` | `string` | No | `defaults` | mount options recorded in fstab (comma-separated); defaults to "defaults" |
+| `dump` | `int` | No | *(none)* | fstab dump field (fifth column); defaults to 0 |
+| `pass` | `int` | No | *(none)* | fstab fsck pass-order field (sixth column); defaults to 0 |
+| `persist` | `bool` | No | `true` | record the entry in fstab so it survives a reboot; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
-## Example
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Probes whether anything is mounted at the mount point (by reading `/proc/mounts`). With `persist` (the default) it also verifies the `/etc/fstab` entry EXACTLY matches the declared device, fstype, options, dump, and pass. Reports a change when the mount point is unmounted, or when the fstab entry is missing or differs. It deliberately does NOT compare the live mount's own device/fstype/options (see the deferred live-facet note), so a mount already serving the point never re-triggers a churn.
+
+### Apply
+
+Re-probes the mount state (a self-contained flow: a watch-forced Apply bypasses Check). With `persist`, it writes or updates the fstab entry when it is missing or mismatched. It mounts the device ONLY when nothing is currently mounted at the point — an existing mount is never unmounted or remounted, even one that would look "wrong" under a naive live comparison. A fully converged entry (mounted, fstab matches) is a clean no-op. Reports the device, mount point, fstype, options, and persist flag in its details.
+
+### Revert
+
+Undoes only what this run's Apply did: it unmounts a filesystem THIS Apply mounted and removes an fstab entry THIS Apply added — nothing else. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op; it never unmounts a live filesystem or edits fstab for a mount it did not create.
+
+
+---
+
+## Examples
+
+### Mount a data volume and record it in fstab
+
+The mount point defaults to the state ID; device is required; persist (default true) writes the fstab entry.
 
 ```yaml
 /mnt/data:
@@ -24,19 +60,51 @@ description: "Ensures a filesystem is mounted and optionally present in /etc/fst
     - device: /dev/sdb1
     - fstype: xfs
     - opts: defaults,noatime
-    - persist: true
-    - require:
-      - pkg.installed:xfsprogs
-
-/mnt/nfs:
-  mount.mounted:
-    - device: "nfs-server:/exports/data"
-    - fstype: nfs
-    - opts: "rw,hard,intr"
+    - pass: 2
 ```
 
-## Behaviour
+### Mount an NFS export
 
-- Check: verifies mount point is active via `/proc/mounts`; if `persist=true`, also verifies fstab entry matches.
-- Apply: writes fstab entry (if `persist=true`), then mounts if not already mounted.
-- Revert: unmounts (if Apply mounted it) and removes fstab entry (if Apply added it).
+fstab-only options like nofail/_netdev are recorded in fstab but never compared against the live mount.
+
+```yaml
+nfs-share:
+  mount.mounted:
+    - name: /mnt/share
+    - device: 10.0.0.5:/vol
+    - fstype: nfs
+    - opts: defaults,nofail,_netdev
+    - require:
+      - "pkg.installed:nfs-common"
+```
+
+### Mount a device ad hoc
+
+The bare positional argument is the mount point; device is a key=value.
+
+```bash
+zester 'db*' mount.mounted /mnt/data device=/dev/sdb1 fstype=xfs
+```
+
+
+---
+
+## Notes
+
+> **The live mount's config is not compared**
+>
+> mount.mounted compares only mount-point PRESENCE and the fstab entry — never the live mount's own device/fstype/options. Reconciling fstab-language configuration with the kernel's `/proc/mounts` view needs normalization (fstab-only options, negotiated fstypes, UUID=/LABEL= aliasing) that does not yet exist; without it, a naive comparison would perpetually escalate to unmounting a live production filesystem. Apply mounts only when nothing is mounted at the point and NEVER unmounts.
+
+> **persist defaults to true; integer dump/pass are honored**
+>
+> `persist` defaults to true (the fstab entry is written so the mount survives a reboot); set `persist: false` to mount without editing fstab. Under the uniform decoder an integer `dump`/`pass` (including a reactor-dispatched msgpack-sized integer) coerces to the integer field, and an integer or truthy-string `persist` (`1`, `"true"`) is honored where the legacy `.(int)`/`.(bool)` assertions silently dropped them.
+
+
+---
+
+## Divergences
+
+- BD-1
+- BD-2
+- BD-6
+- BD-7

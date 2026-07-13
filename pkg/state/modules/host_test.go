@@ -8,6 +8,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 func testHostMctx(file *exectest.FakeFileExec) *exec.ModuleContext {
@@ -15,7 +16,7 @@ func testHostMctx(file *exectest.FakeFileExec) *exec.ModuleContext {
 }
 
 func TestHostPresentName(t *testing.T) {
-	s, err := NewHostPresentBuilder(testHostMctx(exectest.NewFakeFileExec()))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip": "10.0.0.5",
 	})
 	if err != nil {
@@ -27,7 +28,7 @@ func TestHostPresentName(t *testing.T) {
 }
 
 func TestHostPresentMissingIP(t *testing.T) {
-	_, err := NewHostPresentBuilder(testHostMctx(exectest.NewFakeFileExec()))("web1", map[string]any{})
+	_, err := NewHostPresentBuilder(testHostMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("web1", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when ip is missing")
 	}
@@ -38,7 +39,7 @@ func TestHostPresentAddsEntry(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n"), 0644)
 
-	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip": "10.0.0.5",
 	})
 	if err != nil {
@@ -88,7 +89,7 @@ func TestHostPresentAppendsToExistingIPLine(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/etc/hosts", []byte("10.0.0.5\thost-a\n"), 0644)
 
-	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip": "10.0.0.5",
 	})
 	if err != nil {
@@ -109,7 +110,7 @@ func TestHostPresentMovesHostnameFromOtherIP(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/etc/hosts", []byte("10.0.0.4\tweb1\n10.0.0.9\tother web1\n"), 0644)
 
-	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip": "10.0.0.5",
 	})
 	if err != nil {
@@ -131,7 +132,7 @@ func TestHostPresentPathOverride(t *testing.T) {
 	ctx := context.Background()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip":   "10.0.0.5",
 		"path": "/tmp/hosts",
 	})
@@ -150,12 +151,39 @@ func TestHostPresentPathOverride(t *testing.T) {
 	}
 }
 
+func TestHostPresentPathAliasPrecedence(t *testing.T) {
+	// The per-field ALIAS exemplar at the module level: the hosts-file path binds
+	// `config` with a `path` alias and an eager /etc/hosts default. `config` wins
+	// over `path`; with neither, the default applies.
+	cases := []struct {
+		name   string
+		config map[string]any
+		want   string
+	}{
+		{"config-wins", map[string]any{"ip": "10.0.0.5", "config": "/etc/hosts.d/win", "path": "/tmp/lose"}, "/etc/hosts.d/win"},
+		{"path-alias", map[string]any{"ip": "10.0.0.5", "path": "/tmp/hosts"}, "/tmp/hosts"},
+		{"empty-config-falls-to-path", map[string]any{"ip": "10.0.0.5", "config": "", "path": "/tmp/hosts"}, "/tmp/hosts"},
+		{"default", map[string]any{"ip": "10.0.0.5"}, "/etc/hosts"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := NewHostPresentBuilder(testHostMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("web1", tc.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := s.(*HostPresent).Path; got != tc.want {
+				t.Errorf("Path = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHostPresentRevert(t *testing.T) {
 	ctx := context.Background()
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n"), 0644)
 
-	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip": "10.0.0.5",
 	})
 	if err != nil {
@@ -177,7 +205,7 @@ func TestHostPresentRevertAfterCreateRemovesFile(t *testing.T) {
 	ctx := context.Background()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip":   "10.0.0.5",
 		"path": "/tmp/hosts",
 	})
@@ -205,7 +233,7 @@ func TestHostPresentRevertFreshInstanceNoOp(t *testing.T) {
 	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n10.0.0.9\tother\n"), 0644)
 
 	// Fresh instance: Apply never ran (the runner's ModeRevert call pattern).
-	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip": "10.0.0.5",
 	})
 	if err != nil {
@@ -233,7 +261,7 @@ func TestHostPresentReadErrorFailsPhases(t *testing.T) {
 	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n"), 0644)
 	fakeFile.SetReadError("/etc/hosts", errors.New("input/output error"))
 
-	s, err := NewHostPresentBuilder(testHostMctx(fakeFile))("web1", map[string]any{
+	s, err := NewHostPresentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{
 		"ip": "10.0.0.5",
 	})
 	if err != nil {
@@ -253,7 +281,7 @@ func TestHostPresentReadErrorFailsPhases(t *testing.T) {
 }
 
 func TestHostAbsentName(t *testing.T) {
-	s, err := NewHostAbsentBuilder(testHostMctx(exectest.NewFakeFileExec()))("web1", map[string]any{})
+	s, err := NewHostAbsentBuilder(testHostMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("web1", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +295,7 @@ func TestHostAbsentRemovesEntry(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n10.0.0.5\tweb1 web2\n"), 0644)
 
-	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +336,7 @@ func TestHostAbsentDropsWholeLine(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/etc/hosts", []byte("10.0.0.5\tweb1\n"), 0644)
 
-	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +353,7 @@ func TestHostAbsentMissingFile(t *testing.T) {
 	ctx := context.Background()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +378,7 @@ func TestHostAbsentRevertFreshInstanceNoOp(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n10.0.0.5\tweb1\n"), 0644)
 
-	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +403,7 @@ func TestHostAbsentReadErrorFailsPhases(t *testing.T) {
 	fakeFile.PreCreate("/etc/hosts", []byte("10.0.0.5\tweb1\n"), 0644)
 	fakeFile.SetReadError("/etc/hosts", errors.New("input/output error"))
 
-	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +424,7 @@ func TestHostAbsentRevertRestoresBackup(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/etc/hosts", []byte("127.0.0.1\tlocalhost\n10.0.0.5\tweb1\n"), 0644)
 
-	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile))("web1", map[string]any{})
+	s, err := NewHostAbsentBuilder(testHostMctx(fakeFile), modschema.DecodeOptions{})("web1", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,289 @@
+module: host.present
+# Permanent differential contract for the host.present migration — the per-field
+# ALIAS exemplar. `name` is the primary (defaulting to the state ID), `ip` is
+# `required`, and the hosts-file path binds the `config` key with a `path` alias
+# and an EAGER `default=/etc/hosts` (so `config` wins over `path`, and either wins
+# over the default — reproducing the legacy `config`>`path`>`/etc/hosts`
+# precedence). All parameters are strings, so the only behavioral divergence is
+# BD-6. These cases were approved by the legacy-vs-new equivalence comparison while
+# the legacy constructor still existed (see the migration changelog); after its
+# deletion RunContract replays them as the permanent regression guard. Accept cases
+# pin the decoded exported-field projection; reject cases pin the error kind.
+#   BD-6 — a wrong-typed value is coerced (a numeric name/ip/config to its string
+#          form) or rejected (a composite name/ip/config) instead of silently
+#          falling back / hard-erroring; the numeric `ip` accept is an ERROR->ACCEPT
+#          flip on the REQUIRED param;
+#   §2.1 alias fall-through / empty-string (PARITY, not a BD) — `config` wins over
+#          `path`; an empty `config` falls THROUGH to `path`; an all-empty path
+#          eager-defaults to /etc/hosts; an empty/nil name falls back to the state
+#          ID; an absent/empty ip is missing_required.
+cases:
+  # ============================ name (primary) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: h
+    input:
+      name: web1
+      ip: 10.0.0.5
+    want:
+      Hostname: web1
+      IP: 10.0.0.5
+  - label: string-name-msgpack
+    universe: msgpack
+    id: h
+    input:
+      name: web1
+      ip: 10.0.0.5
+    want:
+      Hostname: web1
+  - label: string-name-cli
+    universe: cli
+    id: h
+    input:
+      name: web1
+      ip: 10.0.0.5
+    want:
+      Hostname: web1
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+    want:
+      Hostname: web1
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: web1
+    input:
+      name: ""
+      ip: 10.0.0.5
+    want:
+      Hostname: web1
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: web1
+    input:
+      name:
+      ip: 10.0.0.5
+    want:
+      Hostname: web1
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: h
+    bd: BD-6
+    input:
+      name: 123
+      ip: 10.0.0.5
+    want:
+      Hostname: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: h
+    bd: BD-6
+    input:
+      name: 123
+      ip: 10.0.0.5
+    want:
+      Hostname: "123"
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: h
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      ip: 10.0.0.5
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: h
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      ip: 10.0.0.5
+    want_error: wrong_type
+
+  # ============================== ip (required) ==============================
+  - label: ip-string-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+    want:
+      IP: 10.0.0.5
+  - label: ip-missing-rejected-yaml
+    universe: yaml
+    id: web1
+    input: {}
+    want_error: missing_required
+  - label: ip-empty-rejected-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: ""
+    want_error: missing_required
+  - label: ip-missing-rejected-msgpack
+    universe: msgpack
+    id: web1
+    input: {}
+    want_error: missing_required
+  # BD-6 (ERROR->ACCEPT flip on a REQUIRED param): a numeric ip is coerced to its
+  # string form and ACCEPTED, where legacy config["ip"].(string) missed the
+  # non-string and hard-errored 'ip is required'.
+  - label: ip-numeric-accepted-yaml
+    universe: yaml
+    id: web1
+    bd: BD-6
+    input:
+      ip: 123
+    want:
+      IP: "123"
+  - label: ip-numeric-accepted-msgpack
+    universe: msgpack
+    id: web1
+    bd: BD-6
+    input:
+      ip: 123
+    want:
+      IP: "123"
+  - label: ip-composite-rejected-yaml
+    universe: yaml
+    id: web1
+    bd: BD-6
+    input:
+      ip:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ===================== Path (config, path alias, default) =====================
+  # Parity: config sets the path.
+  - label: config-sets-path-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+      config: /etc/hosts.d/custom
+    want:
+      Path: /etc/hosts.d/custom
+  # Parity: the legacy `path` alias sets the path when config is absent.
+  - label: path-alias-sets-path-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+      path: /tmp/hosts
+    want:
+      Path: /tmp/hosts
+  # Parity (§2.1 alias precedence): config wins over path when BOTH are set.
+  - label: config-wins-over-path-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+      config: /etc/hosts.d/win
+      path: /tmp/lose
+    want:
+      Path: /etc/hosts.d/win
+  # Parity (§2.1 empty fall-through): an EMPTY config falls through to path.
+  - label: empty-config-falls-through-to-path-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+      config: ""
+      path: /tmp/hosts
+    want:
+      Path: /tmp/hosts
+  # Parity: neither config nor path -> the eager default /etc/hosts.
+  - label: path-default-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+    want:
+      Path: /etc/hosts
+  # Parity: both config and path empty -> the eager default.
+  - label: both-empty-defaults-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+      config: ""
+      path: ""
+    want:
+      Path: /etc/hosts
+  # BD-6: a numeric config is coerced to its string form (was dropped to the default).
+  - label: config-numeric-coerced-yaml
+    universe: yaml
+    id: web1
+    bd: BD-6
+    input:
+      ip: 10.0.0.5
+      config: 123
+    want:
+      Path: "123"
+  - label: config-numeric-coerced-msgpack
+    universe: msgpack
+    id: web1
+    bd: BD-6
+    input:
+      ip: 10.0.0.5
+      config: 123
+    want:
+      Path: "123"
+  - label: config-composite-rejected-yaml
+    universe: yaml
+    id: web1
+    bd: BD-6
+    input:
+      ip: 10.0.0.5
+      config:
+        - a
+        - b
+    want_error: wrong_type
+  # BD-6 through the `path` ALIAS source (not just `config`): coercion/rejection is
+  # origin-independent, so a numeric value delivered via the alias is coerced and a
+  # composite via the alias is rejected exactly as through the canonical `config`.
+  - label: path-alias-numeric-coerced-yaml
+    universe: yaml
+    id: web1
+    bd: BD-6
+    input:
+      ip: 10.0.0.5
+      path: 123
+    want:
+      Path: "123"
+  - label: path-alias-numeric-coerced-msgpack
+    universe: msgpack
+    id: web1
+    bd: BD-6
+    input:
+      ip: 10.0.0.5
+      path: 123
+    want:
+      Path: "123"
+  - label: path-alias-composite-rejected-yaml
+    universe: yaml
+    id: web1
+    bd: BD-6
+    input:
+      ip: 10.0.0.5
+      path:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== misc ==============================
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: web1
+    input:
+      ip: 10.0.0.5
+      require:
+        - file.managed:/etc/hosts
+    want:
+      IP: 10.0.0.5

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 func testMountMctx(mount *exectest.FakeMountExec) *exec.ModuleContext {
@@ -23,7 +24,7 @@ func testMountMctx(mount *exectest.FakeMountExec) *exec.ModuleContext {
 
 func TestMountMountedName(t *testing.T) {
 	mctx := testMountMctx(exectest.NewFakeMountExec())
-	s, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, err := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	if err != nil {
@@ -36,7 +37,7 @@ func TestMountMountedName(t *testing.T) {
 
 func TestMountMountedDefaultMountPoint(t *testing.T) {
 	mctx := testMountMctx(exectest.NewFakeMountExec())
-	s, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, err := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	if err != nil {
@@ -50,16 +51,56 @@ func TestMountMountedDefaultMountPoint(t *testing.T) {
 
 func TestMountMountedDeviceRequired(t *testing.T) {
 	mctx := testMountMctx(exectest.NewFakeMountExec())
-	_, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{})
+	_, err := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when device is missing")
+	}
+}
+
+func TestMountMountedDecodeCoercions(t *testing.T) {
+	// Module-level BD activation through the builder (the decoder contract pins
+	// the same across all three universes). A numeric-string dump/pass coerces
+	// (BD-2), an integer persist is 1=true / 0=false (BD-7), and eager defaults
+	// materialize (fstype=ext4, opts=defaults).
+	mctx := testMountMctx(exectest.NewFakeMountExec())
+	s, err := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
+		"device":  "/dev/sdb1",
+		"dump":    "1",
+		"pass":    "2",
+		"persist": 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mm := s.(*MountMounted)
+	if mm.Dump != 1 || mm.Pass != 2 {
+		t.Errorf("Dump/Pass = %d/%d, want 1/2 (BD-2 numeric-string coercion)", mm.Dump, mm.Pass)
+	}
+	if mm.Persist {
+		t.Error("Persist = true, want false (BD-7 integer 0 = false)")
+	}
+	if mm.FSType != "ext4" || mm.Options != "defaults" {
+		t.Errorf("defaults = %q/%q, want ext4/defaults", mm.FSType, mm.Options)
+	}
+}
+
+func TestMountMountedPersistInvalidInt(t *testing.T) {
+	// BD-7 rejection arm at the module level: an integer persist other than 0/1
+	// is a typed value error, not a silent drop.
+	mctx := testMountMctx(exectest.NewFakeMountExec())
+	_, err := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
+		"device":  "/dev/sdb1",
+		"persist": 2,
+	})
+	if err == nil {
+		t.Fatal("expected an error for persist=2 (BD-7 only 0/1 are booleans)")
 	}
 }
 
 func TestMountMountedCheckNeedsChange(t *testing.T) {
 	fake := exectest.NewFakeMountExec() // nothing mounted
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	cr, err := s.Check(context.Background())
@@ -76,7 +117,7 @@ func TestMountMountedCheckNoChange(t *testing.T) {
 	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults"})
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	cr, err := s.Check(context.Background())
@@ -98,7 +139,7 @@ func TestMountMountedCheckDoesNotCompareLiveConfig(t *testing.T) {
 	fake.PreMount(exec.MountEntry{Device: "10.0.0.5:/vol", MountPoint: "/mnt/data", FSType: "nfs4", Options: "rw,relatime"})
 	fake.PreFstab(exec.MountEntry{Device: "10.0.0.5:/vol", MountPoint: "/mnt/data", FSType: "nfs", Options: "defaults,nofail,_netdev"})
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "10.0.0.5:/vol",
 		"fstype": "nfs",
 		"opts":   "defaults,nofail,_netdev",
@@ -118,7 +159,7 @@ func TestMountMountedCheckFstabPassDrift(t *testing.T) {
 	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults", Pass: 0})
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 		"pass":   2,
 	})
@@ -134,7 +175,7 @@ func TestMountMountedCheckFstabPassDrift(t *testing.T) {
 func TestMountMountedApply(t *testing.T) {
 	fake := exectest.NewFakeMountExec() // nothing mounted
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 		"fstype": "xfs",
 	})
@@ -158,7 +199,7 @@ func TestMountMountedApplyAlreadyMountedAddsFstab(t *testing.T) {
 	fake := exectest.NewFakeMountExec()
 	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	ar, err := s.Apply(context.Background())
@@ -190,7 +231,7 @@ func TestMountMountedApplyNeverUnmountsExistingMount(t *testing.T) {
 	fake.MountErr = errors.New("Mount must not be called on an occupied mount point")
 	fake.UnmountErr = errors.New("Unmount must never be called from Apply")
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	ar, err := s.Apply(context.Background())
@@ -211,7 +252,7 @@ func TestMountMountedApplyConvergedNoOp(t *testing.T) {
 	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults"})
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	ar, err := s.Apply(context.Background())
@@ -228,7 +269,7 @@ func TestMountMountedConvergence(t *testing.T) {
 	// (mounted presence + fstab entry incl. dump/pass).
 	fake := exectest.NewFakeMountExec() // nothing mounted, empty fstab
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 		"fstype": "xfs",
 		"opts":   "defaults,noatime",
@@ -256,7 +297,7 @@ func TestMountMountedConvergence(t *testing.T) {
 func TestMountMountedRevert(t *testing.T) {
 	fake := exectest.NewFakeMountExec() // nothing mounted
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	_, _ = s.Apply(context.Background())
@@ -284,7 +325,7 @@ func TestMountMountedRevertFreshInstanceNoOp(t *testing.T) {
 	fake.PreMount(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4"})
 	fake.PreFstab(exec.MountEntry{Device: "/dev/sdb1", MountPoint: "/mnt/data", FSType: "ext4", Options: "defaults"})
 	mctx := testMountMctx(fake)
-	s, _ := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, _ := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device": "/dev/sdb1",
 	})
 	ar, err := s.Revert(context.Background())
@@ -307,7 +348,7 @@ func TestMountMountedRevertFreshInstanceNoOp(t *testing.T) {
 
 func TestMountMountedNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Mount: nil}}
-	_, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{"device": "/dev/sdb1"})
+	_, err := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{"device": "/dev/sdb1"})
 	if err == nil {
 		t.Fatal("expected error when mount provider is nil")
 	}
@@ -315,7 +356,7 @@ func TestMountMountedNoProvider(t *testing.T) {
 
 func TestMountMountedRequisites(t *testing.T) {
 	mctx := testMountMctx(exectest.NewFakeMountExec())
-	s, err := NewMountMountedBuilder(mctx)("/mnt/data", map[string]any{
+	s, err := NewMountMountedBuilder(mctx, modschema.DecodeOptions{})("/mnt/data", map[string]any{
 		"device":  "/dev/sdb1",
 		"require": []any{"pkg.installed:nfs-utils"},
 	})

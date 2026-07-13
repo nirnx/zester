@@ -9,6 +9,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 const sshAuthTestPath = "/home/alice/.ssh/authorized_keys"
@@ -18,7 +19,7 @@ func testSSHAuthMctx(file *exectest.FakeFileExec) *exec.ModuleContext {
 }
 
 func TestSSHAuthPresentName(t *testing.T) {
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()))("AAAAKEY", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("AAAAKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -30,9 +31,49 @@ func TestSSHAuthPresentName(t *testing.T) {
 }
 
 func TestSSHAuthPresentRequiresUserOrConfig(t *testing.T) {
-	_, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()))("AAAAKEY", map[string]any{})
+	_, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("AAAAKEY", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when neither user nor config is set")
+	}
+}
+
+func TestSSHAuthPresentTrimsKey(t *testing.T) {
+	// The name-TrimSpace is builder-tail module logic (a decoder never trims):
+	// leading/trailing whitespace around the key blob is stripped, while a full
+	// key line's internal spaces are preserved.
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("  AAAAKEY  ", map[string]any{
+		"config": sshAuthTestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.(*SSHAuthPresent).Key; got != "AAAAKEY" {
+		t.Errorf("Key = %q, want trimmed %q", got, "AAAAKEY")
+	}
+}
+
+func TestSSHAuthAbsentTrimsKey(t *testing.T) {
+	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("  AAAAKEY  ", map[string]any{
+		"config": sshAuthTestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.(*SSHAuthAbsent).Key; got != "AAAAKEY" {
+		t.Errorf("Key = %q, want trimmed %q", got, "AAAAKEY")
+	}
+}
+
+func TestSSHAuthPresentEncDefault(t *testing.T) {
+	// enc carries an eager default=ssh-rsa.
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("AAAAKEY", map[string]any{
+		"config": sshAuthTestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.(*SSHAuthPresent).Enc; got != "ssh-rsa" {
+		t.Errorf("Enc default = %q, want ssh-rsa", got)
 	}
 }
 
@@ -40,7 +81,7 @@ func TestSSHAuthPresentAddsKeyLine(t *testing.T) {
 	ctx := context.Background()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config":  sshAuthTestPath,
 		"comment": "alice@example",
 	})
@@ -90,7 +131,7 @@ func TestSSHAuthPresentModes(t *testing.T) {
 	ctx := context.Background()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -120,7 +161,7 @@ func TestSSHAuthPresentFullLineVerbatim(t *testing.T) {
 	ctx := context.Background()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("ssh-ed25519 AAAAC3XYZ bob@host", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("ssh-ed25519 AAAAC3XYZ bob@host", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -140,7 +181,7 @@ func TestSSHAuthPresentReplacesExistingLineForSameBlob(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate(sshAuthTestPath, []byte("ssh-rsa AAAATESTKEY old-comment\nssh-rsa AAAAOTHER other@host\n"), 0600)
 
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config":  sshAuthTestPath,
 		"comment": "new-comment",
 	})
@@ -162,7 +203,7 @@ func TestSSHAuthPresentRevert(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate(sshAuthTestPath, []byte("ssh-rsa AAAAOTHER other@host\n"), 0600)
 
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -185,7 +226,7 @@ func TestSSHAuthPresentRevertRestoresMode(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate(sshAuthTestPath, []byte("ssh-rsa AAAAOTHER other@host\n"), 0600)
 
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -214,7 +255,7 @@ func TestSSHAuthPresentRevertFreshInstanceNoOp(t *testing.T) {
 
 	// Fresh instance: Apply never ran (the runner's ModeRevert call pattern).
 	// Revert must NOT delete the user's authorized_keys.
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -243,7 +284,7 @@ func TestSSHAuthPresentReadErrorFailsPhases(t *testing.T) {
 	fakeFile.PreCreate(sshAuthTestPath, []byte(content), 0600)
 	fakeFile.SetReadError(sshAuthTestPath, errors.New("stale NFS file handle"))
 
-	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthPresentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -264,7 +305,7 @@ func TestSSHAuthPresentReadErrorFailsPhases(t *testing.T) {
 }
 
 func TestSSHAuthAbsentName(t *testing.T) {
-	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()))("AAAAKEY", map[string]any{
+	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("AAAAKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -276,7 +317,7 @@ func TestSSHAuthAbsentName(t *testing.T) {
 }
 
 func TestSSHAuthAbsentRequiresUserOrConfig(t *testing.T) {
-	_, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()))("AAAAKEY", map[string]any{})
+	_, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(exectest.NewFakeFileExec()), modschema.DecodeOptions{})("AAAAKEY", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when neither user nor config is set")
 	}
@@ -287,7 +328,7 @@ func TestSSHAuthAbsentRemovesKey(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate(sshAuthTestPath, []byte("ssh-rsa AAAATESTKEY alice@example\nssh-rsa AAAAOTHER other@host\n"), 0600)
 
-	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -328,7 +369,7 @@ func TestSSHAuthAbsentMissingFile(t *testing.T) {
 	ctx := context.Background()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -356,7 +397,7 @@ func TestSSHAuthAbsentRevertFreshInstanceNoOp(t *testing.T) {
 	content := "ssh-rsa AAAA1 a@h\nssh-rsa AAAA2 b@h\nssh-rsa AAAA3 c@h\n"
 	fakeFile.PreCreate(sshAuthTestPath, []byte(content), 0600)
 
-	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile))("AAAA2", map[string]any{
+	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAA2", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {
@@ -385,7 +426,7 @@ func TestSSHAuthAbsentReadErrorFailsPhases(t *testing.T) {
 	fakeFile.PreCreate(sshAuthTestPath, []byte(content), 0600)
 	fakeFile.SetReadError(sshAuthTestPath, errors.New("permission denied"))
 
-	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile))("AAAATESTKEY", map[string]any{
+	s, err := NewSSHAuthAbsentBuilder(testSSHAuthMctx(fakeFile), modschema.DecodeOptions{})("AAAATESTKEY", map[string]any{
 		"config": sshAuthTestPath,
 	})
 	if err != nil {

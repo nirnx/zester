@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -16,13 +17,27 @@ import (
 // and optionally persisted across reboots. With persist (the default) the
 // drop-in file entry is verified too — a runtime-only match (e.g. a manual
 // `sysctl -w`) is drift, since the value would not survive a reboot.
+//
+// SysctlPresent is also its own schema proto: the tagged exported fields ARE the
+// module's parameter declaration (one schema declaration per module). `value` is
+// `required` and `persist` carries an eager `default=true`, reproducing the legacy
+// construction-time behavior — but through the uniform decoder, so a numeric
+// `value`/`name` coerces to its string form (BD-6) and an integer/truthy-string
+// `persist` is honored (BD-2/BD-7) where the legacy `.(string)`/`.(bool)`
+// assertions silently dropped them. The require-file-provider-when-persist rule
+// stays in the builder tail (it is cross-field module logic, not schema). The
+// unexported runtime fields (id, reqs, sysctl, file, revert memos) are untagged,
+// so the schema compiler skips them.
 type SysctlPresent struct {
 	id   string
 	reqs state.Requisites
 
-	Key     string
-	Value   string
-	Persist bool
+	// Key is the kernel parameter name; it defaults to the state ID.
+	Key string `zester:"name,primary" usage:"kernel parameter name (e.g. net.ipv4.ip_forward); defaults to the state ID"`
+	// Value is the desired parameter value; required.
+	Value string `zester:"value,required" usage:"desired parameter value; required"`
+	// Persist records the value in a sysctl drop-in so it survives a reboot.
+	Persist bool `zester:"persist,default=true" usage:"persist the value in a sysctl drop-in so it survives a reboot; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
 	sysctl exec.SysctlExec
 	// file verifies the persist drop-in (exec.SysctlConfPath): SysctlExec
@@ -41,40 +56,99 @@ type SysctlPresent struct {
 	persistOriginal string // its value (valid when persistHadEntry)
 }
 
-// NewSysctlPresentBuilder returns a state.Builder that creates SysctlPresent states.
-func NewSysctlPresentBuilder(mctx *exec.ModuleContext) state.Builder {
+// sysctlPresentSpec is the compiled schema + documentation for sysctl.present. Its
+// Doc is drift-corrected against the live Check/Apply/Revert behavior — notably
+// the persist facet (a runtime-only match is drift) and the exact revert memoing.
+var sysctlPresentSpec = mustSpec("sysctl.present", modschema.KindState, SysctlPresent{}, modschema.Doc{
+	Summary: "Ensure a kernel parameter is set to a value at runtime and, by default, persisted.",
+	Description: "`sysctl.present` ensures a kernel parameter (`name`, defaulting to the state ID) is set " +
+		"to the desired `value` at runtime and, with `persist` (the default), that the same value is " +
+		"recorded in the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) so it survives a reboot. `value` is required. With `persist` " +
+		"enabled a runtime-only match — for example a manual `sysctl -w` — counts as drift, because the " +
+		"value would not survive a reboot.",
+	Effects: modschema.Effects{
+		Check: "Reads the current runtime value (via `sysctl -n`) and reports a change when it differs from " +
+			"`value`. With `persist` (the default) it ALSO reads the Zester sysctl drop-in " +
+			"(`/etc/sysctl.d/99-zester.conf`) and reports a change when the " +
+			"key is absent from it or persisted with a different value — so a runtime-only match is drift. " +
+			"A non-not-exist read error on the drop-in fails the phase rather than being treated as \"no " +
+			"entry\".",
+		Apply: "Re-reads the runtime value and, with `persist`, the drop-in (a self-contained flow: a " +
+			"watch-forced Apply bypasses Check). It sets the runtime value (via `sysctl -w key=value`) only when it differs and writes " +
+			"the drop-in entry (`/etc/sysctl.d/99-zester.conf`) only when it is missing or wrong — each " +
+			"facet is memoized for revert " +
+			"independently. A fully converged key is a clean no-op. Reports the key, value, previous " +
+			"runtime value, and persist flag in its details.",
+		Revert: "Undoes only the facets this run's Apply actually changed. A runtime value Apply set is " +
+			"restored to its pre-Apply value; a drop-in entry Apply changed is restored to its prior value " +
+			"(or removed outright when Apply introduced it) — never re-persisting the old RUNTIME value. A " +
+			"fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op; it never " +
+			"writes the zero value or invents a persist entry.",
+	},
+	Examples: []modschema.Example{
+		{
+			Title:       "Enable IP forwarding persistently",
+			Kind:        "state",
+			Explanation: "The parameter name defaults to the state ID; persist (default true) writes the drop-in entry.",
+			Code:        "net.ipv4.ip_forward:\n  sysctl.present:\n    - value: \"1\"\n",
+		},
+		{
+			Title:       "Tune swappiness at runtime only",
+			Kind:        "state",
+			Explanation: "persist: false sets the runtime value without recording a drop-in entry.",
+			Code:        "vm.swappiness:\n  sysctl.present:\n    - value: \"10\"\n    - persist: false\n",
+		},
+		{
+			Title:       "Set a kernel parameter ad hoc",
+			Kind:        "cli",
+			Explanation: "The bare positional argument is the parameter name; value is a key=value.",
+			Code:        "zester '*' sysctl.present net.ipv4.ip_forward value=1",
+		},
+	},
+	Notes: []modschema.Note{
+		{
+			Level: "info",
+			Title: "persist defaults to true and verifies the drop-in",
+			Body: "`persist` defaults to true: the value is written to the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) AND that " +
+				"entry is verified during Check, so a runtime-only change (a manual `sysctl -w`) reads as " +
+				"drift because it would not survive a reboot. Set `persist: false` to manage only the " +
+				"runtime value. Under the uniform decoder an integer or truthy-string `persist` (`1`, " +
+				"`\"true\"`) is honored where the legacy `.(bool)` assertion dropped it.",
+		},
+	},
+	Divergences: []string{"BD-2", "BD-6", "BD-7"},
+})
+
+// NewSysctlPresentBuilder returns a state.Builder that creates SysctlPresent states
+// using the given ModuleContext's sysctl (and, when persist is enabled, file)
+// provider. Decode policy (unknown-key handling, reserved keys) is threaded via
+// opts; the peel supplies it through modules.RegisterAll.
+func NewSysctlPresentBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions) state.Builder {
 	return func(id string, config map[string]any) (state.State, error) {
 		if mctx.Sysctl == nil {
 			return nil, fmt.Errorf("sysctl.present: no sysctl provider available")
 		}
-		return newSysctlPresent(id, config, mctx.Sysctl, mctx.File)
+		// Decode the typed parameters first. Decode is transactional and commits
+		// by replacing the whole struct, so the injected providers, id, and
+		// requisites MUST be assigned AFTER it.
+		s := &SysctlPresent{}
+		if _, err := sysctlPresentSpec.Decode(id, config, s, opts); err != nil {
+			return nil, fmt.Errorf("sysctl.present: %w", err)
+		}
+		s.id = id
+		s.sysctl = mctx.Sysctl
+		s.file = mctx.File
+		s.reqs = state.ParseRequisites(config)
+
+		// Cross-field module logic (not schema): the persist facet reads the
+		// drop-in via the file provider, so a nil file provider is only fatal
+		// when persist is enabled.
+		if s.Persist && s.file == nil {
+			return nil, fmt.Errorf("sysctl.present: %s: no file provider available (required to verify %s)", id, exec.SysctlConfPath)
+		}
+
+		return s, nil
 	}
-}
-
-func newSysctlPresent(id string, config map[string]any, sysctl exec.SysctlExec, file exec.FileExec) (state.State, error) {
-	s := &SysctlPresent{id: id, sysctl: sysctl, file: file}
-
-	s.Key, _ = config["name"].(string)
-	if s.Key == "" {
-		s.Key = id
-	}
-
-	s.Value, _ = config["value"].(string)
-	if s.Value == "" {
-		return nil, fmt.Errorf("sysctl.present: %s: value is required", id)
-	}
-
-	s.Persist = true // default true
-	if v, ok := config["persist"].(bool); ok {
-		s.Persist = v
-	}
-
-	if s.Persist && file == nil {
-		return nil, fmt.Errorf("sysctl.present: %s: no file provider available (required to verify %s)", id, exec.SysctlConfPath)
-	}
-
-	s.reqs = state.ParseRequisites(config)
-	return s, nil
 }
 
 func (s *SysctlPresent) Name() string           { return "sysctl.present:" + s.id }

@@ -1,0 +1,262 @@
+module: ssh_auth.present
+# Permanent differential contract for the ssh_auth.present migration. `name` is the
+# primary (the key blob, defaulting to the state ID), `enc` carries an EAGER
+# `default=ssh-rsa`, and `user`/`comment`/`config` are plain strings. Two pieces of
+# module logic live in the BUILDER TAIL, not the schema, so they are exercised by
+# the unit tests rather than this decoder contract: the `name` primary is
+# TrimSpace'd, and the require-`user`-OR-`config` cross-field rule (so these cases
+# decode without a user/config). The key material is PUBLIC, so no parameter is
+# sensitive. All parameters are strings, so the only behavioral divergence is BD-6.
+# These cases were approved by the legacy-vs-new equivalence comparison while the
+# legacy constructor still existed (see the migration changelog); after its
+# deletion RunContract replays them as the permanent regression guard.
+#   BD-6 — a numeric name/user/enc/comment/config is coerced to its string form, a
+#          composite is rejected (was silently dropped / fallback-to-id for name);
+#   §2.1/§3 empty-string (PARITY, not a BD) — an empty/nil name falls back to the
+#          state ID; an empty enc eager-defaults to ssh-rsa; an empty
+#          user/comment/config falls through to the "" zero value.
+cases:
+  # ============================ name (primary) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: k
+    input:
+      name: AAAAKEYBLOB
+    want:
+      Key: AAAAKEYBLOB
+  - label: string-name-msgpack
+    universe: msgpack
+    id: k
+    input:
+      name: AAAAKEYBLOB
+    want:
+      Key: AAAAKEYBLOB
+  - label: string-name-cli
+    universe: cli
+    id: k
+    input:
+      name: AAAAKEYBLOB
+    want:
+      Key: AAAAKEYBLOB
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input: {}
+    want:
+      Key: AAAAKEYBLOB
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input:
+      name: ""
+    want:
+      Key: AAAAKEYBLOB
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: AAAAKEYBLOB
+    input:
+      name:
+    want:
+      Key: AAAAKEYBLOB
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: k
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Key: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: k
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Key: "123"
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: k
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: k
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ================================ user ================================
+  - label: user-string-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input:
+      user: deploy
+    want:
+      User: deploy
+  - label: user-numeric-coerced-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      user: 123
+    want:
+      User: "123"
+  - label: user-numeric-coerced-msgpack
+    universe: msgpack
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      user: 123
+    want:
+      User: "123"
+  - label: user-composite-rejected-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      user:
+        - a
+        - b
+    want_error: wrong_type
+  # PARITY: an empty-string user falls through to the "" zero value.
+  - label: user-empty-string-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input:
+      user: ""
+    want:
+      User: ""
+
+  # ========================== enc (eager default=ssh-rsa) ==========================
+  - label: enc-string-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input:
+      enc: ssh-ed25519
+    want:
+      Enc: ssh-ed25519
+  - label: enc-default-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input: {}
+    want:
+      Enc: ssh-rsa
+  - label: enc-empty-defaults-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input:
+      enc: ""
+    want:
+      Enc: ssh-rsa
+  - label: enc-numeric-coerced-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      enc: 123
+    want:
+      Enc: "123"
+  - label: enc-numeric-coerced-msgpack
+    universe: msgpack
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      enc: 123
+    want:
+      Enc: "123"
+  - label: enc-composite-rejected-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      enc:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ================================ comment ================================
+  - label: comment-string-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input:
+      comment: alice@host
+    want:
+      Comment: alice@host
+  - label: comment-numeric-coerced-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      comment: 123
+    want:
+      Comment: "123"
+  - label: comment-numeric-coerced-msgpack
+    universe: msgpack
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      comment: 123
+    want:
+      Comment: "123"
+  - label: comment-composite-rejected-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      comment:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ================================ config ================================
+  - label: config-string-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input:
+      config: /home/alice/.ssh/authorized_keys
+    want:
+      Config: /home/alice/.ssh/authorized_keys
+  - label: config-numeric-coerced-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      config: 123
+    want:
+      Config: "123"
+  - label: config-numeric-coerced-msgpack
+    universe: msgpack
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      config: 123
+    want:
+      Config: "123"
+  - label: config-composite-rejected-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    bd: BD-6
+    input:
+      config:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== misc ==============================
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: AAAAKEYBLOB
+    input:
+      user: deploy
+      require:
+        - user.present:deploy
+    want:
+      Key: AAAAKEYBLOB
