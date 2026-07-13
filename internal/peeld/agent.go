@@ -428,7 +428,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	// Register state modules with injected execution providers.
 	a.registry = state.NewRegistry()
-	registerStateModules(a.registry, a.mctx)
+	registerStateModules(a.registry, a.mctx, logger)
 
 	logger.Info("registered state modules", "modules", a.registry.Modules())
 
