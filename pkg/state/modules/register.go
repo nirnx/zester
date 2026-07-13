@@ -57,13 +57,23 @@ func mustSpec(module string, kind modschema.Kind, proto any, doc modschema.Doc) 
 // Migrated modules carry a Spec; the rest keep their legacy providers-only
 // factories through providerBuild.
 var registrations = []Registration{
-	{Name: "file.managed", Build: providerBuild(NewFileManagedBuilder)},
+	// file.managed — self-documenting schema (the BD-1 flagship: template on
+	// paramtypes.TemplateFlag, mode on paramtypes.FileMode with a lazy 0644
+	// default). NewFileManagedBuilder is itself a BuildFunc (it threads opts into
+	// spec.Decode), so no providerBuild adapter.
+	{Name: "file.managed", Spec: fileManagedSpec, Build: NewFileManagedBuilder},
 	{Name: "file.directory", Build: providerBuild(NewFileDirectoryBuilder)},
 	{Name: "file.absent", Build: providerBuild(NewFileAbsentBuilder)},
 	{Name: "file.append", Build: providerBuild(NewFileAppendBuilder)},
 	{Name: "cmd.run", Build: providerBuild(NewCmdRunBuilder)},
-	{Name: "pkg.installed", Build: providerBuild(NewPkgInstalledBuilder)},
-	{Name: "user.present", Build: providerBuild(NewUserPresentBuilder)},
+	// pkg.installed — self-documenting schema (all-primitives migration wave).
+	// NewPkgInstalledBuilder is itself a BuildFunc, so no adapter.
+	{Name: "pkg.installed", Spec: pkgInstalledSpec, Build: NewPkgInstalledBuilder},
+	// user.present — self-documenting schema (the semantic-type-heavy migration:
+	// gid on paramtypes.GroupRef, groups/optional_groups on paramtypes.StringList,
+	// a sensitive password). NewUserPresentBuilder is itself a BuildFunc (it
+	// threads opts into spec.Decode), so no providerBuild adapter.
+	{Name: "user.present", Spec: userPresentSpec, Build: NewUserPresentBuilder},
 	{Name: "user.absent", Build: providerBuild(NewUserAbsentBuilder)},
 	{Name: "group.present", Build: providerBuild(NewGroupPresentBuilder)},
 	{Name: "group.absent", Build: providerBuild(NewGroupAbsentBuilder)},
@@ -96,8 +106,10 @@ var registrations = []Registration{
 	{Name: "file.keyvalue", Build: providerBuild(NewFileKeyValueBuilder)},
 	{Name: "file.copy", Build: providerBuild(NewFileCopyBuilder)},
 	{Name: "file.touch", Build: providerBuild(NewFileTouchBuilder)},
-	{Name: "pkg.latest", Build: providerBuild(NewPkgLatestBuilder)},
-	{Name: "pkg.purged", Build: providerBuild(NewPkgPurgedBuilder)},
+	// pkg.latest / pkg.purged — self-documenting schema (all-primitives
+	// migration wave). Both builders are themselves BuildFuncs, so no adapter.
+	{Name: "pkg.latest", Spec: pkgLatestSpec, Build: NewPkgLatestBuilder},
+	{Name: "pkg.purged", Spec: pkgPurgedSpec, Build: NewPkgPurgedBuilder},
 	{Name: "pkgrepo.managed", Build: providerBuild(NewPkgrepoManagedBuilder)},
 	{Name: "archive.extracted", Build: providerBuild(NewArchiveExtractedBuilder)},
 	{Name: "host.present", Build: providerBuild(NewHostPresentBuilder)},

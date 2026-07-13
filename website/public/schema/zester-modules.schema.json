@@ -1,6 +1,98 @@
 {
   "$defs": {
     "modules": {
+      "file.managed": {
+        "additionalProperties": true,
+        "description": "Ensure a file exists with the desired content, permissions, and ownership.",
+        "properties": {
+          "content": {
+            "description": "desired inline file content; provide either content or source (source wins if both are set)",
+            "type": "string"
+          },
+          "context": {
+            "description": "extra template variables, available as top-level names; override defaults; only used when template is enabled",
+            "type": "object"
+          },
+          "defaults": {
+            "description": "fallback template variables; context takes precedence; only used when template is enabled",
+            "type": "object"
+          },
+          "group": {
+            "description": "file group name; ownership is left unchanged when unset",
+            "type": "string"
+          },
+          "makedirs": {
+            "description": "create missing parent directories (with mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/$defs/semanticTypes/FileMode",
+            "description": "file permission mode in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits honored; defaults to 0644"
+          },
+          "name": {
+            "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+            "type": "string"
+          },
+          "source": {
+            "description": "local file path to copy content from; provide either content or source (source wins if both are set)",
+            "type": "string"
+          },
+          "template": {
+            "$ref": "#/$defs/semanticTypes/TemplateFlag",
+            "description": "render source/content as a Jinja2 template before writing (a bool, the string \"jinja\", or a truthy/falsy string); defaults to off"
+          },
+          "user": {
+            "description": "file owner username; ownership is left unchanged when unset",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "pkg.installed": {
+        "additionalProperties": true,
+        "description": "Ensure a system package is installed, optionally pinned to an exact version.",
+        "properties": {
+          "name": {
+            "description": "package to install (defaults to the state ID)",
+            "type": "string"
+          },
+          "refresh": {
+            "description": "refresh the package cache before installing",
+            "type": "boolean"
+          },
+          "version": {
+            "description": "exact version pin; any other installed version converges via install or downgrade (format depends on the detected package manager)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "pkg.latest": {
+        "additionalProperties": true,
+        "description": "Ensure a package is installed and kept at the newest available version.",
+        "properties": {
+          "name": {
+            "description": "package to keep at the newest available version (defaults to the state ID)",
+            "type": "string"
+          },
+          "refresh": {
+            "description": "refresh the package cache before Check and before Apply",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "pkg.purged": {
+        "additionalProperties": true,
+        "description": "Ensure a package is removed along with its configuration files.",
+        "properties": {
+          "name": {
+            "description": "package to purge, including its configuration files (defaults to the state ID)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "pkg.removed": {
         "additionalProperties": true,
         "description": "Ensure a system package is not installed.",
@@ -41,9 +133,125 @@
           }
         },
         "type": "object"
+      },
+      "user.present": {
+        "additionalProperties": true,
+        "description": "Ensure a user account exists with the specified attributes.",
+        "properties": {
+          "createhome": {
+            "description": "create the home directory when creating the account",
+            "type": "boolean"
+          },
+          "fullname": {
+            "description": "GECOS full-name field; only compared and set when non-empty",
+            "type": "string"
+          },
+          "gid": {
+            "$ref": "#/$defs/semanticTypes/GroupRef",
+            "description": "primary group as a numeric GID or a group name; an integer or all-digit string is a GID, any other string is a group name (taking precedence over primary_group)"
+          },
+          "groups": {
+            "$ref": "#/$defs/semanticTypes/StringList",
+            "description": "supplementary groups the account should belong to"
+          },
+          "home": {
+            "description": "home directory path; only compared and set when non-empty",
+            "type": "string"
+          },
+          "name": {
+            "description": "username for the account; defaults to the state ID",
+            "type": "string"
+          },
+          "optional_groups": {
+            "$ref": "#/$defs/semanticTypes/StringList",
+            "description": "supplementary groups added only if the account is already a member (absent groups are skipped, never created)"
+          },
+          "password": {
+            "description": "pre-hashed shadow password; converged by comparing the account's current shadow hash",
+            "type": "string",
+            "writeOnly": true
+          },
+          "primary_group": {
+            "description": "primary group name; used only when gid is not itself a group name",
+            "type": "string"
+          },
+          "remove_groups": {
+            "description": "remove supplementary groups not listed in groups (otherwise existing groups are preserved)",
+            "type": "boolean"
+          },
+          "shell": {
+            "description": "login shell path; only compared and set when non-empty",
+            "type": "string"
+          },
+          "system": {
+            "description": "create a system account (low UID range)",
+            "type": "boolean"
+          },
+          "uid": {
+            "description": "numeric user ID; only compared and set when non-zero (0 auto-assigns)",
+            "type": "integer"
+          }
+        },
+        "type": "object"
       }
     },
     "semanticTypes": {
+      "FileMode": {
+        "description": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "maximum": 4095,
+            "minimum": 0,
+            "type": "integer"
+          }
+        ]
+      },
+      "GroupRef": {
+        "description": "A group reference, given as a non-negative integer GID or a group name. An all-digit string is treated as a numeric GID, so \"1000\" and the integer 1000 resolve identically; a negative GID is rejected.",
+        "oneOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "minLength": 1,
+            "type": "string"
+          }
+        ]
+      },
+      "StringList": {
+        "description": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": [
+                "string",
+                "integer",
+                "number",
+                "boolean"
+              ]
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "TemplateFlag": {
+        "description": "A template-rendering flag. Accepts a bool, the string \"jinja\", or any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders with Jinja, so any enabling value means \"render with Jinja\".",
+        "oneOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
       "TriState": {
         "description": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false.",
         "oneOf": [
@@ -82,6 +290,46 @@
     "oneOf": [
       {
         "properties": {
+          "file.managed": {
+            "$ref": "#/$defs/modules/file.managed"
+          }
+        },
+        "required": [
+          "file.managed"
+        ]
+      },
+      {
+        "properties": {
+          "pkg.installed": {
+            "$ref": "#/$defs/modules/pkg.installed"
+          }
+        },
+        "required": [
+          "pkg.installed"
+        ]
+      },
+      {
+        "properties": {
+          "pkg.latest": {
+            "$ref": "#/$defs/modules/pkg.latest"
+          }
+        },
+        "required": [
+          "pkg.latest"
+        ]
+      },
+      {
+        "properties": {
+          "pkg.purged": {
+            "$ref": "#/$defs/modules/pkg.purged"
+          }
+        },
+        "required": [
+          "pkg.purged"
+        ]
+      },
+      {
+        "properties": {
           "pkg.removed": {
             "$ref": "#/$defs/modules/pkg.removed"
           }
@@ -111,7 +359,45 @@
         ]
       },
       {
+        "properties": {
+          "user.present": {
+            "$ref": "#/$defs/modules/user.present"
+          }
+        },
+        "required": [
+          "user.present"
+        ]
+      },
+      {
         "allOf": [
+          {
+            "not": {
+              "required": [
+                "file.managed"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "pkg.installed"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "pkg.latest"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "pkg.purged"
+              ]
+            }
+          },
           {
             "not": {
               "required": [
@@ -130,6 +416,13 @@
             "not": {
               "required": [
                 "service.running"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "user.present"
               ]
             }
           }

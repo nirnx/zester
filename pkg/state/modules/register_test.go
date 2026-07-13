@@ -108,10 +108,14 @@ func TestRegistrations_ExactlyOneBuilderShape(t *testing.T) {
 }
 
 func TestRegistrations_SpecCarryingRows(t *testing.T) {
-	// The migrated set as of tranche 0E: pilot #1 (pkg.removed) plus the
-	// semantic-type pilot (service.running + service.dead on TriState). This pins
-	// that no accidental extra Spec has been attached before its own tranche; the
-	// order is registration order (pkg.removed, then the two service rows).
+	// The migrated set as of the file.managed wave: pilot #1 (pkg.removed), the
+	// semantic-type pilot (service.running + service.dead on TriState),
+	// pkg.installed/pkg.latest/pkg.purged (all primitives, no semantic types),
+	// user.present (gid on GroupRef, groups/optional_groups on StringList, a
+	// sensitive password), and file.managed (template on TemplateFlag, mode on a
+	// lazy FileMode — the BD-1 flagship). This pins that no accidental extra Spec
+	// has been attached before its own tranche; the order is registration order,
+	// so file.managed (the first registration row) leads.
 	var withSpec []string
 	for _, r := range registrations {
 		if r.Spec != nil {
@@ -121,8 +125,9 @@ func TestRegistrations_SpecCarryingRows(t *testing.T) {
 			}
 		}
 	}
-	if !reflect.DeepEqual(withSpec, []string{"pkg.removed", "service.running", "service.dead"}) {
-		t.Errorf("spec-carrying rows = %v, want [pkg.removed service.running service.dead]", withSpec)
+	want := []string{"file.managed", "pkg.installed", "user.present", "pkg.removed", "service.running", "service.dead", "pkg.latest", "pkg.purged"}
+	if !reflect.DeepEqual(withSpec, want) {
+		t.Errorf("spec-carrying rows = %v, want %v", withSpec, want)
 	}
 }
 
@@ -140,10 +145,12 @@ func TestRegisterAll_WiresBuildersAndSpec(t *testing.T) {
 		t.Errorf("registered modules mismatch:\n got %v\nwant %v", got, wantModuleNames)
 	}
 
-	// The migrated set (0C pilot + 0E semantic-type pilot) is spec-registered;
+	// The migrated set (0C pilot + 0E semantic-type pilot + the all-primitives
+	// pkg-family wave + user.present + file.managed) is spec-registered;
 	// SpecNames is sorted.
-	if names := reg.SpecNames(); !reflect.DeepEqual(names, []string{"pkg.removed", "service.dead", "service.running"}) {
-		t.Errorf("SpecNames = %v, want [pkg.removed service.dead service.running]", names)
+	wantSpecNames := []string{"file.managed", "pkg.installed", "pkg.latest", "pkg.purged", "pkg.removed", "service.dead", "service.running", "user.present"}
+	if names := reg.SpecNames(); !reflect.DeepEqual(names, wantSpecNames) {
+		t.Errorf("SpecNames = %v, want %v", names, wantSpecNames)
 	}
 	mi, ok := reg.Describe("pkg.removed")
 	if !ok || mi.Module != "pkg.removed" || mi.Kind != modschema.KindState {
@@ -163,8 +170,8 @@ func TestRegisterAll_WiresBuildersAndSpec(t *testing.T) {
 		}
 	}
 	// A legacy module has no spec description.
-	if _, ok := reg.Describe("file.managed"); ok {
-		t.Error("file.managed should not be spec-described")
+	if _, ok := reg.Describe("file.directory"); ok {
+		t.Error("file.directory should not be spec-described")
 	}
 
 	// Parse executes the migrated plan.

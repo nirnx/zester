@@ -16,9 +16,14 @@ const policyMsg = "the doc-coverage ratchet (keystone spec §9 gate 3) only SHRI
 // unmigratedAllowlist is every built-in state module that has NOT yet been
 // migrated to a self-documenting schema (modschema.Spec). It started as the
 // full 47-name registration table (tranche 0D, §12); pilot #1 (pkg.removed,
-// tranche 0C) shrank it to 46, and the semantic-type pilot (tranche 0E,
-// service.running + service.dead onto TriState) shrank it to 44. Every
-// subsequent migration PR removes exactly the name(s) it migrates — never adds one.
+// tranche 0C) shrank it to 46, the semantic-type pilot (tranche 0E,
+// service.running + service.dead onto TriState) shrank it to 44, the
+// all-primitives pkg-family wave (pkg.installed, pkg.latest, pkg.purged)
+// shrank it to 41, the user.present migration (gid on GroupRef,
+// groups/optional_groups on StringList, a sensitive password) shrank it to
+// 40, and the file.managed migration (template on TemplateFlag, mode on a lazy
+// FileMode — the BD-1 flagship) shrank it to 39. Every subsequent migration PR
+// removes exactly the name(s) it migrates — never adds one.
 var unmigratedAllowlist = []string{
 	"archive.extracted",
 	"cmd.run",
@@ -32,7 +37,6 @@ var unmigratedAllowlist = []string{
 	"file.directory",
 	"file.keyvalue",
 	"file.line",
-	"file.managed",
 	"file.recurse",
 	"file.replace",
 	"file.symlink",
@@ -48,9 +52,6 @@ var unmigratedAllowlist = []string{
 	"module.run",
 	"mount.mounted",
 	"pip.installed",
-	"pkg.installed",
-	"pkg.latest",
-	"pkg.purged",
 	"pkgrepo.managed",
 	"service.enabled",
 	"ssh_auth.absent",
@@ -63,7 +64,6 @@ var unmigratedAllowlist = []string{
 	"test.succeed_with_changes",
 	"timezone.system",
 	"user.absent",
-	"user.present",
 }
 
 func TestDocCoverage_Ratchet(t *testing.T) {
@@ -105,13 +105,17 @@ func TestDocCoverage_Ratchet(t *testing.T) {
 	if migrated+unmigrated != len(registrations) {
 		t.Errorf("migrated(%d) + unmigrated(%d) != registrations(%d)", migrated, unmigrated, len(registrations))
 	}
-	// Pinned present state (tranche 0E): pkg.removed (0C) plus service.running
-	// and service.dead (0E, the TriState semantic-type pilot) have shrunk the
-	// list so far. This assertion is expected to need updating — by removing
-	// names from unmigratedAllowlist, never by loosening this count — as each
-	// subsequent migration PR lands.
-	if migrated != 3 {
-		t.Errorf("migrated module count = %d, want 3 (pkg.removed, service.running, service.dead as of tranche 0E).\n%s", migrated, policyMsg)
+	// Pinned present state: pkg.removed (0C) plus service.running and
+	// service.dead (0E, the TriState semantic-type pilot) plus pkg.installed,
+	// pkg.latest, and pkg.purged (the all-primitives pkg-family wave) plus
+	// user.present (gid on GroupRef, groups/optional_groups on StringList, a
+	// sensitive password) plus file.managed (template on TemplateFlag, mode on a
+	// lazy FileMode — the BD-1 flagship) have shrunk the list so far. This
+	// assertion is expected to need updating — by removing names from
+	// unmigratedAllowlist, never by loosening this count — as each subsequent
+	// migration PR lands.
+	if migrated != 8 {
+		t.Errorf("migrated module count = %d, want 8 (pkg.removed, service.running, service.dead, pkg.installed, pkg.latest, pkg.purged, user.present, file.managed).\n%s", migrated, policyMsg)
 	}
 }
 

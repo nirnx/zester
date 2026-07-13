@@ -8,6 +8,9 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testPkgMctx(fakePkg *exectest.FakePackageExec) *exec.ModuleContext {
@@ -22,7 +25,7 @@ func testPkgMctx(fakePkg *exectest.FakePackageExec) *exec.ModuleContext {
 
 func TestPkgInstalledName(t *testing.T) {
 	mctx := testPkgMctx(exectest.NewFakePackageExec("apt"))
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +37,7 @@ func TestPkgInstalledName(t *testing.T) {
 
 func TestPkgInstalledNameFromConfig(t *testing.T) {
 	mctx := testPkgMctx(exectest.NewFakePackageExec("apt"))
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("web-server", map[string]any{
 		"name": "nginx",
 	})
@@ -49,7 +52,7 @@ func TestPkgInstalledNameFromConfig(t *testing.T) {
 
 func TestPkgInstalledRequires(t *testing.T) {
 	mctx := testPkgMctx(exectest.NewFakePackageExec("apt"))
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require": []any{"cmd.run:update-repos"},
 	})
@@ -64,7 +67,7 @@ func TestPkgInstalledRequires(t *testing.T) {
 
 func TestPkgInstalledRequisites(t *testing.T) {
 	mctx := testPkgMctx(exectest.NewFakePackageExec("apt"))
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require": []any{"cmd.run:update-repos"},
 		"onfail":  []any{"cmd.run:fallback-install"},
@@ -85,7 +88,7 @@ func TestPkgInstalledCheckAlreadyInstalled(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
@@ -104,7 +107,7 @@ func TestPkgInstalledCheckAlreadyInstalled(t *testing.T) {
 func TestPkgInstalledCheckNotInstalled(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
@@ -127,7 +130,7 @@ func TestPkgInstalledCheckVersionMismatch(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "1.20.1-1")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{"version": "1.24.0-1"})
 	if err != nil {
@@ -150,7 +153,7 @@ func TestPkgInstalledCheckVersionMatch(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "1.24.0-1")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{"version": "1.24.0-1"})
 	if err != nil {
@@ -172,7 +175,7 @@ func TestPkgInstalledCheckNoVersionDeclaredIgnoresInstalledVersion(t *testing.T)
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "1.20.1-1")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
@@ -192,7 +195,7 @@ func TestPkgInstalledCheckVersionDeclaredButAbsent(t *testing.T) {
 	// The absent => install path is unchanged by the pin comparison.
 	fakePkg := exectest.NewFakePackageExec("apt")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{"version": "1.24.0-1"})
 	if err != nil {
@@ -216,7 +219,7 @@ func TestPkgInstalledVersionPinConvergesAfterApply(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "1.20.1-1")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{"version": "1.24.0-1"})
 	if err != nil {
@@ -255,7 +258,7 @@ func TestPkgInstalledCheckDebianRcStateNeedsInstall(t *testing.T) {
 			Command: fakeCmd,
 		},
 	}
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
@@ -274,7 +277,7 @@ func TestPkgInstalledCheckDebianRcStateNeedsInstall(t *testing.T) {
 func TestPkgInstalledApply(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
@@ -299,7 +302,7 @@ func TestPkgInstalledApply(t *testing.T) {
 func TestPkgInstalledApplyWithRefresh(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("dnf")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("curl", map[string]any{
 		"refresh": true,
@@ -322,7 +325,7 @@ func TestPkgInstalledRevert(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("brew")
 	fakePkg.PreInstall("wget", "")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("wget", map[string]any{})
 	if err != nil {
@@ -348,7 +351,7 @@ func TestPkgInstalledNoProvider(t *testing.T) {
 			Command: exectest.NewFakeCommandExec(),
 		},
 	}
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	_, err := builder("nginx", map[string]any{})
 	if err == nil {
@@ -360,7 +363,7 @@ func TestPkgInstalledApplyError(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.InstallErr = fmt.Errorf("permission denied")
 	mctx := testPkgMctx(fakePkg)
-	builder := NewPkgInstalledBuilder(mctx)
+	builder := NewPkgInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
@@ -371,4 +374,26 @@ func TestPkgInstalledApplyError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error from failed install")
 	}
+}
+
+var _ state.State = (*PkgInstalled)(nil)
+
+// TestPkgInstalledContract replays the permanent differential contract
+// fixtures against the migrated spec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after the legacy constructor's
+// deletion this replay is the permanent regression guard for pkg.installed's
+// decode behavior — including the flagged BD-6 divergences (a non-string
+// `name`/`version` is now coerced, or rejected for composites, instead of
+// silently falling back to the state ID / empty string) and the BD-2
+// divergence (a CLI `refresh` truthy/falsy string is now honored).
+func TestPkgInstalledContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var p PkgInstalled
+		if _, err := pkgInstalledSpec.Decode(id, config, &p, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &p, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/pkg.installed.yaml")
 }

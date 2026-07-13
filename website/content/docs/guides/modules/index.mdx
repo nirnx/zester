@@ -15,20 +15,20 @@ State modules implement the full Check/Apply/Revert lifecycle and participate in
 
 | Module | Description | Source |
 |-|-|-|
-| [`file.managed`](/docs/guides/modules/file-managed) | Ensure a file exists with desired content, permissions, and ownership | `pkg/state/modules/file.go` |
+| [`file.managed`](/docs/guides/modules/file-managed) | Ensure a file exists with desired content, permissions, and ownership | `pkg/state/modules/file_managed.go` |
 | [`file.directory`](/docs/guides/modules/file-directory) | Ensure a directory exists with desired permissions and ownership | `pkg/state/modules/file_directory.go` |
 | [`file.absent`](/docs/guides/modules/file-absent) | Ensure a file or directory does not exist | `pkg/state/modules/file_absent.go` |
 | [`file.append`](/docs/guides/modules/file-append) | Ensure lines are present in a file | `pkg/state/modules/file_append.go` |
 | [`file.symlink`](/docs/guides/modules/file-symlink) | Ensure a symbolic link exists pointing to a target | `pkg/state/modules/file_symlink.go` |
 | [`file.recurse`](/docs/guides/modules/file-recurse) | Recursively copy a directory with permissions | `pkg/state/modules/file_recurse.go` |
 | [`file.blockreplace`](/docs/guides/modules/file-blockreplace) | Manage content between marker lines in a file | `pkg/state/modules/file_blockreplace.go` |
-| [`pkg.installed`](/docs/guides/modules/pkg-installed) | Ensure a system package is installed (apt, yum, dnf, brew) | `pkg/state/modules/pkg.go` |
+| [`pkg.installed`](/docs/guides/modules/pkg-installed) | Ensure a system package is installed (apt, yum, dnf, brew) | `pkg/state/modules/pkg_installed.go` |
 | [`pkg.removed`](/docs/guides/modules/pkg-removed) | Ensure a system package is not installed | `pkg/state/modules/pkg_removed.go` |
-| [`service.running`](/docs/guides/modules/service-running) | Ensure a service is running (and optionally enabled) | `pkg/state/modules/service.go` |
+| [`service.running`](/docs/guides/modules/service-running) | Ensure a service is running (and optionally enabled) | `pkg/state/modules/service_running.go` |
 | [`service.enabled`](/docs/guides/modules/service-enabled) | Ensure a service is enabled at boot | `pkg/state/modules/service.go` |
-| [`service.dead`](/docs/guides/modules/service-dead) | Ensure a service is stopped (and optionally disabled) | `pkg/state/modules/service.go` |
+| [`service.dead`](/docs/guides/modules/service-dead) | Ensure a service is stopped (and optionally disabled) | `pkg/state/modules/service_dead.go` |
 | [`cmd.run`](/docs/guides/modules/cmd-run) | Execute a command on the target system | `pkg/state/modules/cmd.go` |
-| [`user.present`](/docs/guides/modules/user-present) | Ensure a user account exists with desired properties | `pkg/state/modules/user.go` |
+| [`user.present`](/docs/guides/modules/user-present) | Ensure a user account exists with desired properties | `pkg/state/modules/user_present.go` |
 | [`user.absent`](/docs/guides/modules/user-absent) | Ensure a user account does not exist | `pkg/state/modules/user.go` |
 | [`group.present`](/docs/guides/modules/group-present) | Ensure a group exists with desired properties | `pkg/state/modules/group.go` |
 | [`group.absent`](/docs/guides/modules/group-absent) | Ensure a group does not exist | `pkg/state/modules/group.go` |

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -15,12 +16,19 @@ import (
 // Upgradability is probed via the package manager CLI (apt-get / dnf / yum)
 // through the injected CommandExec; when it cannot be determined it falls back
 // to a plain PackageExec.IsInstalled + install.
+//
+// PkgLatest is also its own schema proto: the tagged exported Package and
+// Refresh fields ARE the module's parameter declaration — both primitives, no
+// semantic types needed. Refresh carries an EAGER `default=true` (Salt parity:
+// pkg.latest refreshes before deciding unless told not to) — the runtime
+// fields (family, mgr, pkg, cmd, log) are untagged, so the schema compiler
+// skips them.
 type PkgLatest struct {
 	id   string
 	reqs state.Requisites
 
 	// Package is the name of the package to keep up to date.
-	Package string
+	Package string `zester:"name,primary" usage:"package to keep at the newest available version (defaults to the state ID)"`
 
 	// Refresh runs a package cache refresh at the start of BOTH Check and
 	// Apply. Defaults to true (matching Salt's pkg.latest semantics, which
@@ -29,7 +37,7 @@ type PkgLatest struct {
 	// acts on a fresh index, and a Check-only dry run answers from a fresh
 	// index too. Refreshing mutates only the manager's metadata cache, never
 	// the managed system state, so it is legitimate in Check.
-	Refresh bool
+	Refresh bool `zester:"refresh,default=true" usage:"refresh the package cache before Check and before Apply"`
 
 	// family is the detected OS family ("debian", "redhat", "darwin", "").
 	family string
@@ -47,41 +55,144 @@ type PkgLatest struct {
 	log *slog.Logger
 }
 
+// pkgLatestSpec is the compiled schema + documentation for pkg.latest. It is
+// compiled once at package init and executed by every decode path (the
+// builder below, and Registry.Parse). The prose is verified against the live
+// Check/Apply/Revert behavior and the detectPkgSystem/provider logic below.
+var pkgLatestSpec = mustSpec("pkg.latest", modschema.KindState, PkgLatest{}, modschema.Doc{
+	Summary: "Ensure a package is installed and kept at the newest available version.",
+	Description: "`pkg.latest` ensures the named package is installed and upgraded to the newest " +
+		"version the package manager can see, refreshing its cache before deciding (by default) so " +
+		"a release published since the box's last refresh is never invisible. The package name " +
+		"defaults to the state ID. Upgradability is probed by shelling out to the package manager " +
+		"CLI (`apt-get -s install`, `dnf`/`yum check-update`); when the probe cannot determine an " +
+		"answer — no command provider, or an OS family Zester does not know how to probe (for " +
+		"example macOS/Homebrew) — an already-installed package is treated as satisfied rather than " +
+		"forced to churn.",
+	Effects: modschema.Effects{
+		Check: "Refreshes the package cache first when `refresh` is true (Check and Apply refresh " +
+			"independently — a stale index at Check time, before Apply's refresh ever ran, was the " +
+			"field bug this default fixes: a release published since the box's last refresh was " +
+			"invisible forever). Reports a change when the package is not installed. When installed, " +
+			"runs an upgradability probe keyed off the detected OS family (the `os.family` fact, " +
+			"falling back to the active provider's name): on Debian/Ubuntu, `apt-get -s install " +
+			"<pkg>` — an `Inst ` line means an upgrade is available, \"is already the newest " +
+			"version\" means up to date; on the RedHat family, `<mgr> check-update <pkg>` — exit " +
+			"code 100 means an upgrade is available, 0 means up to date, anything else is " +
+			"inconclusive. When the probe cannot run or answer at all (no command provider, unknown " +
+			"family, or an inconclusive exit code) an installed package is reported as satisfied " +
+			"rather than forced to churn.",
+		Apply: "Refreshes the package cache first when `refresh` is true, then installs the package " +
+			"with no version pin — which the detected provider resolves to the latest available " +
+			"candidate (apt, dnf, yum, or brew). A FAILED refresh only warns and proceeds to the " +
+			"install (a rotted third-party repo makes `apt-get update` exit non-zero even though the " +
+			"reachable repos still updated — refusing to proceed would break every `pkg.latest` on a " +
+			"host with one dead repo). On Debian/Ubuntu the install (and the refresh, and Revert's " +
+			"removal) goes through the same apt provider `pkg.installed` uses, which runs fully " +
+			"non-interactively: `DEBIAN_FRONTEND=noninteractive` suppresses debconf prompts, and " +
+			"`-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold` resolves a " +
+			"conffile prompt automatically — without these, a prompt would hang the peel's single " +
+			"serialized exec worker forever. Reports Changed with the package name and manager in " +
+			"its details.",
+		Revert: "Removes the package through the detected package manager. Revert always removes — " +
+			"it does not check whether this run's Apply actually installed anything, and it does not " +
+			"restore whatever version was installed before Apply ran.",
+	},
+	Examples: []modschema.Example{
+		{
+			Title:       "Keep a package current ad hoc",
+			Kind:        "cli",
+			Explanation: "The bare positional argument is the package name.",
+			Code:        "zester 'web*' pkg.latest nginx",
+		},
+		{
+			Title:       "Keep a package current",
+			Kind:        "state",
+			Explanation: "The package name defaults to the state ID; refresh defaults to true.",
+			Code:        "nginx:\n  pkg.latest: []\n",
+		},
+		{
+			Title:       "Skip the cache refresh",
+			Kind:        "state",
+			Explanation: "refresh: false answers from the existing cache only.",
+			Code:        "htop:\n  pkg.latest:\n    - refresh: false\n",
+		},
+	},
+	Notes: []modschema.Note{
+		{
+			Level: "info",
+			Title: "refresh defaults to true",
+			Body: "`refresh` defaults to true, matching Salt's `pkg.latest` semantics, which " +
+				"refreshes before deciding. Set `refresh: false` to answer from the existing cache " +
+				"only.",
+		},
+		{
+			Level: "info",
+			Title: "Check and Apply refresh independently",
+			Body: "Each phase runs its own refresh — there is no cross-phase memo. A watch-forced " +
+				"Apply (which bypasses Check entirely) still refreshes on its own, and a Check-only " +
+				"dry run always answers from a freshly refreshed index when `refresh` is true.",
+		},
+		{
+			Level: "info",
+			Title: "Which package manager runs the upgrade probe",
+			Body: "The `os.family` fact selects debian/ubuntu → `apt-get`, the redhat family " +
+				"(redhat, rhel, fedora, centos, suse, opensuse) → `dnf` unless the active package " +
+				"provider is specifically named \"yum\" (then `yum`), and darwin/macos → `brew`. When " +
+				"the fact is absent or unrecognized, the active package provider's own name resolves " +
+				"it instead (apt → apt-get, dnf, yum, brew).",
+		},
+		{
+			Level: "info",
+			Title: "apt runs fully non-interactively",
+			Body: "On Debian/Ubuntu, the underlying apt provider's refresh, install, and Revert's " +
+				"removal all set DEBIAN_FRONTEND=noninteractive and pass " +
+				"-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold, so a debconf " +
+				"prompt or a conffile conflict resolves automatically instead of hanging the peel's " +
+				"single serialized exec worker (there is no TTY to answer a prompt) — the same " +
+				"provider `pkg.installed` uses.",
+		},
+		{
+			Level: "warning",
+			Title: "Upgradability probe limitations",
+			Body: "On platforms where the probe is inconclusive or unavailable (no command " +
+				"provider; a family Zester does not know how to probe, e.g. macOS/Homebrew) an " +
+				"installed package is reported as satisfied to avoid needless churn — Salt would " +
+				"compare against the repository's candidate version there. Salt's `version`, " +
+				"`pkgs`, and `fromrepo` parameters are also not supported (use `pkg.installed` for " +
+				"version pinning).",
+		},
+	},
+	Divergences: []string{"BD-2", "BD-6", "BD-7"},
+	SeeAlso:     []string{"pkg.installed", "pkg.purged", "pkg.removed"},
+})
+
 // NewPkgLatestBuilder returns a state.Builder that creates PkgLatest states
-// using the given ModuleContext's package and command providers.
-func NewPkgLatestBuilder(mctx *exec.ModuleContext) state.Builder {
+// using the given ModuleContext's package and command providers. Decode
+// policy (unknown-key handling, reserved keys) is threaded via opts.
+func NewPkgLatestBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions) state.Builder {
 	return func(id string, config map[string]any) (state.State, error) {
 		if mctx.Package == nil {
 			return nil, fmt.Errorf("pkg.latest: no package provider available")
 		}
-		return newPkgLatest(id, config, mctx.Package, mctx.Command, mctx.Facts, mctx.Logger)
+		// Decode the typed parameters first. Decode is transactional and commits
+		// by replacing the whole struct, so the injected providers, id, and
+		// requisites MUST be assigned AFTER it.
+		p := &PkgLatest{}
+		if _, err := pkgLatestSpec.Decode(id, config, p, opts); err != nil {
+			return nil, fmt.Errorf("pkg.latest: %w", err)
+		}
+		p.id = id
+		p.pkg = mctx.Package
+		p.cmd = mctx.Command
+		p.log = mctx.Logger
+		if p.log == nil {
+			p.log = slog.Default()
+		}
+		p.family, p.mgr = detectPkgSystem(mctx.Facts, mctx.Package.Name())
+		p.reqs = state.ParseRequisites(config)
+		return p, nil
 	}
-}
-
-func newPkgLatest(id string, config map[string]any, pkg exec.PackageExec,
-	cmd exec.CommandExec, facts map[string]any, log *slog.Logger) (state.State, error) {
-
-	if log == nil {
-		log = slog.Default()
-	}
-	p := &PkgLatest{id: id, pkg: pkg, cmd: cmd, log: log}
-
-	p.Package, _ = config["name"].(string)
-	if p.Package == "" {
-		p.Package = id
-	}
-
-	// Refresh defaults to true; an explicit bool overrides it.
-	p.Refresh = true
-	if r, ok := config["refresh"].(bool); ok {
-		p.Refresh = r
-	}
-
-	p.family, p.mgr = detectPkgSystem(facts, pkg.Name())
-
-	p.reqs = state.ParseRequisites(config)
-
-	return p, nil
 }
 
 func (p *PkgLatest) Name() string           { return "pkg.latest:" + p.id }

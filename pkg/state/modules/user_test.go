@@ -7,6 +7,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 func testUserMctx(fakeUser *exectest.FakeUserExec) *exec.ModuleContext {
@@ -25,7 +26,7 @@ func testUserMctx(fakeUser *exectest.FakeUserExec) *exec.ModuleContext {
 
 func TestUserPresentName(t *testing.T) {
 	mctx := testUserMctx(exectest.NewFakeUserExec())
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("deploy", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +38,7 @@ func TestUserPresentName(t *testing.T) {
 
 func TestUserPresentNameFromConfig(t *testing.T) {
 	mctx := testUserMctx(exectest.NewFakeUserExec())
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("web-server-user", map[string]any{
 		"name": "www-data",
 	})
@@ -52,7 +53,7 @@ func TestUserPresentNameFromConfig(t *testing.T) {
 
 func TestUserPresentRequisites(t *testing.T) {
 	mctx := testUserMctx(exectest.NewFakeUserExec())
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"group.present:docker"},
 		"watch":     []any{"file.managed:/etc/passwd"},
@@ -80,7 +81,7 @@ func TestUserPresentRequisites(t *testing.T) {
 func TestUserPresentCheckUserDoesNotExist(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{})
 	if err != nil {
@@ -104,7 +105,7 @@ func TestUserPresentCheckUserExistsNoChange(t *testing.T) {
 		Home:  "/home/deploy",
 	})
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{
 		"shell": "/bin/bash",
@@ -130,7 +131,7 @@ func TestUserPresentCheckShellDiffers(t *testing.T) {
 		Shell: "/bin/sh",
 	})
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{
 		"shell": "/bin/bash",
@@ -151,7 +152,7 @@ func TestUserPresentCheckShellDiffers(t *testing.T) {
 func TestUserPresentGIDString(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{
 		"gid": "developers",
@@ -171,7 +172,7 @@ func TestUserPresentGIDString(t *testing.T) {
 func TestUserPresentGIDStringDoesNotOverridePrimaryGroup(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	// When gid is a string, it should take precedence over primary_group.
 	s, err := builder("deploy", map[string]any{
@@ -190,7 +191,7 @@ func TestUserPresentGIDStringDoesNotOverridePrimaryGroup(t *testing.T) {
 func TestUserPresentApplyCreate(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{
 		"shell": "/bin/bash",
@@ -227,7 +228,7 @@ func TestUserPresentApplyModify(t *testing.T) {
 		Shell: "/bin/sh",
 	})
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{
 		"shell": "/bin/bash",
@@ -257,7 +258,7 @@ func TestUserPresentApplyError(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.CreateErr = fmt.Errorf("permission denied")
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{})
 	if err != nil {
@@ -273,7 +274,7 @@ func TestUserPresentApplyError(t *testing.T) {
 func TestUserPresentRevertCreated(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{})
 	if err != nil {
@@ -307,7 +308,7 @@ func TestUserPresentRevertModified(t *testing.T) {
 		Shell: "/bin/sh",
 	})
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("deploy", map[string]any{
 		"shell": "/bin/bash",
@@ -344,7 +345,7 @@ func TestUserPresentRevertAfterNoOpApplyNoOp(t *testing.T) {
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
 	fakeUser.ModifyErr = fmt.Errorf("Modify must not be called on a converged user")
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"shell": "/bin/bash",
 	})
 	if err != nil {
@@ -378,7 +379,7 @@ func TestUserPresentRevertRestoresPassword(t *testing.T) {
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
 	fakeUser.SetPasswordHash("deploy", "$6$oldhash")
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"shell":    "/bin/bash",
 		"password": "$6$newhash",
 	})
@@ -412,7 +413,7 @@ func TestUserPresentRevertNoDriftReportsNoChange(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/sh"})
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"shell": "/bin/bash",
 	})
 	if err != nil {
@@ -439,7 +440,7 @@ func TestUserPresentConvergencePassword(t *testing.T) {
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
 	fakeUser.SetPasswordHash("deploy", "$6$oldhash")
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"shell":    "/bin/bash",
 		"password": "$6$newhash",
 	})
@@ -472,7 +473,7 @@ func TestUserPresentCheckPasswordDrift(t *testing.T) {
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
 	fakeUser.SetPasswordHash("deploy", "$6$oldhash")
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"shell":    "/bin/bash",
 		"password": "$6$newhash",
 	})
@@ -493,7 +494,7 @@ func TestUserPresentCheckPasswordMatchesNoChange(t *testing.T) {
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
 	fakeUser.SetPasswordHash("deploy", "$6$samehash")
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"shell":    "/bin/bash",
 		"password": "$6$samehash",
 	})
@@ -515,7 +516,7 @@ func TestUserPresentCheckPasswordUnverifiable(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy"})
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"password": "$6$declared",
 	})
 	if err != nil {
@@ -537,7 +538,7 @@ func TestUserPresentApplyPasswordInSyncIsNoOp(t *testing.T) {
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
 	fakeUser.SetPasswordHash("deploy", "$6$samehash")
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"shell":    "/bin/bash",
 		"password": "$6$samehash",
 	})
@@ -558,7 +559,7 @@ func TestUserPresentApplyPasswordDrift(t *testing.T) {
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy"})
 	fakeUser.SetPasswordHash("deploy", "$6$oldhash")
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"password": "$6$newhash",
 	})
 	if err != nil {
@@ -586,7 +587,7 @@ func TestUserPresentCheckPrimaryGroupDrift(t *testing.T) {
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999})
 	mctx := testUserMctx(fakeUser)
 	mctx.Group = fakeGroup
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"gid": "docker", // string form maps to PrimaryGroup (Salt compat)
 	})
 	if err != nil {
@@ -608,7 +609,7 @@ func TestUserPresentCheckPrimaryGroupMatchesNoChange(t *testing.T) {
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999})
 	mctx := testUserMctx(fakeUser)
 	mctx.Group = fakeGroup
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"primary_group": "docker",
 	})
 	if err != nil {
@@ -630,7 +631,7 @@ func TestUserPresentApplyPrimaryGroup(t *testing.T) {
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999})
 	mctx := testUserMctx(fakeUser)
 	mctx.Group = fakeGroup
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"gid": "docker",
 	})
 	if err != nil {
@@ -652,7 +653,7 @@ func TestUserPresentApplyPrimaryGroupMissingGroupFails(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", GID: 100})
 	mctx := testUserMctx(fakeUser) // FakeGroupExec has no "docker"
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"primary_group": "docker",
 	})
 	if err != nil {
@@ -666,7 +667,7 @@ func TestUserPresentApplyPrimaryGroupMissingGroupFails(t *testing.T) {
 func TestUserPresentPrimaryGroupRequiresGroupProvider(t *testing.T) {
 	mctx := testUserMctx(exectest.NewFakeUserExec())
 	mctx.Group = nil
-	_, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	_, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"primary_group": "docker",
 	})
 	if err == nil {
@@ -680,7 +681,7 @@ func TestUserPresentRevertFreshInstanceNoOp(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.PreCreate(&exec.UserInfo{Name: "deploy", Shell: "/bin/bash"})
 	mctx := testUserMctx(fakeUser)
-	s, err := NewUserPresentBuilder(mctx)("deploy", map[string]any{
+	s, err := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})("deploy", map[string]any{
 		"shell": "/bin/sh",
 	})
 	if err != nil {
@@ -711,7 +712,7 @@ func TestUserPresentNoProvider(t *testing.T) {
 			Command: exectest.NewFakeCommandExec(),
 		},
 	}
-	builder := NewUserPresentBuilder(mctx)
+	builder := NewUserPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	_, err := builder("deploy", map[string]any{})
 	if err == nil {

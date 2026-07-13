@@ -1,0 +1,655 @@
+module: user.present
+# Permanent differential contract for the user.present migration (the semantic-
+# type-heavy surface: gid on paramtypes.GroupRef, groups/optional_groups on
+# paramtypes.StringList, a sensitive password). These cases were approved by the
+# legacy-vs-new equivalence comparison while the legacy constructor still existed
+# (see the migration changelog); after its deletion RunContract replays them as
+# the permanent regression guard. Accept cases pin the decoded exported-field
+# projection — including the DERIVED GID (numeric primary GID) and PrimaryGroup
+# (name-based primary group) facets that resolveGroupFacets computes from gid /
+# primary_group; reject cases pin the error kind. StringList `want` is a plain
+# YAML list, compared element-by-element in string form. BD-tagged cases pin the
+# flagged behavioral differences:
+#   BD-1 (PENDING) — a msgpack sized-int uid/gid is honored (was silently dropped
+#                    by the legacy .(int) assertion, the reproduced 0755->0644 bug
+#                    class);
+#   BD-2 (APPROVED) — an ORIGIN-INDEPENDENT string coercion (uid numeric string,
+#                     createhome bool string in EITHER the CLI or a YAML-quoted
+#                     value) is honored (was silently dropped);
+#   BD-4 (PENDING) — an all-digit string gid is a numeric GID (was a group NAME
+#                    stored into primary_group), AND a negative gid is rejected up
+#                    front (the legacy path failed later at the group provider);
+#   BD-5 (PENDING) — a StringList scalar list element is rendered to a string, a
+#                    nested list/map element is rejected, AND a BARE-STRING value
+#                    decodes as a single-element list that activates group
+#                    management (all three were silently dropped/ignored);
+#   §3 empty-string rule (PARITY, not a BD) — an empty-string gid is undeclared
+#                    and falls through to primary_group, as legacy comma-ok did;
+#   BD-6 (APPROVED) — a wrong-typed value is coerced (scalar) or rejected
+#                     (composite) instead of silently falling back / to a zero;
+#   BD-7 (APPROVED) — an integer bool is 1=true / 0=false, any other integer a
+#                     typed error (was silently dropped).
+cases:
+  # ============================ name (primary) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+    want:
+      UserName: deploy
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: deploy
+    want:
+      UserName: deploy
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: deploy
+    want:
+      UserName: deploy
+
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: deploy
+    input: {}
+    want:
+      UserName: deploy
+  - label: primary-fallback-cli
+    universe: cli
+    id: deploy
+    input: {}
+    want:
+      UserName: deploy
+
+  # An EMPTY-STRING name falls back to the state ID (§2.1 primary idiom) — parity.
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: deploy
+    input:
+      name: ""
+    want:
+      UserName: deploy
+  # A NIL name (YAML null / trailing-colon) is absent, falls back to the ID.
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: deploy
+    input:
+      name:
+    want:
+      UserName: deploy
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: deploy
+    input:
+      name:
+    want:
+      UserName: deploy
+
+  # BD-6: a numeric name is coerced to its string form (was fallback-to-id).
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      UserName: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      UserName: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      UserName: "123"
+
+  # BD-6: a composite name is rejected with a typed error (was fallback-to-id).
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ================================ uid ================================
+  # Parity: a native YAML int uid decodes unchanged.
+  - label: uid-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      uid: 1500
+    want:
+      UID: 1500
+  # BD-1: a msgpack-delivered uid arrives as a sized kind (uint16) that the legacy
+  # config["uid"].(int) assertion never matched, silently leaving UID at 0; the
+  # uniform decoder honors it.
+  - label: uid-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-1
+    input:
+      name: deploy
+      uid: 1500
+    want:
+      UID: 1500
+  # BD-2: a CLI uid=1500 (the string "1500") is now coerced base-10 (was dropped).
+  - label: uid-cli
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: deploy
+      uid: 1500
+    want:
+      UID: 1500
+  # BD-6: a composite uid is a typed wrong_type error (was silent 0).
+  - label: uid-composite-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: deploy
+      uid:
+        - 1
+        - 2
+    want_error: wrong_type
+
+  # ================================ gid ================================
+  # Parity: a native YAML int gid is a numeric primary GID.
+  - label: gid-int-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      gid: 1500
+    want:
+      GID: 1500
+      PrimaryGroup: ""
+  # BD-1: a msgpack gid arrives as a sized kind (uint16) that BOTH legacy
+  # assertions (.(int) and .(string)) missed, leaving GID=0 and PrimaryGroup="";
+  # GroupRef honors the sized int as a numeric GID.
+  - label: gid-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-1
+    input:
+      name: deploy
+      gid: 1500
+    want:
+      GID: 1500
+      PrimaryGroup: ""
+  # Parity: a non-digit string gid is a group NAME -> PrimaryGroup (GID unset).
+  - label: gid-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      gid: docker
+    want:
+      PrimaryGroup: docker
+      GID: 0
+  - label: gid-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: deploy
+      gid: docker
+    want:
+      PrimaryGroup: docker
+      GID: 0
+  - label: gid-name-cli
+    universe: cli
+    id: web
+    input:
+      name: deploy
+      gid: docker
+    want:
+      PrimaryGroup: docker
+      GID: 0
+  # BD-4: an all-digit string gid is a numeric GID (legacy treated it as a group
+  # NAME and stored it into PrimaryGroup). Pinned across all three universes —
+  # yaml/msgpack carry the string "1000"; the CLI delivers the same "1000".
+  - label: gid-alldigit-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-4
+    input:
+      name: deploy
+      gid: "1000"
+    want:
+      GID: 1000
+      PrimaryGroup: ""
+  - label: gid-alldigit-string-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-4
+    input:
+      name: deploy
+      gid: "1000"
+    want:
+      GID: 1000
+      PrimaryGroup: ""
+  - label: gid-alldigit-string-cli
+    universe: cli
+    id: web
+    bd: BD-4
+    input:
+      name: deploy
+      gid: 1000
+    want:
+      GID: 1000
+      PrimaryGroup: ""
+  # BD-4 arm: a NEGATIVE gid is rejected up front (GroupRef validates GID >= 0);
+  # the legacy path forwarded -5 and only failed later at the group provider.
+  # yaml/msgpack only: over the CLI "-5" is not all-digits, so it is a group NAME,
+  # not a rejected GID (there is no CLI negative-gid rejection to pin).
+  - label: gid-negative-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-4
+    input:
+      name: deploy
+      gid: -5
+    want_error: value_invalid
+  - label: gid-negative-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-4
+    input:
+      name: deploy
+      gid: -5
+    want_error: value_invalid
+
+  # ============================ primary_group ============================
+  # Parity: primary_group is the name-based primary group when gid is absent.
+  - label: primary-group-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      primary_group: ops
+    want:
+      PrimaryGroup: ops
+      GID: 0
+  # Precedence: a name-form gid takes precedence over primary_group.
+  - label: gid-name-overrides-primary-group-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      gid: docker
+      primary_group: ops
+    want:
+      PrimaryGroup: docker
+  # EMPTY-STRING RULE (§3) — PARITY, not a BD: an empty-string gid is undeclared
+  # (GroupRef decodes "" to its zero value), so it falls through to primary_group
+  # exactly as the legacy comma-ok extraction did. Pinned across all three
+  # universes (yaml/msgpack carry the empty string; the CLI delivers the bare
+  # `gid=` token, which parses to "").
+  - label: gid-empty-string-falls-through-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      gid: ""
+      primary_group: ops
+    want:
+      PrimaryGroup: ops
+      GID: 0
+  - label: gid-empty-string-falls-through-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: deploy
+      gid: ""
+      primary_group: ops
+    want:
+      PrimaryGroup: ops
+      GID: 0
+  - label: gid-empty-string-falls-through-cli
+    universe: cli
+    id: web
+    input:
+      name: deploy
+      gid: ""
+      primary_group: ops
+    want:
+      PrimaryGroup: ops
+      GID: 0
+
+  # ================== groups / optional_groups (StringList) ==================
+  # Parity: a list of strings decodes unchanged (yaml + msgpack).
+  - label: groups-list-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      groups:
+        - docker
+        - wheel
+    want:
+      Groups:
+        - docker
+        - wheel
+  - label: groups-list-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: deploy
+      groups:
+        - docker
+        - wheel
+    want:
+      Groups:
+        - docker
+        - wheel
+  # BD-5: a scalar list element is rendered to a string (legacy dropped the int).
+  - label: groups-scalar-sprint-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: deploy
+      groups:
+        - docker
+        - 1000
+    want:
+      Groups:
+        - docker
+        - "1000"
+  - label: groups-scalar-sprint-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: deploy
+      groups:
+        - docker
+        - 1000
+    want:
+      Groups:
+        - docker
+        - "1000"
+  # BD-5: a nested list element is rejected (legacy silently dropped it).
+  - label: groups-nested-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: deploy
+      groups:
+        - docker
+        - - nested
+    want_error: value_invalid
+  - label: groups-nested-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: deploy
+      groups:
+        - docker
+        - - nested
+    want_error: value_invalid
+  # optional_groups uses the same StringList type.
+  - label: optional-groups-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      optional_groups:
+        - sudo
+    want:
+      OptionalGroups:
+        - sudo
+  # BD-5 (third arm): a BARE-STRING groups value decodes as a single-element list
+  # and ACTIVATES group management, where the legacy parseAnyStringList ignored a
+  # non-list value entirely (so `groups: docker` silently managed no groups). This
+  # is also what makes a CLI `groups=docker` work. Pinned across all three
+  # universes; the CLI scalar `groups=docker` is the same single-element case.
+  - label: groups-bare-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: deploy
+      groups: docker
+    want:
+      Groups:
+        - docker
+  - label: groups-bare-string-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: deploy
+      groups: docker
+    want:
+      Groups:
+        - docker
+  - label: groups-bare-string-cli
+    universe: cli
+    id: web
+    bd: BD-5
+    input:
+      name: deploy
+      groups: docker
+    want:
+      Groups:
+        - docker
+
+  # ======================== home / shell / fullname ========================
+  - label: home-shell-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      home: /opt/deploy
+      shell: /bin/bash
+    want:
+      Home: /opt/deploy
+      Shell: /bin/bash
+  - label: fullname-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      fullname: Deploy User
+    want:
+      FullName: Deploy User
+
+  # ============== createhome / system / remove_groups (bool) ==============
+  # Parity: a native YAML bool decodes unchanged.
+  - label: createhome-true-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      createhome: true
+    want:
+      CreateHome: true
+  # BD-2: a CLI createhome=true (the string "true") is honored (was dropped).
+  - label: createhome-true-cli
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: deploy
+      createhome: true
+    want:
+      CreateHome: true
+  # BD-2 is ORIGIN-INDEPENDENT (approved §2.3 coercion table): a truthy-string bool
+  # is coerced no matter which universe delivered it — here a YAML-quoted
+  # `createhome: "yes"` (a string, not a native bool) is honored, exactly as the
+  # CLI string is. The legacy `config["createhome"].(bool)` assertion dropped it.
+  - label: createhome-truthy-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-2
+    input:
+      name: deploy
+      createhome: "yes"
+    want:
+      CreateHome: true
+  # BD-7: an integer createhome is coerced narrowly — 1 is true, 0 is false —
+  # across every int kind (msgpack sizes small ints as int8). The CLI delivers the
+  # digit as "1"/"0", which the truthy/falsy set maps to the same result, so all
+  # three universes agree.
+  - label: createhome-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 1
+    want:
+      CreateHome: true
+  - label: createhome-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 1
+    want:
+      CreateHome: true
+  - label: createhome-int-one-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 1
+    want:
+      CreateHome: true
+  - label: createhome-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 0
+    want:
+      CreateHome: false
+  - label: createhome-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 0
+    want:
+      CreateHome: false
+  - label: createhome-int-zero-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 0
+    want:
+      CreateHome: false
+  # BD-7 (rejection arm): any integer other than 0/1 is a typed value error.
+  - label: createhome-invalid-int-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 2
+    want_error: value_invalid
+  - label: createhome-invalid-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 2
+    want_error: value_invalid
+  - label: createhome-invalid-int-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: deploy
+      createhome: 2
+    want_error: value_invalid
+
+  - label: system-true-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      system: true
+    want:
+      System: true
+  - label: remove-groups-true-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      remove_groups: true
+    want:
+      RemoveGroups: true
+
+  # ============================ misc / password ============================
+  # A reserved requisite key does not break the decode (it is not a parameter).
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      require:
+        - group.present:docker
+    want:
+      UserName: deploy
+  # A plain string password decodes without disturbing the other facets (the
+  # secret value is intentionally NOT projected in `want`; its redaction on error
+  # is pinned by the module unit test). Fake hash — never a real credential.
+  - label: password-string-parity-yaml
+    universe: yaml
+    id: web
+    input:
+      name: deploy
+      shell: /bin/sh
+      password: "$6$fake$hash"
+    want:
+      Shell: /bin/sh
+  # BD-6: a composite value into the sensitive password field is a typed
+  # wrong_type error (was a silent "" zero). RunContract asserts only the error
+  # KIND; the redacted-value guarantee is covered by the unit test.
+  - label: password-composite-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: deploy
+      password:
+        - leak
+    want_error: wrong_type

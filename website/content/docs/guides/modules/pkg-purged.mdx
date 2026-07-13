@@ -1,10 +1,15 @@
 ---
 title: "pkg.purged"
+description: "Ensure a package is removed along with its configuration files."
 ---
 
-Ensures a package is removed **along with its configuration files**. On Debian this runs `apt-get purge`; on the RedHat family it runs `dnf`/`yum remove` (rpm has no separate purge concept). The purge is performed by shelling out to the package manager CLI, independent of what the package provider's `Remove` does.
+{/* zester-docgen:managed module="pkg.purged" */}
 
 **Source**: `pkg/state/modules/pkg_purged.go`
+
+---
+
+`pkg.purged` ensures the named package is fully gone — not just removed, but purged of residual package-manager state. On Debian, `apt-get purge` clears the conffiles a plain remove leaves behind in dpkg's 'rc' status; RedHat's rpm has no separate purge concept, so purge is identical to remove there. The package name defaults to the state ID. Purging shells out to the package-manager CLI directly (via `CommandExec`), independent of whatever the injected `PackageExec` provider's `Remove` does — so it works even when `pkg.installed`'s and `pkg.removed`'s presence probe would already call the package "not installed".
 
 ---
 
@@ -12,69 +17,88 @@ Ensures a package is removed **along with its configuration files**. On Debian t
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Name of the package to purge. |
+| `name` | `string` | No | State ID | package to purge, including its configuration files (defaults to the state ID) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-- Converged means **no package record at all**. On Debian the probe is dpkg-status-aware (`dpkg-query -W -f='${db:Status-Status}'`): a removed-but-not-purged package (`rc` state — configuration files remain) still **needs a purge**, which is exactly this state's value over `pkg.removed`. On RedHat the probe is `rpm -q <pkg>` (rpm has no `rc` equivalent).
-- Installed or residual (`rc`) state → changes needed; no record → no changes.
-- On an unknown package system, Check falls back to the package provider's installed probe; without a provider, Check errors.
+### Check
 
----
+Reports converged only when NO package-manager record exists at all. On Debian the probe is `dpkg-query -W -f='${db:Status-Status}' <pkg>` (one status line per installed instance, so multi-arch packages are handled correctly): any live status — `installed`, the residual `config-files` ('rc') state, `half-installed`, or similar — needs a purge; only `not-installed` or no dpkg record at all is converged. On the RedHat family the probe is `rpm -q <pkg>` (rpm has no 'rc' equivalent, so a query hit alone means installed). On an unknown OS family, Check falls back to the injected `PackageExec`'s installed probe (no residual-config concept there either, e.g. brew); without a provider, Check errors rather than silently reporting converged. A probe that never runs at all (spawn failure, context death) is also a real error, never reported as converged — that would silently skip the purge on a broken host.
 
-## Apply Behavior
+### Apply
 
-| OS family | Command |
-|---|---|
-| Debian/Ubuntu | `apt-get purge -y <pkg>` |
-| RedHat (dnf/yum) | `<mgr> remove -y <pkg>` |
-| Unknown | Falls back to the package provider's `Remove`; errors if no provider is available. |
+Purges the package via the manager-specific CLI command: `apt-get purge -y <pkg>` on Debian, `<mgr> remove -y <pkg>` on the RedHat family (dnf or yum — identical to a plain remove there). On an unknown OS family it falls back to the injected `PackageExec`'s `Remove`; without either a command provider or a package provider, Apply errors. Reports Changed with the package name and manager in its details.
 
-The OS family is detected from the `os.family` fact, falling back to the active package provider name.
+### Revert
 
----
+Explicit no-op (same contract as `pkg.removed`): the purged version and the purged configuration files are never recorded and cannot be reconstructed, so a reinstall here would only guess at whatever the repo's current latest candidate is — not the inverse of Apply. Reinstall explicitly with `pkg.installed`.
 
-## Revert Behavior
-
-Explicit no-op (same contract as `pkg.removed`): the purged version is never recorded and the purged configuration files cannot be restored, so a reinstall would only guess at the repo's current latest candidate — not the inverse of Apply. Reinstall explicitly with `pkg.installed`.
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Purge a package ad hoc
+
+The bare positional argument is the package name.
 
 ```bash
 zester 'web-01' pkg.purged apache2
 ```
 
-### State File
+### Purge a package
+
+The package name defaults to the state ID.
 
 ```yaml
 apache2:
   pkg.purged: []
 ```
 
-**Purge before installing a replacement:**
+### Purge before installing a replacement
+
+require_in orders this purge ahead of a replacement's install: apache2's package and configuration are fully gone before nginx's pkg.installed runs.
 
 ```yaml
 remove-old-webserver:
   pkg.purged:
     - name: apache2
-
-nginx:
-  pkg.installed:
-    - require:
-      - "pkg.purged:remove-old-webserver"
+    - require_in:
+      - "pkg.installed:nginx"
 ```
+
 
 ---
 
-## Divergences from Salt
+## Notes
 
-- On the RedHat family, purge is identical to remove (as in Salt — rpm does not track config purging separately).
-- Salt's `pkgs` (multi-package) parameter is not supported; use the generic `names` attribute to expand one state per package.
+> **Purge's value over pkg.removed**
+>
+> pkg.removed's and pkg.installed's installed-probe deliberately reports a dpkg 'rc'-state package as NOT installed (so a fresh install/removal doesn't churn on leftover conffiles). pkg.purged's whole purpose is clearing that residual state, so its own Check probe deliberately does NOT go through the shared `PackageExec.IsInstalled` — it queries dpkg/rpm status directly.
+
+> **RedHat purge equals remove**
+>
+> rpm tracks no separate purge state, so on the RedHat family `pkg.purged` and `pkg.removed` run the identical remove command.
+
+> **Multiple packages**
+>
+> Salt's `pkgs` (multi-package) parameter is not supported; use the generic `names` attribute to expand one state per package.
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [pkg.installed](/docs/guides/modules/pkg-installed)
+- [pkg.latest](/docs/guides/modules/pkg-latest)
+- [pkg.removed](/docs/guides/modules/pkg-removed)

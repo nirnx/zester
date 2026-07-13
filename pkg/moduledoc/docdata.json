@@ -1,5 +1,627 @@
 [
   {
+    "Module": "file.managed",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a file exists with the desired content, permissions, and ownership.",
+      "Description": "`file.managed` ensures a file exists at its path with the desired content, permission mode, and ownership. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). Supply the content inline with `content` or copy it from a local file with `source` — these are alternatives, and if both are given `source` wins (there is no parse-time mutual-exclusion check). Setting `template` renders the content or source through the Jinja2 engine before writing (opt-in, so files that legitimately contain `{{ }}` are left untouched by default). The `mode` parameter defaults to `0644` and honors an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0755` applies 0755. `user`/`group` converge ownership only when declared.",
+      "Effects": {
+        "Check": "Resolves the desired content (reading `source` or using `content`, rendering the template when enabled) and compares, in order: file existence (a genuine not-exist means the file must be created, while any other read error fails the check rather than risking a blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed facets — permission bits plus setuid/setgid/sticky); and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.",
+        "Apply": "Probes the prior state for revert (a non-not-exist read error fails the apply rather than overwriting content it could not capture), resolves the desired content and mode, creates missing parent directories with mode 0755 when `makedirs` is set, then writes the content. It records the revert memo on the first write only (first-capture-wins; a file it created stays marked created). Ownership is applied BEFORE the mode — chown clears the setuid/setgid bits, so the mode is chmod'd last — and the mode is enforced on pre-existing files too (os.WriteFile only applies perms at creation), so a mode-only drift converges. Reports the byte count and the applied mode.",
+        "Revert": "Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content AND prior mode (never the mode Apply set); a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never destroys a file it did not touch.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Write a file with inline content",
+          "Kind": "state",
+          "Explanation": "The state ID is the target path; content and mode are set inline.",
+          "Code": "/etc/motd:\n  file.managed:\n    - content: \"Welcome to Zester\"\n    - mode: \"0644\"\n"
+        },
+        {
+          "Title": "Copy from a source file with ownership",
+          "Kind": "state",
+          "Explanation": "source copies a local file; makedirs creates any missing parent directories; user/group set ownership.",
+          "Code": "deploy-nginx-config:\n  file.managed:\n    - path: /etc/nginx/nginx.conf\n    - source: /srv/zester/files/nginx.conf\n    - mode: \"0644\"\n    - user: root\n    - group: root\n    - makedirs: true\n"
+        },
+        {
+          "Title": "Create directories on demand",
+          "Kind": "state",
+          "Explanation": "makedirs creates the whole parent chain (with mode 0755) before writing, so the state does not depend on a separate file.directory for /opt/myapp/config.",
+          "Code": "app_config:\n  file.managed:\n    - path: /opt/myapp/config/settings.yml\n    - content: |\n        port: 8080\n        log_level: info\n    - mode: \"0600\"\n    - user: myapp\n    - group: myapp\n    - makedirs: true\n"
+        },
+        {
+          "Title": "Render a source template with variables",
+          "Kind": "state",
+          "Explanation": "template: true renders the source through Jinja2; context overrides defaults (worker_count becomes 8).",
+          "Code": "/etc/nginx/nginx.conf:\n  file.managed:\n    - source: /srv/zester/files/nginx.conf.jinja\n    - template: true\n    - defaults:\n        worker_count: 4\n    - context:\n        worker_count: 8\n    - mode: \"0644\"\n"
+        },
+        {
+          "Title": "Render inline content as a template",
+          "Kind": "state",
+          "Explanation": "template: jinja renders the inline content; facts and settings are available under their own namespaces.",
+          "Code": "/etc/motd:\n  file.managed:\n    - template: jinja\n    - content: |\n        Welcome to {{ facts.hostname }}.\n        Role: {{ settings.role }}\n    - mode: \"0644\"\n"
+        },
+        {
+          "Title": "Write a file ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the path; content and mode are key=value args.",
+          "Code": "zester 'web*' file.managed /etc/motd content=\"Welcome to Zester\" mode=0644"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Template rendering is opt-in and re-renders inline content",
+          "Body": "By default file.managed writes content verbatim. `template: true` (or `template: jinja`) renders the source or inline content through Jinja2 before writing. Because `.zy` state files are themselves rendered before YAML parsing, inline templated content is rendered a second time at write; wrap it in `{% raw %}...{% endraw %}` or use a separate source file to avoid the state-file render consuming your expressions."
+        },
+        {
+          "Level": "info",
+          "Title": "Template variables and namespaces",
+          "Body": "When `template` is enabled, the rendered source or content can reference the target peel's `facts.*` (every collected fact) and `settings.*` (every resolved setting), plus any variables supplied under `context` and `defaults`, which are exposed as top-level names. `context` overrides `defaults`; both are independent of the always-available `facts` and `settings` namespaces."
+        },
+        {
+          "Level": "info",
+          "Title": "Worked source-template render",
+          "Body": "Take the \"Render a source template with variables\" example above, whose `nginx.conf.jinja` source contains:\n\n```nginx\nworker_processes {{ worker_count }};\nerror_log /var/log/nginx/error.log {{ log_level }};\n```\n\nWith `defaults: {worker_count: 4}` and `context: {worker_count: 8}`, it renders `worker_processes` as 8 — `context` overrides the default of 4 — while `facts` and `settings` stay available under their own namespaces for any other expressions."
+        },
+        {
+          "Level": "",
+          "Title": "content and source are alternatives",
+          "Body": "Provide either content or source. There is no parse-time mutual-exclusion error; if both are set, source takes precedence and content is ignored."
+        },
+        {
+          "Level": "",
+          "Title": "Mode defaults to 0644 and honors integer modes",
+          "Body": "An omitted mode applies 0644. A mode given as an octal integer (for example `mode: 0755`) is honored across every delivery path, including a reactor dispatch where msgpack encodes it as a sized integer; setuid/setgid/sticky bits are preserved."
+        }
+      ],
+      "Divergences": [
+        "BD-1",
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "file.directory",
+        "file.copy",
+        "file.absent"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "content",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "desired inline file content; provide either content or source (source wins if both are set)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "source",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "local file path to copy content from; provide either content or source (source wins if both are set)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "template",
+        "Aliases": null,
+        "GoType": "paramtypes.TemplateFlag",
+        "SemanticType": "TemplateFlag",
+        "Usage": "render source/content as a Jinja2 template before writing (a bool, the string \"jinja\", or a truthy/falsy string); defaults to off",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "context",
+        "Aliases": null,
+        "GoType": "map[string]interface {}",
+        "SemanticType": "",
+        "Usage": "extra template variables, available as top-level names; override defaults; only used when template is enabled",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "object"
+        }
+      },
+      {
+        "Name": "defaults",
+        "Aliases": null,
+        "GoType": "map[string]interface {}",
+        "SemanticType": "",
+        "Usage": "fallback template variables; context takes precedence; only used when template is enabled",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "object"
+        }
+      },
+      {
+        "Name": "mode",
+        "Aliases": null,
+        "GoType": "paramtypes.FileMode",
+        "SemanticType": "FileMode",
+        "Usage": "file permission mode in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits honored; defaults to 0644",
+        "Required": false,
+        "Primary": false,
+        "Lazy": true,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "0644",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "user",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "file owner username; ownership is left unchanged when unset",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "group",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "file group name; ownership is left unchanged when unset",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "makedirs",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create missing parent directories (with mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "TemplateFlag",
+        "Doc": "A template-rendering flag. Accepts a bool, the string \"jinja\", or any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders with Jinja, so any enabling value means \"render with Jinja\".",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "FileMode",
+        "Doc": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "pkg.installed",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a system package is installed, optionally pinned to an exact version.",
+      "Description": "`pkg.installed` ensures the named package is present on the target through the peel's auto-detected package manager (apt, dnf, yum, or brew). The package name defaults to the state ID, so a bare `pkg.installed` under an `nginx:` key installs `nginx`. Declaring `version` makes exact version equality part of the desired state: Check compares the provider's installed version against the pin and reports drift for ANY other installed version, so both upgrades and downgrades converge; an undeclared `version` is satisfied by whatever version happens to be installed.\n\nThe version pin's on-the-wire format depends on the detected package manager:\n\n| Manager | Format | Example |\n|---|---|---|\n| apt | `<name>=<version>` | `nginx=1.24.0-1ubuntu1` |\n| yum/dnf | `<name>-<version>` | `nginx-1.24.0` |\n| brew | `<name>@<version>` | `nginx@1.24` |",
+      "Effects": {
+        "Check": "Queries the package provider whether the package is installed at all; an absent package always needs a change. When `version` is declared and the package is present, Check also compares the provider's InstalledVersion against the pin — any other installed version, newer or older, reports a got/want diff and needs a change; without a declared `version`, presence alone satisfies the state. The provider's installed-probe is status-aware on Debian: a package left in the dpkg 'rc' state (removed, conffiles remain) counts as NOT installed, so it converges by reinstalling instead of reporting \"already installed\" forever.\n\nThe installed-probe command is manager-specific:\n\n| Manager | Installed probe |\n|---|---|\n| apt | `dpkg-query -W -f='${db:Status-Status}\\n' <package>` — only a line reading `installed` counts; a package in the dpkg `rc` state (removed, conffiles remain) is NOT installed |\n| yum / dnf | `rpm -q <package>` |\n| brew | `brew list --formula <package>` |",
+        "Apply": "Refreshes the package cache first when `refresh` is true. Installs the package: an undeclared `version` installs the latest available candidate; a declared `version` installs exactly that pin. The apt provider passes `--allow-downgrades` whenever a version is pinned (apt otherwise refuses a downgrade); the yum provider verifies the pin actually landed and falls back to an explicit `yum downgrade` when a plain install silently no-ops on a downgrade (`yum install pkg-<older>` prints \"Nothing to do\" and exits 0); dnf converges an explicit version downgrade on its own. On Debian/Ubuntu the apt provider runs the install (and the refresh and the Revert removal) fully non-interactively: `DEBIAN_FRONTEND=noninteractive` suppresses debconf prompts, and `-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold` resolves a conffile prompt automatically (the packaged default where there is no local edit, otherwise the admin's modified conffile) — without these, a prompt would hang the peel's single serialized exec worker forever, since there is no TTY to answer it. Reports Changed with the package name and manager in its details.\n\nThe base install command is manager-specific (the apt non-interactive env and the `--allow-downgrades`/conffile flags described above are layered on top; a declared `version` pins the target — `<package>=<version>` on apt, `<package>-<version>` on yum/dnf, `<package>@<version>` on brew):\n\n| Manager | Install command |\n|---|---|\n| apt | `apt-get install -y <package>` |\n| yum | `yum install -y <package>` |\n| dnf | `dnf install -y <package>` |\n| brew | `brew install <package>` |",
+        "Revert": "Removes the package through the detected package manager. Revert always removes — it does not check whether this run's Apply actually installed anything, and it does not restore whatever version was installed before Apply ran.\n\nThe remove command is manager-specific:\n\n| Manager | Remove command |\n|---|---|\n| apt | `apt-get remove -y <package>` (same non-interactive env and dpkg conffile flags as install) |\n| yum | `yum remove -y <package>` |\n| dnf | `dnf remove -y <package>` |\n| brew | `brew uninstall <package>` |",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Install a package ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the package name.",
+          "Code": "zester 'web-01' pkg.installed nginx"
+        },
+        {
+          "Title": "Install with a cache refresh",
+          "Kind": "state",
+          "Explanation": "refresh: true refreshes the package cache before installing.",
+          "Code": "install_nginx:\n  pkg.installed:\n    - name: nginx\n    - refresh: true\n"
+        },
+        {
+          "Title": "Pin an exact version",
+          "Kind": "state",
+          "Explanation": "A declared version is part of the desired state: any other installed version converges via install or downgrade.",
+          "Code": "install_specific_version:\n  pkg.installed:\n    - name: nginx\n    - version: \"1.24.0-1ubuntu1\"\n"
+        },
+        {
+          "Title": "Order installs with requisites",
+          "Kind": "state",
+          "Explanation": "require orders this install after a prerequisite package.",
+          "Code": "install_curl:\n  pkg.installed:\n    - name: curl\n    - require:\n      - \"pkg.installed:install_build_tools\"\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "How the package manager is chosen",
+          "Body": "The active package manager comes from the peel's provider detection, run once at startup: the `os.family` fact selects apt (debian), dnf-else-yum (the redhat family), or brew (darwin, only when the `brew` binary is present); when the fact does not match, PATH is probed in the order apt-get, dnf, yum, brew. When none is found, the state never reaches Check or Apply: the builder itself refuses to construct it (\"pkg.installed: no package provider available\"), so a host with no detected package manager fails at state-build time, not at Check or Apply time."
+        },
+        {
+          "Level": "info",
+          "Title": "apt runs fully non-interactively",
+          "Body": "On Debian/Ubuntu, every apt-get invocation the provider makes — refresh, install, and Revert's removal — sets DEBIAN_FRONTEND=noninteractive and passes -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold, so a debconf prompt or a conffile conflict resolves automatically instead of hanging the peel's single serialized exec worker (there is no TTY to answer a prompt)."
+        },
+        {
+          "Level": "info",
+          "Title": "Version pinning converges both directions",
+          "Body": "Declaring `version` turns exact version equality into desired state: any OTHER installed version — newer or older — is drift, and Apply installs or downgrades to the pin. Leaving `version` undeclared never compares versions at all, so any installed version satisfies the state."
+        },
+        {
+          "Level": "warning",
+          "Title": "Revert always removes",
+          "Body": "Unlike `pkg.removed`/`pkg.purged`, Revert unconditionally removes the package — it never restores whatever version was present before Apply ran."
+        },
+        {
+          "Level": "info",
+          "Title": "Multiple packages",
+          "Body": "Salt's `pkgs` (multi-package) parameter is not supported; use the generic `names` attribute to expand one state per package."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "pkg.latest",
+        "pkg.purged",
+        "pkg.removed"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "package to install (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "version",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "exact version pin; any other installed version converges via install or downgrade (format depends on the detected package manager)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "refresh",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "refresh the package cache before installing",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "pkg.latest",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a package is installed and kept at the newest available version.",
+      "Description": "`pkg.latest` ensures the named package is installed and upgraded to the newest version the package manager can see, refreshing its cache before deciding (by default) so a release published since the box's last refresh is never invisible. The package name defaults to the state ID. Upgradability is probed by shelling out to the package manager CLI (`apt-get -s install`, `dnf`/`yum check-update`); when the probe cannot determine an answer — no command provider, or an OS family Zester does not know how to probe (for example macOS/Homebrew) — an already-installed package is treated as satisfied rather than forced to churn.",
+      "Effects": {
+        "Check": "Refreshes the package cache first when `refresh` is true (Check and Apply refresh independently — a stale index at Check time, before Apply's refresh ever ran, was the field bug this default fixes: a release published since the box's last refresh was invisible forever). Reports a change when the package is not installed. When installed, runs an upgradability probe keyed off the detected OS family (the `os.family` fact, falling back to the active provider's name): on Debian/Ubuntu, `apt-get -s install <pkg>` — an `Inst ` line means an upgrade is available, \"is already the newest version\" means up to date; on the RedHat family, `<mgr> check-update <pkg>` — exit code 100 means an upgrade is available, 0 means up to date, anything else is inconclusive. When the probe cannot run or answer at all (no command provider, unknown family, or an inconclusive exit code) an installed package is reported as satisfied rather than forced to churn.",
+        "Apply": "Refreshes the package cache first when `refresh` is true, then installs the package with no version pin — which the detected provider resolves to the latest available candidate (apt, dnf, yum, or brew). A FAILED refresh only warns and proceeds to the install (a rotted third-party repo makes `apt-get update` exit non-zero even though the reachable repos still updated — refusing to proceed would break every `pkg.latest` on a host with one dead repo). On Debian/Ubuntu the install (and the refresh, and Revert's removal) goes through the same apt provider `pkg.installed` uses, which runs fully non-interactively: `DEBIAN_FRONTEND=noninteractive` suppresses debconf prompts, and `-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold` resolves a conffile prompt automatically — without these, a prompt would hang the peel's single serialized exec worker forever. Reports Changed with the package name and manager in its details.",
+        "Revert": "Removes the package through the detected package manager. Revert always removes — it does not check whether this run's Apply actually installed anything, and it does not restore whatever version was installed before Apply ran.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Keep a package current ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the package name.",
+          "Code": "zester 'web*' pkg.latest nginx"
+        },
+        {
+          "Title": "Keep a package current",
+          "Kind": "state",
+          "Explanation": "The package name defaults to the state ID; refresh defaults to true.",
+          "Code": "nginx:\n  pkg.latest: []\n"
+        },
+        {
+          "Title": "Skip the cache refresh",
+          "Kind": "state",
+          "Explanation": "refresh: false answers from the existing cache only.",
+          "Code": "htop:\n  pkg.latest:\n    - refresh: false\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "refresh defaults to true",
+          "Body": "`refresh` defaults to true, matching Salt's `pkg.latest` semantics, which refreshes before deciding. Set `refresh: false` to answer from the existing cache only."
+        },
+        {
+          "Level": "info",
+          "Title": "Check and Apply refresh independently",
+          "Body": "Each phase runs its own refresh — there is no cross-phase memo. A watch-forced Apply (which bypasses Check entirely) still refreshes on its own, and a Check-only dry run always answers from a freshly refreshed index when `refresh` is true."
+        },
+        {
+          "Level": "info",
+          "Title": "Which package manager runs the upgrade probe",
+          "Body": "The `os.family` fact selects debian/ubuntu → `apt-get`, the redhat family (redhat, rhel, fedora, centos, suse, opensuse) → `dnf` unless the active package provider is specifically named \"yum\" (then `yum`), and darwin/macos → `brew`. When the fact is absent or unrecognized, the active package provider's own name resolves it instead (apt → apt-get, dnf, yum, brew)."
+        },
+        {
+          "Level": "info",
+          "Title": "apt runs fully non-interactively",
+          "Body": "On Debian/Ubuntu, the underlying apt provider's refresh, install, and Revert's removal all set DEBIAN_FRONTEND=noninteractive and pass -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold, so a debconf prompt or a conffile conflict resolves automatically instead of hanging the peel's single serialized exec worker (there is no TTY to answer a prompt) — the same provider `pkg.installed` uses."
+        },
+        {
+          "Level": "warning",
+          "Title": "Upgradability probe limitations",
+          "Body": "On platforms where the probe is inconclusive or unavailable (no command provider; a family Zester does not know how to probe, e.g. macOS/Homebrew) an installed package is reported as satisfied to avoid needless churn — Salt would compare against the repository's candidate version there. Salt's `version`, `pkgs`, and `fromrepo` parameters are also not supported (use `pkg.installed` for version pinning)."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "pkg.installed",
+        "pkg.purged",
+        "pkg.removed"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "package to keep at the newest available version (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "refresh",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "refresh the package cache before Check and before Apply",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "true",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "pkg.purged",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a package is removed along with its configuration files.",
+      "Description": "`pkg.purged` ensures the named package is fully gone — not just removed, but purged of residual package-manager state. On Debian, `apt-get purge` clears the conffiles a plain remove leaves behind in dpkg's 'rc' status; RedHat's rpm has no separate purge concept, so purge is identical to remove there. The package name defaults to the state ID. Purging shells out to the package-manager CLI directly (via `CommandExec`), independent of whatever the injected `PackageExec` provider's `Remove` does — so it works even when `pkg.installed`'s and `pkg.removed`'s presence probe would already call the package \"not installed\".",
+      "Effects": {
+        "Check": "Reports converged only when NO package-manager record exists at all. On Debian the probe is `dpkg-query -W -f='${db:Status-Status}' <pkg>` (one status line per installed instance, so multi-arch packages are handled correctly): any live status — `installed`, the residual `config-files` ('rc') state, `half-installed`, or similar — needs a purge; only `not-installed` or no dpkg record at all is converged. On the RedHat family the probe is `rpm -q <pkg>` (rpm has no 'rc' equivalent, so a query hit alone means installed). On an unknown OS family, Check falls back to the injected `PackageExec`'s installed probe (no residual-config concept there either, e.g. brew); without a provider, Check errors rather than silently reporting converged. A probe that never runs at all (spawn failure, context death) is also a real error, never reported as converged — that would silently skip the purge on a broken host.",
+        "Apply": "Purges the package via the manager-specific CLI command: `apt-get purge -y <pkg>` on Debian, `<mgr> remove -y <pkg>` on the RedHat family (dnf or yum — identical to a plain remove there). On an unknown OS family it falls back to the injected `PackageExec`'s `Remove`; without either a command provider or a package provider, Apply errors. Reports Changed with the package name and manager in its details.",
+        "Revert": "Explicit no-op (same contract as `pkg.removed`): the purged version and the purged configuration files are never recorded and cannot be reconstructed, so a reinstall here would only guess at whatever the repo's current latest candidate is — not the inverse of Apply. Reinstall explicitly with `pkg.installed`.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Purge a package ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the package name.",
+          "Code": "zester 'web-01' pkg.purged apache2"
+        },
+        {
+          "Title": "Purge a package",
+          "Kind": "state",
+          "Explanation": "The package name defaults to the state ID.",
+          "Code": "apache2:\n  pkg.purged: []\n"
+        },
+        {
+          "Title": "Purge before installing a replacement",
+          "Kind": "state",
+          "Explanation": "require_in orders this purge ahead of a replacement's install: apache2's package and configuration are fully gone before nginx's pkg.installed runs.",
+          "Code": "remove-old-webserver:\n  pkg.purged:\n    - name: apache2\n    - require_in:\n      - \"pkg.installed:nginx\"\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Purge's value over pkg.removed",
+          "Body": "pkg.removed's and pkg.installed's installed-probe deliberately reports a dpkg 'rc'-state package as NOT installed (so a fresh install/removal doesn't churn on leftover conffiles). pkg.purged's whole purpose is clearing that residual state, so its own Check probe deliberately does NOT go through the shared `PackageExec.IsInstalled` — it queries dpkg/rpm status directly."
+        },
+        {
+          "Level": "info",
+          "Title": "RedHat purge equals remove",
+          "Body": "rpm tracks no separate purge state, so on the RedHat family `pkg.purged` and `pkg.removed` run the identical remove command."
+        },
+        {
+          "Level": "info",
+          "Title": "Multiple packages",
+          "Body": "Salt's `pkgs` (multi-package) parameter is not supported; use the generic `names` attribute to expand one state per package."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "pkg.installed",
+        "pkg.latest",
+        "pkg.removed"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "package to purge, including its configuration files (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "pkg.removed",
     "Kind": "state",
     "Doc": {
@@ -365,6 +987,367 @@
                 1
               ],
               "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "user.present",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a user account exists with the specified attributes.",
+      "Description": "`user.present` ensures the named account exists and converges its attributes (uid, primary group, home, shell, full name, shadow password, and supplementary groups). The username defaults to the state ID. The `gid` parameter is polymorphic: an integer — or an all-digit string — is a numeric GID, while any other string is a group NAME, which takes precedence over `primary_group` and is resolved through the group provider for drift comparison. Only attributes that are actually specified are compared, so an unset field never churns the account.",
+      "Effects": {
+        "Check": "Reports a change when the account does not exist. For an existing account it compares, in order: `uid` (only when non-zero); the primary group — a name-based primary group is resolved to its GID and compared (a declared name that does not exist counts as drift), taking precedence over a numeric `gid` (compared only when non-zero); `home`, `shell`, and `fullname` (each only when non-empty); the shadow `password` (its hash is compared, never shown — an unverifiable/empty provider hash under a declared password counts as drift); and the supplementary `groups` (when declared, the desired list — `groups` plus any `optional_groups` the account already belongs to, preserving existing groups unless `remove_groups` is set — is compared against current membership).",
+        "Apply": "Creates the account with all specified attributes when it does not exist (recording the creation for revert); a create that races another state at the same DAG level re-looks-up and falls through to the modify path. For an existing account it builds a usermod set from only the drifted attributes (a declared-but-missing primary group fails loudly before the usermod); a fully converged account is a clean no-op that leaves the revert memo unarmed. Reports the action (created/modified) and, on create/modify, the affected username.",
+        "Revert": "Undoes only what this run's Apply recorded. A user Apply created is deleted (with its home directory); a user Apply modified is restored by diffing the current account against the memoized original and reverting only the still-drifted attributes — including the password when a prior hash was recorded (a password Apply set from an empty/unreadable original hash is NOT restorable via usermod and is skipped with an explicit note rather than a false \"restored\" claim). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Create a user account",
+          "Kind": "state",
+          "Explanation": "The username defaults to the state ID; createhome makes the home directory.",
+          "Code": "appuser:\n  user.present:\n    - shell: /bin/bash\n    - home: /home/appuser\n    - createhome: true\n"
+        },
+        {
+          "Title": "System account with a nologin shell",
+          "Kind": "state",
+          "Explanation": "system: true allocates a low UID; the account cannot log in interactively.",
+          "Code": "prometheus:\n  user.present:\n    - system: true\n    - shell: /usr/sbin/nologin\n    - home: /var/lib/prometheus\n    - createhome: true\n"
+        },
+        {
+          "Title": "Full specification with a numeric GID and groups",
+          "Kind": "state",
+          "Explanation": "gid as an integer is a numeric primary GID; groups sets supplementary membership, and optional_groups is applied only where the account already belongs.",
+          "Code": "deploy:\n  user.present:\n    - uid: 1500\n    - gid: 1500\n    - home: /opt/deploy\n    - shell: /bin/bash\n    - createhome: true\n    - fullname: Deploy User\n    - groups:\n      - docker\n      - wheel\n    - optional_groups:\n      - sudo\n    - require:\n      - \"group.present:docker\"\n"
+        },
+        {
+          "Title": "Create a user ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the username; key=value pairs set attributes.",
+          "Code": "zester 'web*' user.present deploy uid=1500 home=/opt/deploy shell=/bin/bash createhome=true"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "gid is a GID or a group name",
+          "Body": "An integer or all-digit `gid` (for example `gid: 1000` or `gid: \"1000\"`) is a numeric primary GID. Any other string is a group NAME, resolved through the group provider and taking precedence over `primary_group`; `primary_group` is only the fallback used when `gid` is not itself a name."
+        },
+        {
+          "Level": "info",
+          "Title": "optional_groups and remove_groups",
+          "Body": "`optional_groups` adds a supplementary group only when the account is ALREADY a member of it — a listed group the account does not belong to is skipped, never created. With `remove_groups: false` (the default) existing supplementary groups are preserved; set it true to prune any group not in `groups`."
+        },
+        {
+          "Level": "info",
+          "Title": "password is a shadow hash and is sensitive",
+          "Body": "`password` is a pre-hashed shadow value, converged by comparing the account's current shadow hash (the hash never appears in a diff). It is a sensitive parameter: its value is redacted from every decode-error message and never rendered into docs, defaults, or examples."
+        }
+      ],
+      "Divergences": [
+        "BD-1",
+        "BD-2",
+        "BD-4",
+        "BD-5",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "user.absent",
+        "group.present"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "username for the account; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "uid",
+        "Aliases": null,
+        "GoType": "int",
+        "SemanticType": "",
+        "Usage": "numeric user ID; only compared and set when non-zero (0 auto-assigns)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "integer"
+        }
+      },
+      {
+        "Name": "gid",
+        "Aliases": null,
+        "GoType": "paramtypes.GroupRef",
+        "SemanticType": "GroupRef",
+        "Usage": "primary group as a numeric GID or a group name; an integer or all-digit string is a GID, any other string is a group name (taking precedence over primary_group)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "minLength": 1,
+              "type": "string"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "primary_group",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "primary group name; used only when gid is not itself a group name",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "groups",
+        "Aliases": null,
+        "GoType": "paramtypes.StringList",
+        "SemanticType": "StringList",
+        "Usage": "supplementary groups the account should belong to",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "optional_groups",
+        "Aliases": null,
+        "GoType": "paramtypes.StringList",
+        "SemanticType": "StringList",
+        "Usage": "supplementary groups added only if the account is already a member (absent groups are skipped, never created)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "home",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "home directory path; only compared and set when non-empty",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "shell",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "login shell path; only compared and set when non-empty",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "createhome",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create the home directory when creating the account",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "system",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create a system account (low UID range)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "password",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "pre-hashed shadow password; converged by comparing the account's current shadow hash",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": true,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string",
+          "writeOnly": true
+        }
+      },
+      {
+        "Name": "fullname",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "GECOS full-name field; only compared and set when non-empty",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "remove_groups",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "remove supplementary groups not listed in groups (otherwise existing groups are preserved)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "GroupRef",
+        "Doc": "A group reference, given as a non-negative integer GID or a group name. An all-digit string is treated as a numeric GID, so \"1000\" and the integer 1000 resolve identically; a negative GID is rejected.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "minLength": 1,
+              "type": "string"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "StringList",
+        "Doc": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
             }
           ]
         }

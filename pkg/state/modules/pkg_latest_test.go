@@ -8,6 +8,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -28,7 +30,7 @@ func testPkgLatestMctx(fakePkg *exectest.FakePackageExec, fakeCmd *exectest.Fake
 
 func TestPkgLatestName(t *testing.T) {
 	mctx := testPkgLatestMctx(exectest.NewFakePackageExec("apt"), exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +42,7 @@ func TestPkgLatestName(t *testing.T) {
 
 func TestPkgLatestPrimaryParamDefault(t *testing.T) {
 	mctx := testPkgLatestMctx(exectest.NewFakePackageExec("apt"), exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("web-server", map[string]any{"name": "nginx"})
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +58,7 @@ func TestPkgLatestPrimaryParamDefault(t *testing.T) {
 
 func TestPkgLatestRequisites(t *testing.T) {
 	mctx := testPkgLatestMctx(exectest.NewFakePackageExec("apt"), exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"cmd.run:repos"},
 		"watch":     []any{"file.managed:/etc/apt/sources.list"},
@@ -84,7 +86,7 @@ func TestPkgLatestRequisites(t *testing.T) {
 func TestPkgLatestCheckNotInstalled(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +109,7 @@ func TestPkgLatestCheckAptUpgradable(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := testPkgLatestMctx(fakePkg, fakeCmd, "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +132,7 @@ func TestPkgLatestCheckAptUpToDate(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := testPkgLatestMctx(fakePkg, fakeCmd, "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +153,7 @@ func TestPkgLatestCheckDnfUpgradable(t *testing.T) {
 	// dnf check-update exits 100 when an update is available (and returns an error).
 	fakeCmd.SetResult("dnf", &exec.CommandResult{ExitCode: 100}, errors.New("exit 100"))
 	mctx := testPkgLatestMctx(fakePkg, fakeCmd, "redhat")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("httpd", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +173,7 @@ func TestPkgLatestCheckDnfUpToDate(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetResult("dnf", &exec.CommandResult{ExitCode: 0}, nil)
 	mctx := testPkgLatestMctx(fakePkg, fakeCmd, "redhat")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("httpd", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +197,7 @@ func TestPkgLatestCheckUndeterminedFallsBack(t *testing.T) {
 		},
 		Facts: map[string]any{"os": map[string]any{"family": "debian"}},
 	}
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +215,7 @@ func TestPkgLatestApply(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgLatestMctx(fakePkg, fakeCmd, "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +241,7 @@ func TestPkgLatestApply(t *testing.T) {
 func TestPkgLatestApplyNoRefresh(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{"refresh": false})
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +258,7 @@ func TestPkgLatestApplyError(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.InstallErr = errors.New("permission denied")
 	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{"refresh": false})
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +272,7 @@ func TestPkgLatestRevert(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "")
 	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +291,7 @@ func TestPkgLatestRevert(t *testing.T) {
 
 func TestPkgLatestNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: exectest.NewFakeCommandExec()}}
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	if _, err := builder("nginx", map[string]any{}); err == nil {
 		t.Error("expected error when no package provider is set")
 	}
@@ -324,7 +326,7 @@ func TestPkgLatestCheckRefreshesBeforeProbe(t *testing.T) {
 	fakePkg.PreInstall("nginx", "")
 	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
 	mctx.Command = &staleIndexCmd{pkg: fakePkg}
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +350,7 @@ func TestPkgLatestCheckNoRefreshStaysStale(t *testing.T) {
 	fakePkg.PreInstall("nginx", "")
 	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
 	mctx.Command = &staleIndexCmd{pkg: fakePkg}
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{"refresh": false})
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +381,7 @@ func TestPkgLatestCheckRefreshErrorProceeds(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := testPkgLatestMctx(fakePkg, fakeCmd, "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -400,7 +402,7 @@ func TestPkgLatestApplyRefreshErrorProceeds(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.RefreshErr = fmt.Errorf("apt-get update: repo.dead.example 404")
 	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -422,7 +424,7 @@ func TestPkgLatestPhasesRefreshIndependently(t *testing.T) {
 	fakePkg.PreInstall("nginx", "")
 	mctx := testPkgLatestMctx(fakePkg, exectest.NewFakeCommandExec(), "debian")
 	mctx.Command = &staleIndexCmd{pkg: fakePkg}
-	builder := NewPkgLatestBuilder(mctx)
+	builder := NewPkgLatestBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -436,4 +438,24 @@ func TestPkgLatestPhasesRefreshIndependently(t *testing.T) {
 	if got := fakePkg.RefreshCount(); got != 2 {
 		t.Errorf("Check and Apply each refresh independently: want 2, got %d", got)
 	}
+}
+
+// TestPkgLatestContract replays the permanent differential contract fixtures
+// against the migrated spec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after the legacy constructor's
+// deletion this replay is the permanent regression guard for pkg.latest's
+// decode behavior — including the flagged BD-6 divergence (a non-string
+// `name` is now coerced, or rejected for composites) and the BD-2 divergence
+// (a CLI `refresh` truthy/falsy string is now honored instead of silently
+// leaving the eager `true` default in place).
+func TestPkgLatestContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var p PkgLatest
+		if _, err := pkgLatestSpec.Decode(id, config, &p, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &p, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/pkg.latest.yaml")
 }
