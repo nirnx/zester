@@ -18,6 +18,8 @@ import (
 	"github.com/nirnx/zester/pkg/cliargs"
 	"github.com/nirnx/zester/pkg/enroll"
 	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/moduledoc"
 	"github.com/nirnx/zester/pkg/proto"
 	"github.com/nirnx/zester/pkg/target"
 )
@@ -308,8 +310,21 @@ func moduleTimeout(cmd *cobra.Command, module string) time.Duration {
 	}
 }
 
-// parseModuleArgs parses remaining CLI arguments into an ID and args map
-// based on the module type.
+// parseModuleArgs parses remaining CLI arguments into an ID and args map based
+// on the module.
+//
+// Resolution order:
+//  1. Special-cased query/dispatch modules (facts.*, settings.*, test.ping,
+//     state.*) and cmd.run keep their bespoke positional semantics — literal
+//     IDs ("ping"/"items"/"keys"/"highstate"), key/value positionals, or a
+//     synthetic "ad-hoc" ID. None are self-documenting state modules, so they
+//     are absent from the embedded docdata.
+//  2. Self-documenting modules (present in pkg/moduledoc's embedded docdata)
+//     bind the bare positional to their DECLARED primary parameter — this
+//     replaces the former hand-maintained per-module positional table.
+//  3. Everything else falls through to the generic first-arg-is-ID fallback
+//     (mixed-fleet honesty: a module not yet migrated has no known primary, so
+//     the CLI does not guess one).
 func parseModuleArgs(module string, remaining []string) (string, map[string]any, error) {
 	args := make(map[string]any)
 
@@ -367,24 +382,6 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		cliargs.ParseKeyValues(remaining, args)
 		return "keys", args, nil
 
-	case "file.managed":
-		if len(remaining) == 0 {
-			return "", nil, fmt.Errorf("file.managed requires a path argument")
-		}
-		path := remaining[0]
-		args["path"] = path
-		cliargs.ParseKeyValues(remaining[1:], args)
-		return path, args, nil
-
-	case "pkg.installed":
-		if len(remaining) == 0 {
-			return "", nil, fmt.Errorf("pkg.installed requires a package name argument")
-		}
-		name := remaining[0]
-		args["name"] = name
-		cliargs.ParseKeyValues(remaining[1:], args)
-		return name, args, nil
-
 	case "state.apply":
 		if len(remaining) == 0 {
 			return "", nil, fmt.Errorf("state.apply requires a state name argument")
@@ -397,14 +394,62 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 	case "state.highstate":
 		cliargs.ParseKeyValues(remaining, args)
 		return "highstate", args, nil
-
-	default:
-		// Generic fallback: first arg is the ID, rest are key=value.
-		id := "ad-hoc"
-		if len(remaining) > 0 {
-			id = remaining[0]
-			cliargs.ParseKeyValues(remaining[1:], args)
-		}
-		return id, args, nil
 	}
+
+	// Self-documenting modules describe their own primary parameter in the
+	// embedded docdata. file.managed and pkg.installed were formerly hard-coded
+	// here; they now resolve through this path (pkg.installed's primary is
+	// "name" — byte-identical to the old table; file.managed's primary is its
+	// canonical "name", with "path" a registered alias, so it is decode-
+	// identical on any migrated peel and the ID still carries the value).
+	if id, a, ok, err := docdataPositional(module, remaining); ok {
+		return id, a, err
+	}
+
+	// Generic fallback: first arg is the ID, rest are key=value.
+	id := "ad-hoc"
+	if len(remaining) > 0 {
+		id = remaining[0]
+		cliargs.ParseKeyValues(remaining[1:], args)
+	}
+	return id, args, nil
+}
+
+// docdataPositional binds a bare CLI positional to a self-documenting module's
+// declared primary parameter, looked up from the embedded docdata. ok is false
+// (leave it to the generic fallback) when the module is not in docdata, has no
+// primary field, or its primary carries a default (nothing to require). When ok
+// is true, the positional is stored under the primary's canonical name AND
+// returned as the ExecRequest ID — same as a state ID — and a missing positional
+// for a default-less primary is a usage error.
+func docdataPositional(module string, remaining []string) (id string, args map[string]any, ok bool, err error) {
+	mi, found := moduledoc.Lookup(module)
+	if !found {
+		return "", nil, false, nil
+	}
+	primary, found := primaryParam(mi)
+	if !found {
+		return "", nil, false, nil
+	}
+	if len(remaining) == 0 {
+		if primary.HasDefault {
+			// The primary can be omitted; let the generic fallback apply.
+			return "", nil, false, nil
+		}
+		return "", nil, true, fmt.Errorf("%s requires a %s argument", module, primary.Name)
+	}
+	args = make(map[string]any)
+	args[primary.Name] = remaining[0]
+	cliargs.ParseKeyValues(remaining[1:], args)
+	return remaining[0], args, true, nil
+}
+
+// primaryParam returns the module's primary parameter field, if it has one.
+func primaryParam(mi modschema.ModuleInfo) (modschema.Field, bool) {
+	for _, f := range mi.Params {
+		if f.Primary {
+			return f, true
+		}
+	}
+	return modschema.Field{}, false
 }

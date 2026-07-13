@@ -176,11 +176,35 @@ func TestParseModuleArgs_FileManaged(t *testing.T) {
 	if id != "/etc/nginx/nginx.conf" {
 		t.Errorf("id = %q, want %q", id, "/etc/nginx/nginx.conf")
 	}
-	if args["path"] != "/etc/nginx/nginx.conf" {
-		t.Errorf("args[path] = %v, want %q", args["path"], "/etc/nginx/nginx.conf")
+	// file.managed now resolves through the embedded docdata (Phase-4
+	// unification): the bare positional binds to its DECLARED primary "name",
+	// not the historical "path". These are decode-identical on a migrated peel
+	// ("path" is a registered alias of "name" and the ID carries the same
+	// value), so the observable dispatch is unchanged.
+	if args["name"] != "/etc/nginx/nginx.conf" {
+		t.Errorf("args[name] = %v, want %q", args["name"], "/etc/nginx/nginx.conf")
+	}
+	if _, ok := args["path"]; ok {
+		t.Errorf("args[path] should be unset (primary is now name); got %v", args["path"])
 	}
 	if args["source"] != "/srv/nginx.conf" {
 		t.Errorf("args[source] = %v, want %q", args["source"], "/srv/nginx.conf")
+	}
+}
+
+// The "path" alias still works when passed as an explicit key=value token
+// (cliargs stores it verbatim; the migrated file.managed reads it as an alias
+// of "name").
+func TestParseModuleArgs_FileManagedPathAliasExplicit(t *testing.T) {
+	// A bogus positional plus an explicit path= override: the positional binds
+	// to the primary and path= is carried through untouched for the peel's
+	// alias resolution.
+	_, args, err := parseModuleArgs("file.managed", []string{"placeholder", "path=/etc/real.conf"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if args["path"] != "/etc/real.conf" {
+		t.Errorf("args[path] = %v, want %q", args["path"], "/etc/real.conf")
 	}
 }
 
@@ -283,6 +307,95 @@ func TestParseModuleArgs_GenericFallbackNoArgs(t *testing.T) {
 	}
 	if len(args) != 0 {
 		t.Errorf("args should be empty, got %v", args)
+	}
+}
+
+// TestParseModuleArgs_UnifiedParity pins the Phase-4 unification: after
+// replacing the hand-maintained per-module positional table with docdata-driven
+// primary-parameter lookup, EVERY module that was previously hard-coded (plus
+// the generic fallback) resolves to the same (id, args). For all of them the
+// result is byte-identical to the legacy table EXCEPT file.managed, whose
+// positional now binds to its canonical primary "name" instead of "path"
+// (decode-identical via the "path" alias + the carried ID). This table is the
+// regression guard for that equivalence.
+func TestParseModuleArgs_UnifiedParity(t *testing.T) {
+	tests := []struct {
+		name      string
+		module    string
+		remaining []string
+		wantID    string
+		wantArgs  map[string]any
+	}{
+		// Special-cased query/dispatch modules + cmd.run (unchanged path).
+		{"cmd.run", "cmd.run", []string{"hostname"}, "ad-hoc", map[string]any{"command": "hostname"}},
+		{"cmd.run kv", "cmd.run", []string{"echo hi", "env=prod"}, "ad-hoc", map[string]any{"command": "echo hi", "env": "prod"}},
+		{"test.ping", "test.ping", nil, "ping", map[string]any{}},
+		{"facts.items", "facts.items", nil, "items", map[string]any{}},
+		{"facts.get", "facts.get", []string{"os.family"}, "os.family", map[string]any{"key": "os.family"}},
+		{"facts.keys", "facts.keys", nil, "keys", map[string]any{}},
+		{"facts.set", "facts.set", []string{"region", "us-east-1"}, "region", map[string]any{"key": "region", "value": "us-east-1"}},
+		{"settings.items", "settings.items", nil, "items", map[string]any{}},
+		{"settings.get", "settings.get", []string{"db.host"}, "db.host", map[string]any{"key": "db.host"}},
+		{"settings.keys", "settings.keys", nil, "keys", map[string]any{}},
+		{"state.apply", "state.apply", []string{"webserver"}, "webserver", map[string]any{"state": "webserver"}},
+		{"state.highstate", "state.highstate", nil, "highstate", map[string]any{}},
+		{"state.highstate kv", "state.highstate", []string{"env=staging"}, "highstate", map[string]any{"env": "staging"}},
+
+		// Docdata-driven (primary == "name"): pkg.installed is byte-identical to
+		// the legacy table.
+		{"pkg.installed", "pkg.installed", []string{"nginx", "version=1.25"}, "nginx", map[string]any{"name": "nginx", "version": "1.25"}},
+		// file.managed: canonical primary "name" (was legacy "path").
+		{"file.managed", "file.managed", []string{"/etc/n.conf", "source=/srv/n.conf"}, "/etc/n.conf", map[string]any{"name": "/etc/n.conf", "source": "/srv/n.conf"}},
+
+		// Generic fallback (module absent from docdata).
+		{"generic with args", "custom.module", []string{"my-id", "key=value"}, "my-id", map[string]any{"key": "value"}},
+		{"generic no args", "custom.module", nil, "ad-hoc", map[string]any{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, args, err := parseModuleArgs(tt.module, tt.remaining)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != tt.wantID {
+				t.Errorf("id = %q, want %q", id, tt.wantID)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
+			}
+			for k, want := range tt.wantArgs {
+				if got := args[k]; got != want {
+					t.Errorf("args[%q] = %v, want %v", k, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestParseModuleArgs_DocdataDrivenModules covers self-documenting modules that
+// were NOT previously hard-coded: they now bind the positional to their primary
+// ("name") for free, and a missing positional (default-less primary) is a clear
+// usage error rather than a silent "ad-hoc" dispatch.
+func TestParseModuleArgs_DocdataDrivenModules(t *testing.T) {
+	for _, module := range []string{"pkg.removed", "pkg.latest", "pkg.purged", "service.running", "service.dead", "user.present"} {
+		t.Run(module+" positional", func(t *testing.T) {
+			id, args, err := parseModuleArgs(module, []string{"nginx"})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != "nginx" {
+				t.Errorf("id = %q, want %q", id, "nginx")
+			}
+			if args["name"] != "nginx" {
+				t.Errorf("args[name] = %v, want %q", args["name"], "nginx")
+			}
+		})
+		t.Run(module+" missing", func(t *testing.T) {
+			if _, _, err := parseModuleArgs(module, nil); err == nil {
+				t.Fatalf("expected error for missing %s primary argument", module)
+			}
+		})
 	}
 }
 

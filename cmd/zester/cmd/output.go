@@ -76,9 +76,12 @@ func colorize(text, color string, enabled bool) string {
 }
 
 // isStreamlined returns true for modules whose output should show only
-// stdout/stderr rather than full detail fields.
+// stdout/stderr rather than full detail fields. sys.doc rides its rendered
+// text in Details["result"] (keystone spec §7); keying on the module name here
+// is safe before the peel-side sys.doc lands — the CLI just prints whatever
+// result text a supporting peel returns.
 func isStreamlined(module string) bool {
-	return module == "cmd.run" || module == "test.ping" ||
+	return module == "cmd.run" || module == "test.ping" || module == "sys.doc" ||
 		strings.HasPrefix(module, "facts.") || strings.HasPrefix(module, "settings.")
 }
 

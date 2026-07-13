@@ -70,8 +70,10 @@ func init() {
 }
 
 func persistentPreRun(cmd *cobra.Command, args []string) error {
-	// Skip config loading for commands that don't need it.
-	if cmd.Name() == "version" || cmd.Name() == "help" {
+	// Skip config loading for commands that don't need it. `doc` is fully
+	// offline (embedded module docs, no NATS), so a missing or broken config
+	// file must never keep it from running.
+	if cmd.Name() == "version" || cmd.Name() == "help" || cmd.Name() == "doc" {
 		return nil
 	}
 

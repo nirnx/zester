@@ -90,6 +90,7 @@ func TestIsStreamlined(t *testing.T) {
 	}{
 		{"cmd.run", true},
 		{"test.ping", true},
+		{"sys.doc", true},
 		{"facts.items", true},
 		{"facts.get", true},
 		{"facts.keys", true},
@@ -100,6 +101,7 @@ func TestIsStreamlined(t *testing.T) {
 		{"pkg.installed", false},
 		{"state.apply", false},
 		{"state.highstate", false},
+		{"sys.list_functions", false},
 		{"custom.module", false},
 		{"", false},
 	}
