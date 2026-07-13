@@ -394,40 +394,47 @@ func withWriteOnly(frag map[string]any) map[string]any {
 
 // primitiveJSONSchema renders the JSON Schema fragment for a primitive,
 // REPRESENTATION-FAITHFUL to the coercion table (§2.3): the schema accepts
-// exactly the shapes the runtime decoder accepts, so an editor never flags a
-// value the peel would take (schema/runtime agreement). The decoder remains
-// the enforcement authority for value-level rules the schema cannot express
-// (base-10 range checks, whitespace trimming).
+// exactly the shapes the runtime decoder accepts — including the declared
+// leniencies (whitespace-trimmed, case-insensitive boolean strings; trimmed
+// numeric strings) — so an editor never flags a value the peel would take.
+// anyOf (at least one), never oneOf (exactly one): representation branches
+// legitimately overlap in JSON's type model (every integer is also a number,
+// and JSON Schema's "integer" itself accepts 5.0), and oneOf's
+// exactly-one-match semantics turned that overlap into a rejection of every
+// integer (review finding). The decoder remains the enforcement authority for
+// what a pattern cannot express (range checks).
 func primitiveJSONSchema(pk primKind, t reflect.Type) map[string]any {
 	switch pk {
 	case primString:
 		// Scalars coerce into strings via fmt.Sprint (declared, deliberate).
-		return map[string]any{"oneOf": []any{
+		return map[string]any{"anyOf": []any{
 			map[string]any{"type": "string"},
 			map[string]any{"type": "number"},
 			map[string]any{"type": "boolean"},
 		}}
 	case primBool:
-		// bool | integer 0/1 (BD-7) | truthy/falsy strings (BD-2).
-		return map[string]any{"oneOf": []any{
+		// bool | integer 0/1 (BD-7) | truthy/falsy string (BD-2) — the string
+		// arm mirrors coerceBool's ToLower(TrimSpace(v)) exactly: any casing,
+		// surrounding whitespace allowed. ECMA regex has no reliable inline
+		// case-flag in JSON Schema, so the pattern spells the classes out.
+		return map[string]any{"anyOf": []any{
 			map[string]any{"type": "boolean"},
 			map[string]any{"type": "integer", "enum": []any{0, 1}},
-			map[string]any{"type": "string", "enum": []any{
-				"true", "True", "yes", "Yes", "1", "on", "On",
-				"false", "False", "no", "No", "0", "off", "Off",
-			}},
+			map[string]any{"type": "string",
+				"pattern": `^\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\s*$`},
 		}}
 	case primInt:
-		// any integer kind | integral float | base-10 numeric string (BD-2).
-		return map[string]any{"oneOf": []any{
+		// JSON Schema "integer" already accepts integral numbers (5.0), which
+		// is exactly the coercion table's integral-float acceptance — one
+		// branch covers both. Strings: base-10, trimmed.
+		return map[string]any{"anyOf": []any{
 			map[string]any{"type": "integer"},
-			map[string]any{"type": "number", "multipleOf": 1},
-			map[string]any{"type": "string", "pattern": `^[+-]?[0-9]+$`},
+			map[string]any{"type": "string", "pattern": `^\s*[+-]?[0-9]+\s*$`},
 		}}
 	case primFloat:
-		return map[string]any{"oneOf": []any{
+		return map[string]any{"anyOf": []any{
 			map[string]any{"type": "number"},
-			map[string]any{"type": "string", "pattern": `^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$`},
+			map[string]any{"type": "string", "pattern": `^\s*[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?\s*$`},
 		}}
 	case primMapAny:
 		return map[string]any{"type": "object"}

@@ -75,7 +75,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -101,7 +101,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -127,7 +127,7 @@
         "HasDefault": true,
         "Default": "auto",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -153,7 +153,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -179,7 +179,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -205,7 +205,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -217,22 +217,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -333,7 +318,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -390,7 +375,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -440,7 +425,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -550,7 +535,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -576,7 +561,7 @@
         "HasDefault": true,
         "Default": "root",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -602,7 +587,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -686,7 +671,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -712,7 +697,7 @@
         "HasDefault": true,
         "Default": "root",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -738,7 +723,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -764,7 +749,7 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -790,7 +775,7 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -816,7 +801,7 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -842,7 +827,7 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -868,7 +853,7 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -932,7 +917,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1160,7 +1145,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1245,7 +1230,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1386,7 +1371,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1412,7 +1397,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1438,7 +1423,7 @@
         "HasDefault": true,
         "Default": "# START managed zone",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1464,7 +1449,7 @@
         "HasDefault": true,
         "Default": "# END managed zone",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1490,7 +1475,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -1502,22 +1487,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -1536,7 +1506,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -1548,22 +1518,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -1643,7 +1598,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1669,7 +1624,7 @@
         "HasDefault": true,
         "Default": "#",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1695,7 +1650,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1783,7 +1738,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1809,7 +1764,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -1835,7 +1790,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -1847,22 +1802,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -1881,7 +1821,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -1893,22 +1833,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -1927,7 +1852,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -1939,22 +1864,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -2040,7 +1950,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2093,7 +2003,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2119,7 +2029,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2145,7 +2055,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -2157,22 +2067,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -2275,7 +2170,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2301,7 +2196,7 @@
         "HasDefault": true,
         "Default": "=",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2375,7 +2270,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2401,7 +2296,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2515,7 +2410,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2541,7 +2436,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2567,7 +2462,7 @@
         "HasDefault": true,
         "Default": "ensure",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2593,7 +2488,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2619,7 +2514,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2645,7 +2540,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2768,7 +2663,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2794,7 +2689,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2820,7 +2715,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2926,7 +2821,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2952,7 +2847,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -2978,7 +2873,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -2990,22 +2885,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -3127,7 +3007,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3153,7 +3033,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3229,7 +3109,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3255,7 +3135,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3281,7 +3161,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -3293,22 +3173,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -3327,7 +3192,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -3339,22 +3204,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -3465,7 +3315,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3491,7 +3341,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3517,7 +3367,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3543,16 +3393,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "integer"
             },
             {
-              "multipleOf": 1,
-              "type": "number"
-            },
-            {
-              "pattern": "^[+-]?[0-9]+$",
+              "pattern": "^\\s*[+-]?[0-9]+\\s*$",
               "type": "string"
             }
           ]
@@ -3571,7 +3417,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -3583,22 +3429,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -3617,7 +3448,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -3629,22 +3460,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -3663,7 +3479,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3754,7 +3570,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3780,7 +3596,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3806,7 +3622,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -3818,22 +3634,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -3852,7 +3653,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -3864,22 +3665,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -3960,7 +3746,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -3986,7 +3772,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -3998,22 +3784,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -4093,7 +3864,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4119,7 +3890,7 @@
         "HasDefault": true,
         "Default": "#",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4145,7 +3916,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4242,7 +4013,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4268,7 +4039,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4294,7 +4065,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4320,7 +4091,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4346,16 +4117,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "integer"
             },
             {
-              "multipleOf": 1,
-              "type": "number"
-            },
-            {
-              "pattern": "^[+-]?[0-9]+$",
+              "pattern": "^\\s*[+-]?[0-9]+\\s*$",
               "type": "string"
             }
           ]
@@ -4374,7 +4141,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -4386,22 +4153,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -4484,7 +4236,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4510,7 +4262,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4536,7 +4288,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4562,7 +4314,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4588,7 +4340,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -4600,22 +4352,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -4668,7 +4405,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4771,7 +4508,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4865,7 +4602,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -4891,16 +4628,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "integer"
             },
             {
-              "multipleOf": 1,
-              "type": "number"
-            },
-            {
-              "pattern": "^[+-]?[0-9]+$",
+              "pattern": "^\\s*[+-]?[0-9]+\\s*$",
               "type": "string"
             }
           ]
@@ -4919,7 +4652,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -4931,22 +4664,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -5127,7 +4845,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5155,7 +4873,7 @@
         "HasDefault": true,
         "Default": "/etc/hosts",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5248,7 +4966,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5274,7 +4992,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5302,7 +5020,7 @@
         "HasDefault": true,
         "Default": "/etc/hosts",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5383,7 +5101,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5513,7 +5231,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5539,7 +5257,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5565,7 +5283,7 @@
         "HasDefault": true,
         "Default": "ext4",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5591,7 +5309,7 @@
         "HasDefault": true,
         "Default": "defaults",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5617,16 +5335,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "integer"
             },
             {
-              "multipleOf": 1,
-              "type": "number"
-            },
-            {
-              "pattern": "^[+-]?[0-9]+$",
+              "pattern": "^\\s*[+-]?[0-9]+\\s*$",
               "type": "string"
             }
           ]
@@ -5645,16 +5359,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "integer"
             },
             {
-              "multipleOf": 1,
-              "type": "number"
-            },
-            {
-              "pattern": "^[+-]?[0-9]+$",
+              "pattern": "^\\s*[+-]?[0-9]+\\s*$",
               "type": "string"
             }
           ]
@@ -5673,7 +5383,7 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -5685,22 +5395,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -5858,7 +5553,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5884,7 +5579,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5910,7 +5605,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -5936,7 +5631,7 @@
         "HasDefault": true,
         "Default": "pip3",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6044,7 +5739,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6070,7 +5765,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6096,7 +5791,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -6108,22 +5803,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -6218,7 +5898,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6244,7 +5924,7 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -6256,22 +5936,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -6385,7 +6050,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6466,7 +6131,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6527,7 +6192,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6633,7 +6298,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6659,7 +6324,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6685,7 +6350,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6711,7 +6376,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6737,7 +6402,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6763,7 +6428,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -6789,7 +6454,7 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -6801,22 +6466,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -6835,7 +6485,7 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -6847,22 +6497,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -6881,7 +6516,7 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -6893,22 +6528,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -6988,7 +6608,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7139,7 +6759,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7199,7 +6819,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7291,7 +6911,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7423,7 +7043,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7483,7 +7103,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7543,7 +7163,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7702,7 +7322,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7728,7 +7348,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7754,7 +7374,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7847,7 +7467,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7873,7 +7493,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7899,7 +7519,7 @@
         "HasDefault": true,
         "Default": "ssh-rsa",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7925,7 +7545,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -7951,7 +7571,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8079,7 +7699,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8188,7 +7808,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8214,7 +7834,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8240,7 +7860,7 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -8252,22 +7872,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -8329,7 +7934,7 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -8341,22 +7946,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -8375,7 +7965,7 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -8387,22 +7977,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -8421,7 +7996,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8479,7 +8054,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8546,7 +8121,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8721,7 +8296,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8875,7 +8450,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -8901,7 +8476,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -8913,22 +8488,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -9012,7 +8572,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -9038,7 +8598,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -9050,22 +8610,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -9084,7 +8629,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -9096,22 +8641,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -9204,7 +8734,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -9230,16 +8760,12 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "integer"
             },
             {
-              "multipleOf": 1,
-              "type": "number"
-            },
-            {
-              "pattern": "^[+-]?[0-9]+$",
+              "pattern": "^\\s*[+-]?[0-9]+\\s*$",
               "type": "string"
             }
           ]
@@ -9283,7 +8809,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -9371,7 +8897,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -9397,7 +8923,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -9423,7 +8949,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -9435,22 +8961,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -9469,7 +8980,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -9481,22 +8992,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]
@@ -9515,7 +9011,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -9542,7 +9038,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "string"
             },
@@ -9568,7 +9064,7 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "oneOf": [
+          "anyOf": [
             {
               "type": "boolean"
             },
@@ -9580,22 +9076,7 @@
               "type": "integer"
             },
             {
-              "enum": [
-                "true",
-                "True",
-                "yes",
-                "Yes",
-                "1",
-                "on",
-                "On",
-                "false",
-                "False",
-                "no",
-                "No",
-                "0",
-                "off",
-                "Off"
-              ],
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
               "type": "string"
             }
           ]

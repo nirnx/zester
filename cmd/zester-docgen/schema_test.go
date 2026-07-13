@@ -60,7 +60,7 @@ func TestRenderModuleSchemaArtifact_ValidDraft202012(t *testing.T) {
 
 	valid := map[string]any{
 		"remove-telnet": map[string]any{
-			"pkg.removed": map[string]any{"name": "telnet"},
+			"pkg.removed": []any{map[string]any{"name": "telnet"}},
 		},
 	}
 	if err := sch.Validate(jsonInstance(t, valid)); err != nil {
@@ -73,7 +73,7 @@ func TestRenderModuleSchemaArtifact_ValidDraft202012(t *testing.T) {
 	// schema reject.
 	invalidType := map[string]any{
 		"remove-telnet": map[string]any{
-			"pkg.removed": map[string]any{"name": []any{"a", "b"}}, // composite: rejected everywhere
+			"pkg.removed": []any{map[string]any{"name": []any{"a", "b"}}}, // composite: rejected everywhere
 		},
 	}
 	if err := sch.Validate(jsonInstance(t, invalidType)); err == nil {
@@ -85,7 +85,7 @@ func TestRenderModuleSchemaArtifact_ValidDraft202012(t *testing.T) {
 	// make the artifact reject configs for the other 46.
 	unmigrated := map[string]any{
 		"web-config": map[string]any{
-			"file.managed": map[string]any{"path": "/etc/nginx.conf", "mode": "0644"},
+			"file.managed": []any{map[string]any{"path": "/etc/nginx.conf"}, map[string]any{"mode": "0644"}},
 		},
 	}
 	if err := sch.Validate(jsonInstance(t, unmigrated)); err != nil {
@@ -175,15 +175,15 @@ func TestRenderModuleSchemaArtifact_TwoMigratedModules_OneOfIsExclusive(t *testi
 	}
 	sch := compileArtifact(t, raw)
 
-	validA := map[string]any{"id-a": map[string]any{"demo.a": map[string]any{"name": "x"}}}
+	validA := map[string]any{"id-a": map[string]any{"demo.a": []any{map[string]any{"name": "x"}}}}
 	if err := sch.Validate(jsonInstance(t, validA)); err != nil {
 		t.Errorf("F1 regression: a valid demo.a instance must match exactly one oneOf branch: %v", err)
 	}
-	validB := map[string]any{"id-b": map[string]any{"demo.b": map[string]any{"path": "/y"}}}
+	validB := map[string]any{"id-b": map[string]any{"demo.b": []any{map[string]any{"path": "/y"}}}}
 	if err := sch.Validate(jsonInstance(t, validB)); err != nil {
 		t.Errorf("F1 regression: a valid demo.b instance must match exactly one oneOf branch: %v", err)
 	}
-	unmigrated := map[string]any{"id-c": map[string]any{"demo.c": map[string]any{"foo": "bar"}}}
+	unmigrated := map[string]any{"id-c": map[string]any{"demo.c": []any{map[string]any{"foo": "bar"}}}}
 	if err := sch.Validate(jsonInstance(t, unmigrated)); err != nil {
 		t.Errorf("an unmigrated-only module must still match ONLY the catch-all branch: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestRenderModuleSchemaArtifact_ZeroModulesOmitsStateMapConstraint(t *testin
 	sch := compileArtifact(t, raw)
 	anyModule := map[string]any{
 		"web-config": map[string]any{
-			"file.managed": map[string]any{"path": "/etc/nginx.conf", "mode": "0644"},
+			"file.managed": []any{map[string]any{"path": "/etc/nginx.conf"}, map[string]any{"mode": "0644"}},
 		},
 	}
 	if err := sch.Validate(jsonInstance(t, anyModule)); err != nil {
@@ -263,7 +263,10 @@ func TestModuleParamSchema_SemanticTypeRefsSharedDefs(t *testing.T) {
 	}
 	defs := doc["$defs"].(map[string]any)
 	moduleDef := defs["modules"].(map[string]any)["demo.tristate"].(map[string]any)
-	props := moduleDef["properties"].(map[string]any)
+	// The module def models the real .zy shape: an ARRAY of param maps — the
+	// per-param properties live on the items schema.
+	items := moduleDef["items"].(map[string]any)
+	props := items["properties"].(map[string]any)
 	enableProp, ok := props["enable"].(map[string]any)
 	if !ok {
 		t.Fatalf("properties.enable missing or not an object: %#v", props["enable"])
@@ -285,15 +288,15 @@ func TestModuleParamSchema_SemanticTypeRefsSharedDefs(t *testing.T) {
 	// The $ref must be load-bearing: the compiled artifact enforces
 	// TriState's real accepted-representation constraints through it.
 	sch := compileArtifact(t, raw)
-	validBool := map[string]any{"thing": map[string]any{"demo.tristate": map[string]any{"enable": true}}}
+	validBool := map[string]any{"thing": map[string]any{"demo.tristate": []any{map[string]any{"enable": true}}}}
 	if err := sch.Validate(jsonInstance(t, validBool)); err != nil {
 		t.Errorf("expected a bool enable to validate through the $ref: %v", err)
 	}
-	validString := map[string]any{"thing": map[string]any{"demo.tristate": map[string]any{"enable": "yes"}}}
+	validString := map[string]any{"thing": map[string]any{"demo.tristate": []any{map[string]any{"enable": "yes"}}}}
 	if err := sch.Validate(jsonInstance(t, validString)); err != nil {
 		t.Errorf("expected a truthy-string enable to validate through the $ref: %v", err)
 	}
-	invalidArray := map[string]any{"thing": map[string]any{"demo.tristate": map[string]any{"enable": []any{1, 2}}}}
+	invalidArray := map[string]any{"thing": map[string]any{"demo.tristate": []any{map[string]any{"enable": []any{1, 2}}}}}
 	if err := sch.Validate(jsonInstance(t, invalidArray)); err == nil {
 		t.Error("expected an array enable to fail validation (TriState accepts bool/string/integer only)")
 	}

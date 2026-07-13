@@ -85,7 +85,18 @@ func renderModuleSchemaArtifact(infos []modschema.ModuleInfo) ([]byte, error) {
 			"modules":       moduleDefs,
 			"semanticTypes": semTypeDefs,
 		},
-		"type":                 "object",
+		"type": "object",
+		// Top-level directives are NOT state entries (review finding): include
+		// is a list of dot-notation references, extend an object of state
+		// overrides (left loosely typed — its values follow the same
+		// module-list shape but reference other files' states).
+		"properties": map[string]any{
+			"include": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"extend": map[string]any{"type": "object"},
+		},
 		"additionalProperties": stateMapValue,
 	}
 
@@ -99,19 +110,20 @@ func renderModuleSchemaArtifact(infos []modschema.ModuleInfo) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// moduleParamSchema renders one module's $defs entry: an object schema over
-// its canonical parameter names (aliases are a Decode-time convenience, not
-// part of the strict schema surface). additionalProperties stays permissive
-// — requisites, generic attributes, and any not-yet-modeled alias are the
-// Decode-time unknown-key policy's concern, not this artifact's.
+// moduleParamSchema renders one module's $defs entry, modeling the REAL .zy
+// shape the compiler enforces (parseStateData: the module's value MUST be a
+// LIST of maps — `- content: ...` / `- mode: ...` — never a single object;
+// review finding). Each list item is an object whose known properties are the
+// module's canonical parameters; additionalProperties stays permissive because
+// requisites, generic attributes, and aliases also ride the same list items
+// and are the Decode-time policy's concern. A REQUIRED parameter cannot be
+// expressed on items (each item carries only SOME params) — it is expressed
+// with `contains`: some item must carry the key.
 //
 // A semantic-typed field's property is a $ref into the shared
-// $defs.semanticTypes entry (F4) rather than an inlined copy of the type's
-// JSONSchema fragment: one migrated module using, say, TriState in three
-// fields must not carry three duplicated inline copies of TriState's schema,
-// and the shared $defs entry must be load-bearing (referenced), not merely
-// present. $ref may carry sibling keywords (draft 2019-09+, so draft
-// 2020-12) — withDescription still attaches the field's own usage text.
+// $defs.semanticTypes entry rather than an inlined copy (one module using
+// TriState in three fields must not carry three copies, and the shared entry
+// must be load-bearing).
 func moduleParamSchema(mi modschema.ModuleInfo) map[string]any {
 	props := map[string]any{}
 	var required []string
@@ -127,14 +139,25 @@ func moduleParamSchema(mi modschema.ModuleInfo) map[string]any {
 			required = append(required, f.Name)
 		}
 	}
-	def := map[string]any{
+	item := map[string]any{
 		"type":                 "object",
-		"description":          mi.Doc.Summary,
 		"properties":           props,
 		"additionalProperties": true,
 	}
+	def := map[string]any{
+		"type":        "array",
+		"description": mi.Doc.Summary,
+		"items":       item,
+	}
 	if len(required) > 0 {
-		def["required"] = required
+		sort.Strings(required)
+		conts := make([]any, 0, len(required))
+		for _, name := range required {
+			conts = append(conts, map[string]any{
+				"contains": map[string]any{"required": []string{name}},
+			})
+		}
+		def["allOf"] = conts
 	}
 	return def
 }
