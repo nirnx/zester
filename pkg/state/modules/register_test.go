@@ -108,14 +108,20 @@ func TestRegistrations_ExactlyOneBuilderShape(t *testing.T) {
 }
 
 func TestRegistrations_SpecCarryingRows(t *testing.T) {
-	// The migrated set as of the file.managed wave: pilot #1 (pkg.removed), the
-	// semantic-type pilot (service.running + service.dead on TriState),
+	// The migrated set as of the file.absent/file.touch/file.copy/file.symlink/
+	// file.append wave: pilot #1 (pkg.removed), the semantic-type pilot
+	// (service.running + service.dead on TriState),
 	// pkg.installed/pkg.latest/pkg.purged (all primitives, no semantic types),
 	// user.present (gid on GroupRef, groups/optional_groups on StringList, a
-	// sensitive password), and file.managed (template on TemplateFlag, mode on a
-	// lazy FileMode — the BD-1 flagship). This pins that no accidental extra Spec
-	// has been attached before its own tranche; the order is registration order,
-	// so file.managed (the first registration row) leads.
+	// sensitive password), file.managed (template on TemplateFlag, mode on a
+	// lazy FileMode — the BD-1 flagship), and file.absent/file.append/
+	// file.symlink/file.copy/file.touch (source required on file.copy, text on
+	// StringList for file.append), plus the file-surgery wave (file.line,
+	// file.replace, file.comment, file.uncomment, file.keyvalue) and the
+	// declared-facet wave (file.directory's lazy FileMode + dir_mode alias,
+	// file.recurse's DECLARED-ONLY dir_mode). This pins that no accidental extra
+	// Spec has been attached before its own tranche; the order is registration
+	// order, so file.managed (the first registration row) leads.
 	var withSpec []string
 	for _, r := range registrations {
 		if r.Spec != nil {
@@ -125,7 +131,13 @@ func TestRegistrations_SpecCarryingRows(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"file.managed", "pkg.installed", "user.present", "pkg.removed", "service.running", "service.dead", "pkg.latest", "pkg.purged"}
+	want := []string{
+		"file.managed", "file.directory", "file.absent", "file.append", "pkg.installed",
+		"user.present", "group.present", "group.absent", "file.symlink", "file.blockreplace",
+		"file.recurse", "pkg.removed", "service.running", "service.dead", "cron.present",
+		"cron.absent", "file.line", "file.replace", "file.comment", "file.uncomment",
+		"file.keyvalue", "file.copy", "file.touch", "pkg.latest", "pkg.purged",
+	}
 	if !reflect.DeepEqual(withSpec, want) {
 		t.Errorf("spec-carrying rows = %v, want %v", withSpec, want)
 	}
@@ -146,9 +158,17 @@ func TestRegisterAll_WiresBuildersAndSpec(t *testing.T) {
 	}
 
 	// The migrated set (0C pilot + 0E semantic-type pilot + the all-primitives
-	// pkg-family wave + user.present + file.managed) is spec-registered;
+	// pkg-family wave + user.present + file.managed + the file.absent/
+	// file.touch/file.copy/file.symlink/file.append wave + the file-surgery wave
+	// + the declared-facet file.directory/file.recurse wave) is spec-registered;
 	// SpecNames is sorted.
-	wantSpecNames := []string{"file.managed", "pkg.installed", "pkg.latest", "pkg.purged", "pkg.removed", "service.dead", "service.running", "user.present"}
+	wantSpecNames := []string{
+		"cron.absent", "cron.present", "file.absent", "file.append", "file.blockreplace",
+		"file.comment", "file.copy", "file.directory", "file.keyvalue", "file.line",
+		"file.managed", "file.recurse", "file.replace", "file.symlink", "file.touch",
+		"file.uncomment", "group.absent", "group.present", "pkg.installed", "pkg.latest",
+		"pkg.purged", "pkg.removed", "service.dead", "service.running", "user.present",
+	}
 	if names := reg.SpecNames(); !reflect.DeepEqual(names, wantSpecNames) {
 		t.Errorf("SpecNames = %v, want %v", names, wantSpecNames)
 	}
@@ -170,8 +190,8 @@ func TestRegisterAll_WiresBuildersAndSpec(t *testing.T) {
 		}
 	}
 	// A legacy module has no spec description.
-	if _, ok := reg.Describe("file.directory"); ok {
-		t.Error("file.directory should not be spec-described")
+	if _, ok := reg.Describe("cmd.run"); ok {
+		t.Error("cmd.run should not be spec-described")
 	}
 
 	// Parse executes the migrated plan.

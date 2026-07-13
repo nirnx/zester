@@ -21,31 +21,26 @@ const policyMsg = "the doc-coverage ratchet (keystone spec §9 gate 3) only SHRI
 // all-primitives pkg-family wave (pkg.installed, pkg.latest, pkg.purged)
 // shrank it to 41, the user.present migration (gid on GroupRef,
 // groups/optional_groups on StringList, a sensitive password) shrank it to
-// 40, and the file.managed migration (template on TemplateFlag, mode on a lazy
-// FileMode — the BD-1 flagship) shrank it to 39. Every subsequent migration PR
-// removes exactly the name(s) it migrates — never adds one.
+// 40, the file.managed migration (template on TemplateFlag, mode on a lazy
+// FileMode — the BD-1 flagship) shrank it to 39, and the
+// file.absent/file.touch/file.copy/file.symlink/file.append wave (source
+// required on file.copy, text on StringList for file.append) shrank it to 34,
+// and the file-surgery wave (file.line's `mode` action enum, file.replace's
+// required `pattern` + int `count`, the N:1 file.comment/file.uncomment pair,
+// file.keyvalue's `key_values` StringMap, and file.blockreplace) shrank it to
+// 28, and the declared-facet file.directory/file.recurse wave (mode on a lazy
+// FileMode with a dir_mode fallback alias; file.recurse's DECLARED-ONLY
+// dir_mode + lazy 0644 file_mode) shrank it to 26, and the cron/group wave
+// (cron.present's eager default=* schedule fields — the BD-3 activation;
+// cron.absent; group.present's plain-int gid + members/addusers/delusers on
+// StringList; group.absent) shrank it to 22.
+// Every subsequent migration PR removes exactly the name(s) it migrates —
+// never adds one.
 var unmigratedAllowlist = []string{
 	"archive.extracted",
 	"cmd.run",
-	"cron.absent",
-	"cron.present",
-	"file.absent",
-	"file.append",
-	"file.blockreplace",
-	"file.comment",
-	"file.copy",
-	"file.directory",
-	"file.keyvalue",
-	"file.line",
-	"file.recurse",
-	"file.replace",
-	"file.symlink",
-	"file.touch",
-	"file.uncomment",
 	"git.cloned",
 	"git.latest",
-	"group.absent",
-	"group.present",
 	"host.absent",
 	"host.present",
 	"locale.present",
@@ -110,12 +105,16 @@ func TestDocCoverage_Ratchet(t *testing.T) {
 	// pkg.latest, and pkg.purged (the all-primitives pkg-family wave) plus
 	// user.present (gid on GroupRef, groups/optional_groups on StringList, a
 	// sensitive password) plus file.managed (template on TemplateFlag, mode on a
-	// lazy FileMode — the BD-1 flagship) have shrunk the list so far. This
-	// assertion is expected to need updating — by removing names from
+	// lazy FileMode — the BD-1 flagship) plus file.absent, file.touch,
+	// file.copy, file.symlink, and file.append (source required on file.copy,
+	// text on StringList for file.append) plus the file-surgery wave (file.line,
+	// file.replace, file.comment, file.uncomment, file.keyvalue,
+	// file.blockreplace, file.directory, file.recurse) have shrunk the list so
+	// far. This assertion is expected to need updating — by removing names from
 	// unmigratedAllowlist, never by loosening this count — as each subsequent
 	// migration PR lands.
-	if migrated != 8 {
-		t.Errorf("migrated module count = %d, want 8 (pkg.removed, service.running, service.dead, pkg.installed, pkg.latest, pkg.purged, user.present, file.managed).\n%s", migrated, policyMsg)
+	if migrated != 25 {
+		t.Errorf("migrated module count = %d, want 25 (pkg.removed, service.running, service.dead, pkg.installed, pkg.latest, pkg.purged, user.present, file.managed, file.absent, file.touch, file.copy, file.symlink, file.append, file.line, file.replace, file.comment, file.uncomment, file.keyvalue, file.blockreplace, file.directory, file.recurse, cron.present, cron.absent, group.present, group.absent).\n%s", migrated, policyMsg)
 	}
 }
 

@@ -115,13 +115,24 @@ func run(root string, claimed map[string]bool) error {
 	}
 
 	// Pages: gated on spec presence, state modules only (see stateSpecd above).
-	for _, mi := range stateSpecd {
-		slug, ok := moduleToSlug[mi.Module]
-		if !ok {
-			return fmt.Errorf("docgen: module %s has no page-group slug", mi.Module)
+	// Group by page slug so the N:1 PageGroups (file.comment/file.uncomment share
+	// file-comment) render ONE combined page instead of the members overwriting
+	// each other. Slug order follows stateSpecd (registration) order for
+	// determinism.
+	slugOrder, bySlug, err := groupBySlug(stateSpecd)
+	if err != nil {
+		return err
+	}
+	for _, slug := range slugOrder {
+		mis := bySlug[slug]
+		claim := false
+		for _, mi := range mis {
+			if claimed[mi.Module] {
+				claim = true
+			}
 		}
 		path := filepath.Join(modulesDir, slug+".mdx")
-		if err := writeModulePage(path, mi, claimed[mi.Module]); err != nil {
+		if err := writeModulePageGroup(path, mis, claim); err != nil {
 			return err
 		}
 	}
@@ -150,4 +161,25 @@ func run(root string, claimed map[string]bool) error {
 	}
 
 	return nil
+}
+
+// groupBySlug groups the state-module ModuleInfos by their page slug (the §8 N:1
+// PageGroups: several module names — file.comment/file.uncomment, host.present/
+// host.absent, … — share one page). first-seen order is preserved so the
+// generated page order is deterministic (it follows stateSpecd registration
+// order). A module absent from moduleToSlug is a generation error rather than a
+// silently missing page.
+func groupBySlug(stateSpecd []modschema.ModuleInfo) (order []string, bySlug map[string][]modschema.ModuleInfo, err error) {
+	bySlug = map[string][]modschema.ModuleInfo{}
+	for _, mi := range stateSpecd {
+		slug, ok := moduleToSlug[mi.Module]
+		if !ok {
+			return nil, nil, fmt.Errorf("docgen: module %s has no page-group slug", mi.Module)
+		}
+		if _, seen := bySlug[slug]; !seen {
+			order = append(order, slug)
+		}
+		bySlug[slug] = append(bySlug[slug], mi)
+	}
+	return order, bySlug, nil
 }

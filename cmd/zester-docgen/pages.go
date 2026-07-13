@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/modschema"
@@ -50,79 +51,15 @@ func renderModulePage(mi modschema.ModuleInfo) (string, error) {
 	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(mi.Kind, mi.Module))
 
-	if mi.Doc.Description != "" {
-		b.WriteString("\n---\n\n")
-		b.WriteString(mi.Doc.Description)
-		b.WriteString("\n")
-	}
-
-	if len(mi.Params) > 0 {
-		b.WriteString("\n---\n\n## Parameters\n\n")
-		b.WriteString("| Parameter | Type | Required | Default | Description |\n")
-		b.WriteString("|---|---|---|---|---|\n")
-		for _, f := range mi.Params {
-			typ := displayParamType(f)
-			required := "No"
-			if f.Required {
-				required = "Yes"
-			}
-			def := paramDefaultCell(f)
-			fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s |\n", f.Name, typ, required, def, f.Usage)
-		}
-		if mi.Kind == modschema.KindState {
-			b.WriteString("\n")
-			b.WriteString(requisitesBoilerplate)
-			b.WriteString("\n")
-		}
-	}
-
-	if len(mi.SemTypes) > 0 {
-		b.WriteString("\n---\n\n## Parameter Types\n\n")
-		for _, st := range mi.SemTypes {
-			fmt.Fprintf(&b, "### %s\n\n%s\n\n", st.Name, st.Doc)
-		}
-	}
-
+	renderDescriptionSection(&b, mi.Doc.Description)
+	renderParamsSection(&b, mi)
+	renderParamTypesSection(&b, mi)
 	renderPageEffects(&b, mi.Doc.Effects)
-
-	if len(mi.Doc.Examples) > 0 {
-		b.WriteString("\n---\n\n## Examples\n\n")
-		for _, ex := range mi.Doc.Examples {
-			fmt.Fprintf(&b, "### %s\n\n", ex.Title)
-			if ex.Explanation != "" {
-				fmt.Fprintf(&b, "%s\n\n", ex.Explanation)
-			}
-			fence := "yaml"
-			if ex.Kind == "cli" {
-				fence = "bash"
-			}
-			fmt.Fprintf(&b, "```%s\n%s\n```\n\n", fence, strings.TrimRight(ex.Code, "\n"))
-		}
-	}
-
-	if len(mi.Doc.Notes) > 0 {
-		b.WriteString("\n---\n\n## Notes\n\n")
-		for _, n := range mi.Doc.Notes {
-			fmt.Fprintf(&b, "> **%s**\n>\n%s\n\n", n.Title, blockquoteBody(n.Body))
-		}
-	}
-
-	if len(mi.Doc.Divergences) > 0 {
-		b.WriteString("\n---\n\n## Divergences\n\n")
-		for _, d := range mi.Doc.Divergences {
-			fmt.Fprintf(&b, "- %s\n", d)
-		}
-	}
-
-	if len(mi.Doc.SeeAlso) > 0 {
-		b.WriteString("\n---\n\n## See Also\n\n")
-		for _, s := range mi.Doc.SeeAlso {
-			slug, ok := moduleToSlug[s]
-			if !ok {
-				return "", fmt.Errorf("docgen: module %s: see-also target %q does not resolve to any page", mi.Module, s)
-			}
-			fmt.Fprintf(&b, "- [%s](/docs/guides/modules/%s)\n", s, slug)
-		}
+	renderExamplesSection(&b, mi.Doc.Examples)
+	renderNotesSection(&b, mi.Doc.Notes)
+	renderDivergencesSection(&b, mi.Doc.Divergences)
+	if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso); err != nil {
+		return "", err
 	}
 
 	rendered := b.String()
@@ -130,6 +67,217 @@ func renderModulePage(mi modschema.ModuleInfo) (string, error) {
 		return "", err
 	}
 	return rendered, nil
+}
+
+// renderModulePageGroup renders ONE MDX page shared by the N modules that map to
+// a single page slug (the §8 N:1 PageGroups — file.comment/file.uncomment is the
+// first with every member migrated). For a single-member group it is
+// byte-identical to renderModulePage. For a multi-member group it renders the
+// SHARED header (a joined title, one managed marker per module, the shared Source
+// line, and — because the members share one proto — a single Parameters and
+// Parameter Types section) followed by a per-module section (Description →
+// Effects → Examples → Notes → Divergences → See Also) under a "## `<module>`"
+// banner. The members are expected to share an identical parameter surface (they
+// share the proto); that is asserted before rendering.
+func renderModulePageGroup(mis []modschema.ModuleInfo) (string, error) {
+	if len(mis) == 1 {
+		return renderModulePage(mis[0])
+	}
+	if err := assertSharedParams(mis); err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	head := mis[0]
+	names := make([]string, len(mis))
+	summaries := make([]string, len(mis))
+	quoted := make([]string, len(mis))
+	for i, mi := range mis {
+		names[i] = mi.Module
+		summaries[i] = mi.Doc.Summary
+		quoted[i] = "`" + mi.Module + "`"
+	}
+
+	fmt.Fprintf(&b, "---\ntitle: %q\ndescription: %q\n---\n\n",
+		strings.Join(names, " / "), strings.Join(summaries, " "))
+	for _, mi := range mis {
+		b.WriteString(managedMarker(mi.Module))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(head.Kind, head.Module))
+
+	// Shared parameters note + one Parameters/Parameter Types section (the
+	// members share one proto, asserted above).
+	b.WriteString("\n---\n\n")
+	fmt.Fprintf(&b, "%s share the same parameters and implementation.\n", joinWithAnd(quoted))
+	renderParamsSection(&b, head)
+	renderParamTypesSection(&b, head)
+
+	// Per-module behavior sections under a module banner.
+	for _, mi := range mis {
+		fmt.Fprintf(&b, "\n---\n\n## `%s`\n\n", mi.Module)
+		if mi.Doc.Description != "" {
+			b.WriteString(mi.Doc.Description)
+			b.WriteString("\n")
+		}
+		renderPageEffects(&b, mi.Doc.Effects)
+		renderExamplesSection(&b, mi.Doc.Examples)
+		renderNotesSection(&b, mi.Doc.Notes)
+		renderDivergencesSection(&b, mi.Doc.Divergences)
+		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso); err != nil {
+			return "", err
+		}
+	}
+
+	rendered := b.String()
+	if err := assertNoJSX(strings.Join(names, "/"), rendered); err != nil {
+		return "", err
+	}
+	return rendered, nil
+}
+
+// assertSharedParams verifies every module in an N:1 page group exposes the same
+// parameter surface (name/type/required/default/aliases) — the invariant that
+// lets the combined page render a SINGLE shared Parameters table. Members of a
+// PageGroup share one Go proto, so this holds by construction; the check turns a
+// future divergence into a loud generation failure rather than a silently wrong
+// page.
+func assertSharedParams(mis []modschema.ModuleInfo) error {
+	head := mis[0]
+	for _, mi := range mis[1:] {
+		if len(mi.Params) != len(head.Params) {
+			return fmt.Errorf("docgen: page group %v: members expose different parameter counts (%d vs %d)",
+				groupNames(mis), len(mi.Params), len(head.Params))
+		}
+		for i := range mi.Params {
+			a, c := head.Params[i], mi.Params[i]
+			if a.Name != c.Name || a.GoType != c.GoType || a.Required != c.Required ||
+				a.Primary != c.Primary || a.Default != c.Default || a.SemanticType != c.SemanticType ||
+				!slices.Equal(a.Aliases, c.Aliases) {
+				return fmt.Errorf("docgen: page group %v: parameter %q differs across members — a shared page needs one parameter surface",
+					groupNames(mis), a.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func groupNames(mis []modschema.ModuleInfo) []string {
+	out := make([]string, len(mis))
+	for i, mi := range mis {
+		out[i] = mi.Module
+	}
+	return out
+}
+
+// joinWithAnd renders items as "a and b", "a, b, and c", or a single item.
+func joinWithAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
+	}
+}
+
+func renderDescriptionSection(b *strings.Builder, description string) {
+	if description == "" {
+		return
+	}
+	b.WriteString("\n---\n\n")
+	b.WriteString(description)
+	b.WriteString("\n")
+}
+
+func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo) {
+	if len(mi.Params) == 0 {
+		return
+	}
+	b.WriteString("\n---\n\n## Parameters\n\n")
+	b.WriteString("| Parameter | Type | Required | Default | Description |\n")
+	b.WriteString("|---|---|---|---|---|\n")
+	for _, f := range mi.Params {
+		typ := displayParamType(f)
+		required := "No"
+		if f.Required {
+			required = "Yes"
+		}
+		def := paramDefaultCell(f)
+		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s | %s |\n", f.Name, typ, required, def, f.Usage)
+	}
+	if mi.Kind == modschema.KindState {
+		b.WriteString("\n")
+		b.WriteString(requisitesBoilerplate)
+		b.WriteString("\n")
+	}
+}
+
+func renderParamTypesSection(b *strings.Builder, mi modschema.ModuleInfo) {
+	if len(mi.SemTypes) == 0 {
+		return
+	}
+	b.WriteString("\n---\n\n## Parameter Types\n\n")
+	for _, st := range mi.SemTypes {
+		fmt.Fprintf(b, "### %s\n\n%s\n\n", st.Name, st.Doc)
+	}
+}
+
+func renderExamplesSection(b *strings.Builder, examples []modschema.Example) {
+	if len(examples) == 0 {
+		return
+	}
+	b.WriteString("\n---\n\n## Examples\n\n")
+	for _, ex := range examples {
+		fmt.Fprintf(b, "### %s\n\n", ex.Title)
+		if ex.Explanation != "" {
+			fmt.Fprintf(b, "%s\n\n", ex.Explanation)
+		}
+		fence := "yaml"
+		if ex.Kind == "cli" {
+			fence = "bash"
+		}
+		fmt.Fprintf(b, "```%s\n%s\n```\n\n", fence, strings.TrimRight(ex.Code, "\n"))
+	}
+}
+
+func renderNotesSection(b *strings.Builder, notes []modschema.Note) {
+	if len(notes) == 0 {
+		return
+	}
+	b.WriteString("\n---\n\n## Notes\n\n")
+	for _, n := range notes {
+		fmt.Fprintf(b, "> **%s**\n>\n%s\n\n", n.Title, blockquoteBody(n.Body))
+	}
+}
+
+func renderDivergencesSection(b *strings.Builder, divergences []string) {
+	if len(divergences) == 0 {
+		return
+	}
+	b.WriteString("\n---\n\n## Divergences\n\n")
+	for _, d := range divergences {
+		fmt.Fprintf(b, "- %s\n", d)
+	}
+}
+
+func renderSeeAlsoSection(b *strings.Builder, module string, seeAlso []string) error {
+	if len(seeAlso) == 0 {
+		return nil
+	}
+	b.WriteString("\n---\n\n## See Also\n\n")
+	for _, s := range seeAlso {
+		slug, ok := moduleToSlug[s]
+		if !ok {
+			return fmt.Errorf("docgen: module %s: see-also target %q does not resolve to any page", module, s)
+		}
+		fmt.Fprintf(b, "- [%s](/docs/guides/modules/%s)\n", s, slug)
+	}
+	return nil
 }
 
 // importLineRE matches a raw ES-module / MDX `import` statement at the start of
@@ -281,20 +429,27 @@ func renderPageEffects(b *strings.Builder, e modschema.Effects) {
 	}
 }
 
-// writeModulePage writes the rendered page for mi to path. If path already
-// exists without the managed marker, it refuses to overwrite it UNLESS claim
-// is true (the one-time adoption a module's migration PR performs
-// explicitly) — the markerless-overwrite guard (§8) that protects
-// hand-written pages for modules that have not been migrated yet.
+// writeModulePage writes the rendered page for a single mi to path. It is the
+// single-module convenience wrapper over writeModulePageGroup.
 func writeModulePage(path string, mi modschema.ModuleInfo, claim bool) error {
-	rendered, err := renderModulePage(mi)
+	return writeModulePageGroup(path, []modschema.ModuleInfo{mi}, claim)
+}
+
+// writeModulePageGroup writes the rendered page for the N modules sharing a page
+// slug (see renderModulePageGroup). If path already exists without the managed
+// marker, it refuses to overwrite it UNLESS claim is true (the one-time adoption
+// a module's migration PR performs explicitly) — the markerless-overwrite guard
+// (§8) that protects hand-written pages for modules that have not been migrated
+// yet.
+func writeModulePageGroup(path string, mis []modschema.ModuleInfo, claim bool) error {
+	rendered, err := renderModulePageGroup(mis)
 	if err != nil {
 		return err
 	}
 	if existing, err := os.ReadFile(path); err == nil {
 		if !hasManagedMarker(existing) && !claim {
-			return fmt.Errorf("docgen: refusing to overwrite markerless page %s for module %s "+
-				"(pass --claim=%s to adopt it)", path, mi.Module, mi.Module)
+			return fmt.Errorf("docgen: refusing to overwrite markerless page %s for %v "+
+				"(pass --claim to adopt it)", path, groupNames(mis))
 		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("docgen: read %s: %w", path, err)

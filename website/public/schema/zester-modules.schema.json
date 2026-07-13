@@ -1,6 +1,268 @@
 {
   "$defs": {
     "modules": {
+      "cron.absent": {
+        "additionalProperties": true,
+        "description": "Ensure a crontab entry does not exist for a user.",
+        "properties": {
+          "command": {
+            "description": "command line whose crontab entry is removed (required)",
+            "type": "string"
+          },
+          "name": {
+            "description": "label for the state; defaults to the state ID",
+            "type": "string"
+          },
+          "user": {
+            "description": "user whose crontab is managed; defaults to root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      },
+      "cron.present": {
+        "additionalProperties": true,
+        "description": "Ensure a crontab entry exists for a user with the given schedule and command.",
+        "properties": {
+          "command": {
+            "description": "command line to run on the schedule (required)",
+            "type": "string"
+          },
+          "daymonth": {
+            "description": "day-of-month field (1-31 or *); defaults to *",
+            "type": "string"
+          },
+          "dayweek": {
+            "description": "day-of-week field (0-7 or *); defaults to *",
+            "type": "string"
+          },
+          "hour": {
+            "description": "hour field (0-23 or *); defaults to *",
+            "type": "string"
+          },
+          "minute": {
+            "description": "minute field (0-59 or *); defaults to *",
+            "type": "string"
+          },
+          "month": {
+            "description": "month field (1-12 or *); defaults to *",
+            "type": "string"
+          },
+          "name": {
+            "description": "identifier comment stamped on the crontab line (its Salt-identifier identity); defaults to the state ID",
+            "type": "string"
+          },
+          "user": {
+            "description": "user whose crontab is managed; defaults to root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      },
+      "file.absent": {
+        "additionalProperties": true,
+        "description": "Ensure a file or directory does not exist.",
+        "properties": {
+          "name": {
+            "description": "absolute path to the file or directory to remove (defaults to the state ID)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "file.append": {
+        "additionalProperties": true,
+        "description": "Ensure specific lines are present in a file, appending any that are missing.",
+        "properties": {
+          "name": {
+            "description": "absolute path to the target file (defaults to the state ID)",
+            "type": "string"
+          },
+          "text": {
+            "$ref": "#/$defs/semanticTypes/StringList",
+            "description": "lines that must be present in the file; each line is checked independently and only missing lines are appended"
+          }
+        },
+        "type": "object"
+      },
+      "file.blockreplace": {
+        "additionalProperties": true,
+        "description": "Manage a block of content between marker lines in a file.",
+        "properties": {
+          "append_if_not_found": {
+            "description": "append (or create) the managed block when the markers are absent; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "append_newline": {
+            "description": "add a trailing newline after an appended block; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "content": {
+            "description": "desired content placed between the marker lines",
+            "type": "string"
+          },
+          "marker_end": {
+            "description": "line that ends the managed block",
+            "type": "string"
+          },
+          "marker_start": {
+            "description": "line that starts the managed block",
+            "type": "string"
+          },
+          "name": {
+            "description": "absolute path to the target file; defaults to the state ID",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "file.comment": {
+        "additionalProperties": true,
+        "description": "Comment out lines matching a regular expression.",
+        "properties": {
+          "char": {
+            "description": "comment prefix added (file.comment) or stripped (file.uncomment); defaults to #",
+            "type": "string"
+          },
+          "name": {
+            "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+            "type": "string"
+          },
+          "regex": {
+            "description": "Go regular expression matched against the uncommented line content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "regex"
+        ],
+        "type": "object"
+      },
+      "file.copy": {
+        "additionalProperties": true,
+        "description": "Copy a source file that already exists on the peel to a destination path.",
+        "properties": {
+          "force": {
+            "description": "overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "makedirs": {
+            "description": "create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "destination path; the path alias is accepted for Salt compatibility (defaults to the state ID)",
+            "type": "string"
+          },
+          "preserve": {
+            "description": "copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "source": {
+            "description": "local path (on the peel) to copy from",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      },
+      "file.directory": {
+        "additionalProperties": true,
+        "description": "Ensure a directory exists with the desired permissions and ownership.",
+        "properties": {
+          "group": {
+            "description": "directory group name; ownership is left unchanged when unset",
+            "type": "string"
+          },
+          "makedirs": {
+            "description": "accepted for Salt compatibility but has NO effect — parent directories are always created via MkdirAll regardless; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/$defs/semanticTypes/FileMode",
+            "description": "directory permission mode in octal (\"0755\", \"0700\"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755"
+          },
+          "name": {
+            "description": "absolute path to the target directory (defaults to the state ID)",
+            "type": "string"
+          },
+          "user": {
+            "description": "directory owner username; ownership is left unchanged when unset",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "file.keyvalue": {
+        "additionalProperties": true,
+        "description": "Ensure key/value lines are present in a file, updating values in place.",
+        "properties": {
+          "entries": {
+            "$ref": "#/$defs/semanticTypes/StringMap",
+            "description": "map of keys to their desired values; unioned with key_values, winning a per-key collision"
+          },
+          "key": {
+            "description": "a single key to manage (used with value); merged into the entries map",
+            "type": "string"
+          },
+          "key_values": {
+            "$ref": "#/$defs/semanticTypes/StringMap",
+            "description": "map of keys to their desired values (Salt's key_values); unioned with entries, which wins a per-key collision"
+          },
+          "name": {
+            "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+            "type": "string"
+          },
+          "separator": {
+            "description": "literal token written between key and value; defaults to =",
+            "type": "string"
+          },
+          "value": {
+            "description": "the desired value for key; required when key is set",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "file.line": {
+        "additionalProperties": true,
+        "description": "Ensure, replace, insert, or delete a single line in a file.",
+        "properties": {
+          "after": {
+            "description": "regular expression (or substring); on insert/ensure the new line is placed after the first matching line (takes precedence over before)",
+            "type": "string"
+          },
+          "before": {
+            "description": "regular expression (or substring); on insert/ensure the new line is placed before the first matching line",
+            "type": "string"
+          },
+          "content": {
+            "description": "the line content to ensure, replace, insert, or delete",
+            "type": "string"
+          },
+          "match": {
+            "description": "regular expression (or literal substring fallback) identifying the target line; when empty, the exact Content line is matched",
+            "type": "string"
+          },
+          "mode": {
+            "description": "operation to perform: ensure (default), replace, insert, or delete (absent = delete); case-insensitive",
+            "type": "string"
+          },
+          "name": {
+            "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "file.managed": {
         "additionalProperties": true,
         "description": "Ensure a file exists with the desired content, permissions, and ownership.",
@@ -44,6 +306,185 @@
           "user": {
             "description": "file owner username; ownership is left unchanged when unset",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "file.recurse": {
+        "additionalProperties": true,
+        "description": "Recursively copy a source directory tree to a destination directory.",
+        "properties": {
+          "clean": {
+            "description": "remove files in the destination that are not present in the source (regular files only; directories are never removed); a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "dir_mode": {
+            "$ref": "#/$defs/semanticTypes/FileMode",
+            "description": "directory permission mode for managed directories (octal); DECLARED-ONLY — undeclared, existing directory modes are left alone (used only as the creation mode for new directories, defaulting to 0755)"
+          },
+          "file_mode": {
+            "$ref": "#/$defs/semanticTypes/FileMode",
+            "description": "permission mode for copied files in octal (\"0644\"); always enforced; defaults to 0644"
+          },
+          "group": {
+            "description": "group name for copied files; ownership is left unchanged when unset",
+            "type": "string"
+          },
+          "makedirs": {
+            "description": "create the destination's parent directory chain if it does not exist; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "destination directory path (defaults to the state ID)",
+            "type": "string"
+          },
+          "source": {
+            "description": "source directory path to copy from (required at run time)",
+            "type": "string"
+          },
+          "user": {
+            "description": "owner username for copied files; ownership is left unchanged when unset",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "file.replace": {
+        "additionalProperties": true,
+        "description": "Regular-expression search-and-replace within a file.",
+        "properties": {
+          "append_if_not_found": {
+            "description": "when the pattern is not found, append not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "count": {
+            "description": "maximum number of replacements to perform; 0 (the default) replaces every match",
+            "type": "integer"
+          },
+          "name": {
+            "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+            "type": "string"
+          },
+          "not_found_content": {
+            "description": "text used for append_if_not_found/prepend_if_not_found; defaults to repl when empty",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "search regular expression (RE2); anchored per-line (Salt's re.MULTILINE default)",
+            "type": "string"
+          },
+          "prepend_if_not_found": {
+            "description": "when the pattern is not found, prepend not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "repl": {
+            "description": "replacement text; $1/${name} backreferences are expanded",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      },
+      "file.symlink": {
+        "additionalProperties": true,
+        "description": "Ensure a symbolic link exists at a path, pointing to a target.",
+        "properties": {
+          "force": {
+            "description": "replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "makedirs": {
+            "description": "create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "absolute path for the symbolic link (defaults to the state ID)",
+            "type": "string"
+          },
+          "target": {
+            "description": "destination the symlink should point to",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "file.touch": {
+        "additionalProperties": true,
+        "description": "Create an empty file when missing, or update its modification time.",
+        "properties": {
+          "makedirs": {
+            "description": "create missing parent directories (mode 0755) before touching; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "absolute path to the file to touch; the path alias is accepted for Salt compatibility (defaults to the state ID)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "file.uncomment": {
+        "additionalProperties": true,
+        "description": "Uncomment lines matching a regular expression.",
+        "properties": {
+          "char": {
+            "description": "comment prefix added (file.comment) or stripped (file.uncomment); defaults to #",
+            "type": "string"
+          },
+          "name": {
+            "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+            "type": "string"
+          },
+          "regex": {
+            "description": "Go regular expression matched against the uncommented line content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "regex"
+        ],
+        "type": "object"
+      },
+      "group.absent": {
+        "additionalProperties": true,
+        "description": "Ensure a group does not exist on the system.",
+        "properties": {
+          "name": {
+            "description": "group name to remove; defaults to the state ID",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "group.present": {
+        "additionalProperties": true,
+        "description": "Ensure a group exists with the specified attributes and membership.",
+        "properties": {
+          "addusers": {
+            "$ref": "#/$defs/semanticTypes/StringList",
+            "description": "users to add without affecting other existing members"
+          },
+          "delusers": {
+            "$ref": "#/$defs/semanticTypes/StringList",
+            "description": "users to remove without affecting other existing members"
+          },
+          "gid": {
+            "description": "numeric group ID; only compared and set when non-zero (0 auto-assigns)",
+            "type": "integer"
+          },
+          "members": {
+            "$ref": "#/$defs/semanticTypes/StringList",
+            "description": "exact membership list — extra members are removed and missing members are added"
+          },
+          "name": {
+            "description": "group name; defaults to the state ID",
+            "type": "string"
+          },
+          "system": {
+            "description": "create a system group (low GID range); used only during creation; a boolean that also accepts the integers 1 (true) and 0 (false)",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -241,6 +682,18 @@
           }
         ]
       },
+      "StringMap": {
+        "additionalProperties": {
+          "type": [
+            "string",
+            "integer",
+            "number",
+            "boolean"
+          ]
+        },
+        "description": "A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.",
+        "type": "object"
+      },
       "TemplateFlag": {
         "description": "A template-rendering flag. Accepts a bool, the string \"jinja\", or any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders with Jinja, so any enabling value means \"render with Jinja\".",
         "oneOf": [
@@ -290,12 +743,182 @@
     "oneOf": [
       {
         "properties": {
+          "cron.absent": {
+            "$ref": "#/$defs/modules/cron.absent"
+          }
+        },
+        "required": [
+          "cron.absent"
+        ]
+      },
+      {
+        "properties": {
+          "cron.present": {
+            "$ref": "#/$defs/modules/cron.present"
+          }
+        },
+        "required": [
+          "cron.present"
+        ]
+      },
+      {
+        "properties": {
+          "file.absent": {
+            "$ref": "#/$defs/modules/file.absent"
+          }
+        },
+        "required": [
+          "file.absent"
+        ]
+      },
+      {
+        "properties": {
+          "file.append": {
+            "$ref": "#/$defs/modules/file.append"
+          }
+        },
+        "required": [
+          "file.append"
+        ]
+      },
+      {
+        "properties": {
+          "file.blockreplace": {
+            "$ref": "#/$defs/modules/file.blockreplace"
+          }
+        },
+        "required": [
+          "file.blockreplace"
+        ]
+      },
+      {
+        "properties": {
+          "file.comment": {
+            "$ref": "#/$defs/modules/file.comment"
+          }
+        },
+        "required": [
+          "file.comment"
+        ]
+      },
+      {
+        "properties": {
+          "file.copy": {
+            "$ref": "#/$defs/modules/file.copy"
+          }
+        },
+        "required": [
+          "file.copy"
+        ]
+      },
+      {
+        "properties": {
+          "file.directory": {
+            "$ref": "#/$defs/modules/file.directory"
+          }
+        },
+        "required": [
+          "file.directory"
+        ]
+      },
+      {
+        "properties": {
+          "file.keyvalue": {
+            "$ref": "#/$defs/modules/file.keyvalue"
+          }
+        },
+        "required": [
+          "file.keyvalue"
+        ]
+      },
+      {
+        "properties": {
+          "file.line": {
+            "$ref": "#/$defs/modules/file.line"
+          }
+        },
+        "required": [
+          "file.line"
+        ]
+      },
+      {
+        "properties": {
           "file.managed": {
             "$ref": "#/$defs/modules/file.managed"
           }
         },
         "required": [
           "file.managed"
+        ]
+      },
+      {
+        "properties": {
+          "file.recurse": {
+            "$ref": "#/$defs/modules/file.recurse"
+          }
+        },
+        "required": [
+          "file.recurse"
+        ]
+      },
+      {
+        "properties": {
+          "file.replace": {
+            "$ref": "#/$defs/modules/file.replace"
+          }
+        },
+        "required": [
+          "file.replace"
+        ]
+      },
+      {
+        "properties": {
+          "file.symlink": {
+            "$ref": "#/$defs/modules/file.symlink"
+          }
+        },
+        "required": [
+          "file.symlink"
+        ]
+      },
+      {
+        "properties": {
+          "file.touch": {
+            "$ref": "#/$defs/modules/file.touch"
+          }
+        },
+        "required": [
+          "file.touch"
+        ]
+      },
+      {
+        "properties": {
+          "file.uncomment": {
+            "$ref": "#/$defs/modules/file.uncomment"
+          }
+        },
+        "required": [
+          "file.uncomment"
+        ]
+      },
+      {
+        "properties": {
+          "group.absent": {
+            "$ref": "#/$defs/modules/group.absent"
+          }
+        },
+        "required": [
+          "group.absent"
+        ]
+      },
+      {
+        "properties": {
+          "group.present": {
+            "$ref": "#/$defs/modules/group.present"
+          }
+        },
+        "required": [
+          "group.present"
         ]
       },
       {
@@ -373,7 +996,126 @@
           {
             "not": {
               "required": [
+                "cron.absent"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "cron.present"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.absent"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.append"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.blockreplace"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.comment"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.copy"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.directory"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.keyvalue"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.line"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
                 "file.managed"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.recurse"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.replace"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.symlink"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.touch"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "file.uncomment"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "group.absent"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "group.present"
               ]
             }
           },

@@ -10,17 +10,486 @@ All notable changes to Zester are documented here. The format follows
 - **Generated JSON Schema artifact for module parameters**
   (`website/public/schema/zester-modules.schema.json`, JSON Schema draft
   2020-12) — machine-readable parameter schemas for every state module that
-  has a migrated self-documenting schema (`file.managed`, `pkg.installed`,
-  `pkg.latest`, `pkg.purged`, `pkg.removed`, `service.running`, `service.dead`,
-  and `user.present`) — `service.running`/`service.dead` contribute the shared
+  has a migrated self-documenting schema (`file.managed`, `file.directory`,
+  `file.absent`, `file.append`, `file.copy`, `file.recurse`, `file.symlink`,
+  `file.touch`, `file.line`, `file.replace`, `file.comment`, `file.uncomment`,
+  `file.keyvalue`, `file.blockreplace`, `pkg.installed`, `pkg.latest`,
+  `pkg.purged`, `pkg.removed`, `service.running`, `service.dead`, and
+  `user.present`) — `service.running`/`service.dead` contribute the shared
   `TriState` semantic-type `$def`, `file.managed` the `TemplateFlag` and
-  `FileMode` `$defs`, and `user.present` the `GroupRef` and `StringList` `$defs`;
-  a module without a schema is left unconstrained, so the artifact grows
-  automatically as more modules migrate, never breaking existing consumers.
-  Generated deterministically by the new `cmd/zester-docgen` tool from the
-  live module registries.
+  `FileMode` `$defs`, `user.present` the `GroupRef` and `StringList` `$defs`,
+  `file.append` is the second module to contribute to the `StringList` `$def`,
+  `file.keyvalue` contributes the `StringMap` `$def` (its `key_values` and
+  `entries` parameters — the type's first migrated consumer), and
+  `file.directory`/`file.recurse` are further `FileMode` `$def` contributors
+  (`file.directory`'s `mode` with a `dir_mode` fallback alias; `file.recurse`'s
+  DECLARED-ONLY `dir_mode` and lazy `file_mode`); a module without a schema
+  is left unconstrained, so the artifact
+  grows automatically as more modules migrate, never breaking existing
+  consumers. Generated deterministically by the new `cmd/zester-docgen` tool
+  from the live module registries.
 
 ### Changed
+- **`cron.present`, `cron.absent`, `group.present`, and `group.absent` migrated
+  to the self-documenting module-schema framework** (the cron/group wave). Each
+  constructor now decodes through a single compiled schema (`modschema.Spec`)
+  plus registered documentation metadata, replacing the hand-written
+  `config[...].(type)` extractions (and, for the group modules, the legacy
+  `parseAnyStringList` list parser). The legacy multi-module `cron.go`/`group.go`
+  were split into per-module files (`cron_present.go`, `cron_absent.go`,
+  `group_present.go`, `group_absent.go`). Highlights of the wave:
+  - `cron.present`/`cron.absent`'s `command` is `required` (a missing/empty
+    `command` fails at decode with a typed `MissingRequired` error, where legacy
+    raised its own explicit "command is required" error — both reject, PARITY);
+    `user` carries an eager `default=root`; and `cron.present`'s five schedule
+    fields (`minute`/`hour`/`daymonth`/`month`/`dayweek`) carry eager
+    `default=*`, reproducing the legacy construction-time defaults.
+  - `group.present`'s `gid` is a **plain `int`** — group.present never resolves a
+    group NAME, so (unlike `user.present`) it is NOT a `paramtypes.GroupRef` and
+    there is no BD-4: a negative gid is accepted, not rejected. Its
+    `members`/`addusers`/`delusers` are `paramtypes.StringList` and `system` is a
+    plain bool. The Revert prose is **drift-corrected**: the hand page wrongly
+    claimed membership changes are not reverted, but Revert diffs the current
+    group against the memoized original and restores GID **and** membership.
+  Behavior is unchanged for every realistic input across all three universes
+  (YAML, CLI, msgpack) except for the flagged behavioral differences below. The
+  reference pages (`cron-present.mdx`, `cron-absent.mdx`, `group-present.mdx`,
+  `group-absent.mdx`) are now generated from the registered schema + documentation
+  metadata rather than hand-maintained — all prior content is preserved
+  (parameter tables, Check/Apply/Revert behavior, every example) and reorganized
+  under the shared anatomy, drift-corrected against the live code.
+  `group.present`'s `members`/`addusers`/`delusers` are further `StringList`
+  `$def` contributors to the combined JSON Schema artifact. The permanent
+  differential contracts at
+  `pkg/state/modules/testdata/contract/cron.{present,absent}.yaml` and
+  `.../group.{present,absent}.yaml` guard the decode behavior across all three
+  universes. The doc-coverage ratchet shrinks by 4 (26 → 22 unmigrated modules).
+
+  <!-- BD-1 -->
+  **Behavioral difference (BD-1, PENDING maintainer sign-off).** A
+  `group.present` `gid` given as an INTEGER and delivered over msgpack is now
+  applied. The legacy `config["gid"].(int)` assertion never matched a msgpack
+  sized kind (msgpack v5 encodes `999` as a `uint16`), so a reactor-dispatched
+  `gid: 999` silently fell to `0` (auto-assign / not compared) — the same
+  reproduced sized-int class as `file.managed`'s BD-1. The uniform decoder honors
+  the sized int as a numeric GID. Pinned by the `gid-int-msgpack` contract
+  fixture. **Presented for sign-off in this PR** (keystone spec §11).
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** A `group.present`
+  string-form `gid` or `system` is now coerced instead of dropped: a CLI
+  `gid=999` (the string `"999"`) is parsed base-10 to the numeric GID, and a CLI
+  `system=true` (the string `"true"`) enables the system flag, where the legacy
+  `.(int)`/`.(bool)` assertions dropped the string (GID `0` / system `false`).
+  Origin-independent: a YAML-quoted `gid: "999"` and `system: "yes"` are honored
+  the same way. Pinned by the `gid-string-cli`, `gid-numeric-string-yaml`,
+  `system-truthy-string-cli`, and `system-truthy-string-yaml` contract fixtures.
+
+  <!-- BD-3 -->
+  **⚠️ Behavioral difference (BD-3, PENDING maintainer sign-off) — THIS CHANGES
+  REAL SCHEDULES; READ BEFORE APPROVING.** A `cron.present` schedule value given
+  as a YAML or msgpack INTEGER is now coerced to its string form. This applies to
+  ALL FIVE schedule fields (`minute`/`hour`/`daymonth`/`month`/`dayweek`); the
+  canonical case: `minute: 5`.
+  - **OLD behavior (the every-minute bug):** the legacy
+    `config["minute"].(string)` assertion did not match a non-string, so
+    `minute: 5` fell to the empty string `""`, which the constructor then
+    defaulted to `"*"`. The job ran **every minute** — never at minute 5.
+  - **NEW behavior:** the uniform string decoder renders the integer via
+    `fmt.Sprint`, so `minute: 5` decodes to `"5"` and the job runs at **minute 5**,
+    as written.
+  This alters the actual cron schedule of any state that passed an *unquoted
+  integer* schedule field through a reactor/msgpack path. Operators who relied on
+  the old accidental every-minute behavior (unlikely, but possible) must quote the
+  value or adjust. The CLI already delivered `"5"` as a string, so it is
+  unaffected (PARITY). This integer-coercion arm is the **ONLY** change on the
+  BD-3 sign-off sheet — the composite-schedule REJECTION (a
+  wrong-typed→typed-error) is the APPROVED BD-6's class and is documented under
+  BD-6 below, not here. Pinned per-field by the
+  `{minute,hour,daymonth,month,dayweek}-int-{yaml,msgpack}` contract fixtures
+  (`minute-int-cli` pins the CLI parity). **Presented for sign-off in this PR**
+  (keystone spec §11).
+
+  <!-- BD-5 -->
+  **Behavioral difference (BD-5, PENDING maintainer sign-off).**
+  `group.present`'s `members`/`addusers`/`delusers` are now `paramtypes.StringList`,
+  which handles the three arms the legacy `parseAnyStringList` silently dropped:
+  a **scalar list element** is rendered to a string (`members: [alice, 1000]` →
+  `[alice, "1000"]`, where legacy dropped the `1000`); a **nested** list/map
+  element is rejected with a typed error (was silently dropped); and a
+  **bare-string** value decodes as a single-element list that ACTIVATES membership
+  management (`members: alice` → `[alice]`, where legacy ignored a non-list value
+  entirely, managing no members — this is also what makes a CLI `members=alice`
+  work). Pinned per-param by the `members-*`, `addusers-*`, and `delusers-*`
+  (scalar-sprint / nested-rejected / bare-string) contract fixtures. **Presented
+  for sign-off in this PR** (keystone spec §11).
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** As with every prior
+  migration, each module's primary `name` parameter is now a compiled plain
+  string: a *non-string* `name` (for example `name: 123` in YAML/msgpack) is
+  coerced to its string form (was a silent fallback to the state ID), and a
+  *composite* `name` (a list/map) is rejected with a typed error. Three further
+  wrong-typed→typed-handling changes land under BD-6's approved acceptance/
+  rejection class in this wave:
+  - **`cron.present`/`cron.absent` numeric `command` — an ERROR→ACCEPT flip on a
+    REQUIRED parameter (read deliberately).** A non-string `command` (for example
+    `command: 123` in YAML, or over msgpack where the sized-int arm applies) is
+    now coerced to its string form `"123"` and **accepted**, where the legacy
+    `config["command"].(string)` assertion missed the non-string and raised
+    `command is required`. This is an accept-direction change on a *required*
+    parameter. A non-string `user` is likewise coerced to its string form instead
+    of the legacy silent fallback to `root`.
+  - **`group.present` composite `gid` and FLOAT `gid`.** A *composite* `gid` (a
+    list/map) is rejected with a typed `WrongType` error instead of the legacy
+    silent `0`; and a finite-integral FLOAT `gid` (for example `gid: 999.0`) is
+    now coerced to the integer `999`, where the legacy `config["gid"].(int)`
+    assertion missed a `float64` and left `GID` at `0`. (BD-2 remains strictly
+    string-coercion; a non-string wrong-typed value such as a float is BD-6's
+    class.)
+  - **`cron.present` composite schedule value (refiled from BD-3).** A *composite*
+    schedule value (a list/map for `minute`/`hour`/…) is rejected up front with a
+    typed error instead of silently falling to `"*"`. This wrong-typed→typed-error
+    rejection belongs to the APPROVED BD-6 class, NOT the BD-3 sign-off sheet
+    (which carries only the schedule integer-coercion arm).
+  The CLI already delivered a numeric name/command as a string (PARITY). Pinned by
+  the `numeric-name-coerced-*` and `composite-name-rejected-*` (all four modules),
+  `command-numeric-accepted-{yaml,msgpack}` and
+  `user-numeric-accepted-{yaml,msgpack}` (cron.present + cron.absent),
+  `gid-composite-rejected-*` and `gid-float-{yaml,msgpack}` (group.present), and
+  `minute-composite-rejected-{yaml,msgpack}` (cron.present) contract fixtures.
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** `group.present`'s
+  `system` boolean now accepts the integers `1` and `0` (`1` → true, `0` → false)
+  and rejects any other integer with a typed error, per the approved §2.3
+  coercion table and the §11 SCOPE ruling that BD-7 covers ALL boolean-typed
+  parameters (each pinned per-param). The legacy `.(bool)` assertion dropped an
+  integer entirely (a silent false). Pinned by the
+  `system-int-{one,zero,invalid}-{yaml,msgpack,cli}` contract fixtures across all
+  three universes.
+
+- **`file.directory` and `file.recurse` migrated to the self-documenting
+  module-schema framework** (the declared-facet wave). Each constructor now
+  decodes through a single compiled schema (`modschema.Spec`) plus registered
+  documentation metadata, replacing the hand-written `config[...].(type)`
+  extractions and the shared `modeConfigToString` helper (now removed — its only
+  two callers were these modules). Both modules move their mode parameters onto
+  `paramtypes.FileMode`:
+  - `file.directory`'s `mode` is a `paramtypes.FileMode` declared
+    `lazy,default=0755` with `dir_mode` as a **fallback alias** — the mode is
+    resolved at use time via `Mode.Resolve(0755)`, and the legacy
+    mode-then-dir_mode-then-0755 chain is reproduced exactly by the alias source
+    precedence (name `mode` wins over the `dir_mode` alias; an empty-string
+    `mode` falls THROUGH to `dir_mode`, never to the state ID — §2.1 source
+    fall-through, PARITY). `makedirs` stays a plain bool whose documented no-op
+    behavior (MkdirAll is unconditional) is now stated honestly on the generated
+    page. Check/Apply/Revert are unchanged except for reading the typed mode
+    (`Mode.Resolve`); the chmod-before-chown Apply order is preserved verbatim.
+  - `file.recurse`'s `file_mode` is a `paramtypes.FileMode` declared
+    `lazy,default=0644` (always enforced), and `dir_mode` is a
+    `paramtypes.FileMode` declared `lazy,default=0755` whose **`Declared()` bit
+    is load-bearing**: it is a DECLARED-ONLY facet — undeclared, existing
+    directory modes are neither compared (Check) nor rewritten (Apply), and the
+    0755 default is used only as the MkdirAll creation perm. The module gates on
+    `r.DirMode.Declared()` in both phases, reproducing the legacy
+    `DirMode != ""` guard. `source` stays a plain string whose emptiness is a
+    run-time "source is required" error (legacy parity, NOT a decode-time
+    `required`); `clean`/`makedirs` are plain bools. Behavior is unchanged for
+    every realistic YAML input.
+  Each module moved to its own file already (`file_directory.go`,
+  `file_recurse.go`); the shared file-module helpers stay in `file.go`. Their
+  reference pages (`file-directory.mdx`, `file-recurse.mdx`) are now generated
+  from the registered schema + documentation metadata rather than
+  hand-maintained: all prior content is preserved (parameter tables, the
+  Check/Apply/Revert behavior, the deploy/private-directory examples, the
+  declared-only-dir_mode and clean-removes-regular-files-only caveats) and
+  reorganized under the shared
+  Source/Parameters/Parameter-Types/Effects/Examples/Notes/Divergences/See-Also
+  anatomy, **drift-corrected** against the live code (notably: `file.directory`'s
+  `makedirs` is documented as inert rather than functional; `file.recurse`'s
+  declared-only `dir_mode` semantics are stated in both phases). Both modules are
+  further `FileMode` `$def` contributors to the combined JSON Schema artifact.
+  The permanent differential contracts at
+  `pkg/state/modules/testdata/contract/file.directory.yaml` and
+  `.../file.recurse.yaml` guard the decode behavior across all three universes
+  (YAML, CLI, msgpack). The doc-coverage ratchet shrinks by 2 (28 → 26
+  unmigrated modules).
+
+  <!-- BD-1 -->
+  **Behavioral difference (BD-1, PENDING maintainer sign-off).** A mode given as
+  an octal INTEGER and delivered over msgpack is now applied, for
+  `file.directory`'s `mode` (and its `dir_mode` alias) and `file.recurse`'s
+  `file_mode`/`dir_mode`. The legacy `modeConfigToString` switch handled only
+  `int`/`int64`/`float64`, so a reactor-dispatched `mode: 0700` (encoded by
+  msgpack v5 as a sized `uint16`) fell through to the empty string and silently
+  applied the module's default — the same reproduced `0755→0644`-class bug that
+  motivated `file.managed`'s BD-1. `paramtypes.FileMode` interprets the octal
+  value from every integer kind, so the requested mode now survives a reactor
+  dispatch; the setuid/setgid/sticky bits survive too. For `file.recurse`'s
+  `dir_mode` the fix additionally restores the DECLARED-ONLY facet: over msgpack
+  the legacy value fell through to `""`, which not only lost the mode but also
+  DISABLED the facet — the new decoder keeps `dir_mode` declared. Pinned by the
+  `mode-0700-msgpack`/`mode-setgid-msgpack`/`dir-mode-alias-0700-msgpack`
+  (file.directory) and `file-mode-0640-msgpack`/`dir-mode-0750-msgpack`
+  (file.recurse) contract fixtures. **Presented for sign-off in this PR**
+  (keystone spec §11).
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** A CLI `makedirs=true`
+  string (and `file.recurse`'s `clean=true`) now applies, where the legacy
+  `.(bool)` assertion dropped the string and left the flag false. The same rule
+  honors a YAML-quoted boolean string. Pinned by the `makedirs-cli-truthy-string`
+  (both modules) and `clean-cli-truthy-string` (file.recurse) contract fixtures.
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** A wrong-typed value is
+  now handled deterministically instead of a silent zero/fallback: a *non-string*
+  `name`/`source` is coerced to its string form (was a fallback to the state ID /
+  the empty string), and a *composite* value (a list/map) into `name`, or into a
+  mode parameter, is rejected with a typed error. Mode VALIDATION also moves to
+  DECODE time: a **float** mode (which the legacy `modeConfigToString` `%04o`-
+  converted and applied) and an **invalid-octal string** mode (which the legacy
+  path carried through and only rejected at apply) are both rejected up front by
+  `paramtypes.FileMode`. Pinned by the `numeric-name-*`/`numeric-source-coerced-*`,
+  `composite-name-rejected-*`, `composite-mode-rejected-*`/`composite-dir-mode-
+  rejected-*`, `float-mode-rejected-*`/`float-file-mode-rejected-*`/
+  `float-dir-mode-rejected-*`, and `invalid-octal-string-*-mode-rejected-*`
+  contract fixtures.
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** Every boolean-typed
+  parameter — `file.directory`'s `makedirs`, and `file.recurse`'s `clean` AND
+  `makedirs` — now accepts the integers `1` and `0` (`1` → true, `0` → false)
+  and rejects any other integer with a typed error, per the approved §2.3
+  coercion table and the §11 SCOPE ruling that BD-7 covers ALL boolean-typed
+  parameters (each pinned per-param, not "same as the other"). The legacy
+  `.(bool)` assertion dropped an integer entirely (a silent false). Pinned by the
+  `makedirs-int-{one,zero,invalid}-*` (file.directory) and the
+  `clean-int-{one,zero,invalid}-*` + `makedirs-int-{one,zero,invalid}-*`
+  (file.recurse) contract fixtures across the YAML and msgpack universes (the CLI
+  delivers a string, covered by BD-2).
+
+- **`file.line`, `file.replace`, `file.comment`, `file.uncomment`,
+  `file.keyvalue`, and `file.blockreplace` migrated to the self-documenting
+  module-schema framework** (the file-surgery wave). Each constructor now
+  decodes through a single compiled schema (`modschema.Spec`) plus registered
+  documentation metadata, replacing the hand-written `config[...].(type)`
+  extractions and the shared `fsxResolvePath`/`fsxToInt` helpers (now removed).
+  Highlights of the wave:
+  - `file.line`'s `mode` parameter is an ACTION ENUM (ensure/replace/insert/
+    delete), NOT a permission mode — it is a plain string with an eager
+    `default=ensure`, and the builder lowercases the resolved action to
+    reproduce the legacy `strings.ToLower` normalization.
+  - `file.replace`'s `pattern` is `required` (a missing/empty pattern fails at
+    decode with a typed `MissingRequired` error, where legacy raised its own
+    explicit "pattern is required" error — both reject, PARITY), and the
+    `(?m)`-anchored regex compile stays a construction-time error in the builder
+    tail; `count` is a plain int.
+  - `file.comment`/`file.uncomment` are the **N:1 exemplar**: ONE `FileComment`
+    proto backs TWO registered names, so there are two `modschema.Spec`s (one
+    per name), each with its own documentation, compiling the same tagged
+    parameter surface (`name`, `char` default `#`, required `regex`). Which
+    behavior a built state performs is selected by an untagged runtime field set
+    by the builder. Their single reference page (`file-comment.mdx`) is now a
+    generated N:1 combined page — one shared Parameters section plus a per-name
+    Effects/Examples/Notes/Divergences/See-Also section.
+  - `file.keyvalue`'s `key_values` and `entries` are TWO separate
+    `paramtypes.StringMap` parameters — NOT a single name-wins alias. The legacy
+    constructor UNIONED both maps (`entries` winning a per-key collision, since it
+    merged second), so a name-wins alias would have silently discarded `entries`
+    whenever both were supplied; the union merge is reproduced in the module tail
+    (both maps, then the single `key`/`value` injection last). The single
+    `key`/`value` convenience form keeps its legacy module-local injection as a
+    post-decode merge (`key` requires a present, non-nil `value`); `separator`
+    defaults to `=`. Pinned by the `key-values-and-entries-union-*` and
+    `key-values-entries-collision-entries-wins-*` contract fixtures (PARITY, not a
+    BD).
+  - `file.blockreplace` keeps its `name`-only primary (its legacy constructor
+    never accepted a `path` alias, so one is deliberately NOT added — parity,
+    not a new divergence), with eager `marker_start`/`marker_end` defaults.
+  Behavior is unchanged for every realistic input across all three universes
+  (YAML, CLI, msgpack). The reference pages (`file-line.mdx`, `file-replace.mdx`,
+  `file-comment.mdx`, `file-keyvalue.mdx`, `file-blockreplace.mdx`) are now
+  generated from the registered schema + documentation metadata rather than
+  hand-maintained — all prior content is preserved (parameter tables,
+  Check/Apply/Revert behavior, every example and note, including the "Divergences
+  from Salt" material folded into Notes) and reorganized under the shared
+  anatomy, drift-corrected against the live code. The permanent differential
+  contracts at `pkg/state/modules/testdata/contract/file.{line,replace,comment,
+  uncomment,keyvalue,blockreplace}.yaml` guard the decode behavior; the
+  differential harness (`pkg/modschema/schematest`) gained a `StringMap` matcher
+  (its first migrated consumer). The doc-coverage ratchet shrinks by 6
+  (34 → 28 unmigrated modules).
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** As with every prior
+  migration, each module's primary `name` parameter is now a compiled plain
+  string: a *non-string* value (for example `name: 123` in YAML/msgpack) is
+  coerced to its string form instead of silently falling back to the state ID,
+  and a *composite* value (a list/map) is now rejected with a typed `wrong_type`
+  error instead of being silently ignored. Pinned by the `numeric-name-*` and
+  `composite-name-*` contract fixtures across all six modules. Additionally,
+  `file.replace`'s `count` (now a compiled plain `int`) rejects a NON-integral
+  float (`count: 2.9`) with a typed `value_invalid` error at decode time, where
+  the legacy `fsxToInt` silently TRUNCATED it (`int(2.9)` = 2); an integral float
+  still coerces, so only a non-integral value diverges (the same class as the
+  `file.managed` float-mode fixture). Pinned by the `float-count-rejected-{yaml,
+  msgpack}` contract fixtures. Additionally, EVERY non-primary string parameter
+  that the legacy constructors read through a silent `.(string)` assertion now
+  sprints a numeric scalar to its string form (the `pkg.installed` `version`
+  precedent), pinned per-param across YAML and msgpack by
+  `numeric-<param>-coerced-{yaml,msgpack}` fixtures: `file.line`'s
+  `content`/`match`/`before`/`after`/`mode`, `file.replace`'s
+  `pattern`/`repl`/`not_found_content`, `file.comment`/`file.uncomment`'s
+  `regex`/`char`, `file.keyvalue`'s `separator`/`key`, and `file.blockreplace`'s
+  `content`/`marker_start`/`marker_end`. For the REQUIRED params (`file.replace`'s
+  `pattern`, `file.comment`/`file.uncomment`'s `regex`) and for `file.keyvalue`'s
+  `key` this is a reject-to-accept flip — legacy zeroed the value and then hit the
+  required/"no entries" check, where it now decodes to the coerced string.
+  (`file.keyvalue`'s SCALAR `value` is NOT in this coercion set: the legacy
+  constructor already sprint'd a scalar with `fmt.Sprintf`, so a numeric single
+  `value` is parity. A COMPOSITE single `value` — a nested map/list with `key`
+  set — IS a BD-6 rejection, though: the legacy `fmt.Sprintf("%v", …)` wrote
+  Go-syntax garbage into the file, where the `value` string field now rejects it
+  with a typed `wrong_type` error at decode; pinned by the
+  `composite-single-value-rejected-{yaml,msgpack}` fixtures.)
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** A CLI
+  `<bool-param>=<truthy/falsy string>` is now honored on every boolean
+  parameter (`file.replace`'s `append_if_not_found`/`prepend_if_not_found`,
+  `file.blockreplace`'s `append_if_not_found`/`append_newline`), and a CLI
+  numeric-string `count=2` is parsed for `file.replace`'s `count`, where the
+  legacy `.(bool)` / `fsxToInt` paths silently dropped a string. Pinned by the
+  `*-cli-truthy-string` and `count-cli-numeric-string` contract fixtures.
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** Each boolean parameter
+  accepts the INTEGERS 1 and 0 (1 = true, 0 = false, across every signed/unsigned
+  integer kind, so a msgpack-delivered bool — which arrives as a sized kind such
+  as `int8` — is honored) and rejects any other integer with a typed
+  `value_invalid` error, where the legacy `.(bool)` assertion dropped an int
+  entirely. EVERY boolean parameter's integer arm is pinned explicitly (not just
+  a representative): `file.replace`'s `append_if_not_found`/`prepend_if_not_found`
+  and `file.blockreplace`'s `append_if_not_found`/`append_newline`, each across
+  YAML and msgpack by the `*-int-one-*`/`*-int-zero-*`/`*-int-invalid-*` contract
+  fixtures, per the §11 SCOPE ruling that BD-7 covers ALL boolean-typed
+  parameters.
+
+  <!-- BD-1 -->
+  **Behavioral difference (BD-1, PENDING maintainer sign-off).** `file.replace`'s
+  `count` now honors a msgpack-delivered sized integer. msgpack v5 encodes a
+  small integer into the smallest kind by magnitude (`count: 2` → an `int8`),
+  and the legacy `fsxToInt` switch handled only `int`/`int64`/`float64` — so a
+  reactor-dispatched `file.replace` with `count: 2` fell through to 0
+  (replace-all) instead of limiting the replacement (the same sized-int class as
+  the reproduced `file.managed` `0755 → 0644` bug). `paramtypes`-free primitive
+  int coercion interprets every integer kind, so the requested count now survives
+  a reactor dispatch. Pinned by the `count-msgpack-sized-int` contract fixture.
+  **Presented for sign-off in this PR** (keystone spec §11).
+
+  <!-- BD-5 -->
+  **Behavioral difference (BD-5, PENDING maintainer sign-off).** `file.keyvalue`'s
+  `key_values` (a `paramtypes.StringMap`) rejects a COMPOSITE value — a nested
+  map or list — with a typed `value_invalid` error, where the legacy
+  `fmt.Sprintf("%v", v)` sprint'd it into Go syntax and wrote that garbage into
+  the file. A scalar value is unchanged (rendered to its string form by both).
+  Pinned by the `composite-value-rejected-*` contract fixtures (yaml/msgpack; a
+  nested map has no CLI spelling). **Presented for sign-off in this PR**
+  (keystone spec §11).
+
+- **`file.absent`, `file.touch`, `file.copy`, `file.symlink`, and
+  `file.append` migrated to the self-documenting module-schema framework**
+  (an all-primitives wave plus a second `StringList` consumer). Each
+  constructor now decodes through a single compiled schema
+  (`modschema.Spec`) plus registered documentation metadata, replacing the
+  hand-written `config[...].(type)` extractions. `file.touch` and
+  `file.copy` gain the `path` alias on their primary (`name,primary,
+  aliases=path`, the `file_managed.go` exemplar) — matching what their
+  legacy `fsxResolvePath`-based constructors already accepted, so this is
+  parity, not a new divergence; `file.absent`, `file.symlink`, and
+  `file.append` keep their legacy `name`-only primary (their pre-migration
+  constructors never recognized a `path` alias, so one is deliberately NOT
+  added here — parity, not a new divergence). `file.copy`'s `source` is the first
+  `required` primitive-string parameter to reach a migrated module: a
+  missing or empty `source` fails at decode with a typed `MissingRequired`
+  error, where legacy raised its own explicit "source is required" error —
+  both reject, so this is parity under the differential harness, not a BD.
+  `file.append`'s `text` moves onto `paramtypes.StringList` (the same
+  semantic type `user.present`'s `groups`/`optional_groups` use), replacing
+  the legacy `parseAnyStringList` helper (which stays in `user.go` for the
+  still-unmigrated `group.*` modules). Behavior is unchanged for every
+  realistic input across all three universes (YAML, CLI, msgpack). Each
+  module moved fully self-contained (they already had their own files); their
+  reference pages (`file-absent.mdx`, `file-touch.mdx`, `file-copy.mdx`,
+  `file-symlink.mdx`, `file-append.mdx`) are now generated from the
+  registered schema + documentation metadata rather than hand-maintained —
+  all prior content is preserved (parameter tables, Check/Apply/Revert
+  behavior, every example and note, including the "Divergences from Salt"
+  material folded into Notes) and reorganized under the shared
+  Source/Parameters/Effects/Examples/Notes/Divergences/See-Also anatomy. The
+  permanent differential contracts at
+  `pkg/state/modules/testdata/contract/file.{absent,touch,copy,symlink,
+  append}.yaml` guard the decode behavior; the doc-coverage ratchet shrinks
+  by 5 (39 → 34 unmigrated modules).
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** As with every prior
+  migration, each module's primary `name` parameter (and the non-primary
+  string params `file.symlink`'s `target` and `file.copy`'s `source`) is now a
+  compiled plain string: a *non-string* value (for example `name: 123` in
+  YAML/msgpack) is coerced to its string form instead of silently falling back
+  to the state ID (or, for `target`, staying empty; for the REQUIRED `source`,
+  being zeroed and then failing the required check — so a numeric `source` is a
+  reject-to-accept flip), and a *composite* value (a list/map) is now rejected
+  with a typed `wrong_type` error instead of being silently ignored. Pinned
+  per-param across YAML and msgpack by the `numeric-name-*`, `composite-name-*`,
+  `numeric-target-*`, `composite-target-*`, and `numeric-source-*` contract
+  fixtures across all five modules. (A MISSING `source` stays parity — both
+  legacy and decoded reject — pinned by `source-missing-rejected`.)
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** A CLI
+  `<bool-param>=<truthy/falsy string>` is now honored on every boolean
+  parameter across the five modules (`file.touch`'s/`file.copy`'s/
+  `file.symlink`'s `makedirs`, `file.copy`'s `force`/`preserve`,
+  `file.symlink`'s `force`) instead of being silently dropped by the legacy
+  `.(bool)` assertion. Pinned by the `*-cli-truthy-string` contract fixtures.
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** Each module's
+  boolean parameters accept the INTEGERS 1 and 0 (1 = true, 0 = false, across
+  every signed/unsigned integer kind, so a msgpack-delivered bool — which
+  arrives as a sized kind such as `int8` — is honored) and reject any other
+  integer with a typed `value_invalid` error, where the legacy `.(bool)`
+  assertion silently dropped an int entirely. EVERY boolean parameter's integer
+  arm is pinned explicitly (per the §11 per-param pinning standard, not by a
+  representative): `file.touch`'s `makedirs`, `file.copy`'s
+  `force`/`preserve`/`makedirs`, and `file.symlink`'s `force`/`makedirs`, each
+  across YAML and msgpack by the `<param>-int-one-*`/`<param>-int-zero-*`/
+  `<param>-int-invalid-*` contract fixtures.
+
+  <!-- BD-5 -->
+  **Behavioral difference (BD-5, PENDING maintainer sign-off).** `file.append`'s
+  `text` list element that is a scalar (for example `text: [line1, 2]`) is now
+  rendered to its string form (`"2"`) instead of being silently DROPPED by the
+  legacy `parseAnyStringList` (which — stricter than `user.present`'s
+  `groups`, which at least kept every already-string element — only ever
+  appended an element that type-asserted directly as a Go `string`), and a
+  NESTED element (a list or map inside the list) is now rejected with a typed
+  `value_invalid` error instead of being silently dropped. A plain list of
+  strings is unchanged. Additionally, a BARE-STRING value (for example `text:
+  someline`, or a CLI `text=someline`) now decodes as a single-element list
+  and ACTIVATES line management, where the legacy `config["text"].([]any)`
+  type assertion failed entirely on a non-list value (so `text: someline`
+  silently managed NO lines); this is also what makes the CLI scalar spelling
+  work. Pinned by the `text-scalar-sprint-*`, `text-nested-rejected-*`, and
+  `text-bare-string-*` contract fixtures (the scalar/nested-element arms have
+  no CLI spelling for a mixed/nested list; the bare-string arm is pinned
+  across all three universes). **Presented for sign-off in this PR** (keystone
+  spec §11).
+
 - **`file.managed` migrated to the self-documenting module-schema framework
   (the BD-1 flagship).** Its parameter declaration now decodes through a single
   compiled schema (`modschema.Spec`) plus registered documentation metadata,

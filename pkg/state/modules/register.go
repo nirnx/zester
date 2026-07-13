@@ -62,9 +62,14 @@ var registrations = []Registration{
 	// default). NewFileManagedBuilder is itself a BuildFunc (it threads opts into
 	// spec.Decode), so no providerBuild adapter.
 	{Name: "file.managed", Spec: fileManagedSpec, Build: NewFileManagedBuilder},
-	{Name: "file.directory", Build: providerBuild(NewFileDirectoryBuilder)},
-	{Name: "file.absent", Build: providerBuild(NewFileAbsentBuilder)},
-	{Name: "file.append", Build: providerBuild(NewFileAppendBuilder)},
+	// file.directory — self-documenting schema (the declared-facet exemplar:
+	// mode on a lazy paramtypes.FileMode with a dir_mode fallback alias).
+	// NewFileDirectoryBuilder is itself a BuildFunc, so no providerBuild adapter.
+	{Name: "file.directory", Spec: fileDirectorySpec, Build: NewFileDirectoryBuilder},
+	// file.absent / file.append — self-documenting schema (all-primitives /
+	// StringList wave). Both builders are themselves BuildFuncs, so no adapter.
+	{Name: "file.absent", Spec: fileAbsentSpec, Build: NewFileAbsentBuilder},
+	{Name: "file.append", Spec: fileAppendSpec, Build: NewFileAppendBuilder},
 	{Name: "cmd.run", Build: providerBuild(NewCmdRunBuilder)},
 	// pkg.installed — self-documenting schema (all-primitives migration wave).
 	// NewPkgInstalledBuilder is itself a BuildFunc, so no adapter.
@@ -75,11 +80,21 @@ var registrations = []Registration{
 	// threads opts into spec.Decode), so no providerBuild adapter.
 	{Name: "user.present", Spec: userPresentSpec, Build: NewUserPresentBuilder},
 	{Name: "user.absent", Build: providerBuild(NewUserAbsentBuilder)},
-	{Name: "group.present", Build: providerBuild(NewGroupPresentBuilder)},
-	{Name: "group.absent", Build: providerBuild(NewGroupAbsentBuilder)},
-	{Name: "file.symlink", Build: providerBuild(NewFileSymlinkBuilder)},
-	{Name: "file.blockreplace", Build: providerBuild(NewFileBlockReplaceBuilder)},
-	{Name: "file.recurse", Build: providerBuild(NewFileRecurseBuilder)},
+	// group.present / group.absent — self-documenting schema (group.present's
+	// gid is a PLAIN int; members/addusers/delusers on paramtypes.StringList).
+	// Both builders are themselves BuildFuncs, so no providerBuild adapter.
+	{Name: "group.present", Spec: groupPresentSpec, Build: NewGroupPresentBuilder},
+	{Name: "group.absent", Spec: groupAbsentSpec, Build: NewGroupAbsentBuilder},
+	// file.symlink — self-documenting schema (all-primitives wave).
+	// NewFileSymlinkBuilder is itself a BuildFunc, so no adapter.
+	{Name: "file.symlink", Spec: fileSymlinkSpec, Build: NewFileSymlinkBuilder},
+	// file.blockreplace — self-documenting schema (all-primitives / marker
+	// wave). NewFileBlockReplaceBuilder is itself a BuildFunc, so no adapter.
+	{Name: "file.blockreplace", Spec: fileBlockReplaceSpec, Build: NewFileBlockReplaceBuilder},
+	// file.recurse — self-documenting schema (the declared-only facet exemplar:
+	// dir_mode DECLARED-ONLY on a lazy paramtypes.FileMode, file_mode lazy 0644).
+	// NewFileRecurseBuilder is itself a BuildFunc, so no providerBuild adapter.
+	{Name: "file.recurse", Spec: fileRecurseSpec, Build: NewFileRecurseBuilder},
 	// pkg.removed — pilot #1: self-documenting schema. NewPkgRemovedBuilder is
 	// itself a BuildFunc (it threads opts into spec.Decode), so no adapter.
 	{Name: "pkg.removed", Spec: pkgRemovedSpec, Build: NewPkgRemovedBuilder},
@@ -90,8 +105,11 @@ var registrations = []Registration{
 	{Name: "service.running", Spec: svcRunningSpec, Build: NewSvcRunningBuilder},
 	{Name: "service.dead", Spec: svcDeadSpec, Build: NewSvcDeadBuilder},
 	{Name: "service.enabled", Build: providerBuild(NewSvcEnabledBuilder)},
-	{Name: "cron.present", Build: providerBuild(NewCronPresentBuilder)},
-	{Name: "cron.absent", Build: providerBuild(NewCronAbsentBuilder)},
+	// cron.present / cron.absent — self-documenting schema (cron.present's
+	// schedule fields carry eager default=* — a numeric minute now coerces to
+	// "5", the BD-3 activation). Both builders are themselves BuildFuncs.
+	{Name: "cron.present", Spec: cronPresentSpec, Build: NewCronPresentBuilder},
+	{Name: "cron.absent", Spec: cronAbsentSpec, Build: NewCronAbsentBuilder},
 	{Name: "mount.mounted", Build: providerBuild(NewMountMountedBuilder)},
 	{Name: "sysctl.present", Build: providerBuild(NewSysctlPresentBuilder)},
 	{Name: "locale.present", Build: providerBuild(NewLocalePresentBuilder)},
@@ -99,13 +117,23 @@ var registrations = []Registration{
 	{Name: "pip.installed", Build: providerBuild(NewPipInstalledBuilder)},
 	{Name: "git.cloned", Build: providerBuild(NewGitClonedBuilder)},
 	{Name: "git.latest", Build: providerBuild(NewGitLatestBuilder)},
-	{Name: "file.line", Build: providerBuild(NewFileLineBuilder)},
-	{Name: "file.replace", Build: providerBuild(NewFileReplaceBuilder)},
-	{Name: "file.comment", Build: providerBuild(NewFileCommentBuilder)},
-	{Name: "file.uncomment", Build: providerBuild(NewFileUncommentBuilder)},
-	{Name: "file.keyvalue", Build: providerBuild(NewFileKeyValueBuilder)},
-	{Name: "file.copy", Build: providerBuild(NewFileCopyBuilder)},
-	{Name: "file.touch", Build: providerBuild(NewFileTouchBuilder)},
+	// file.line / file.replace / file.keyvalue — self-documenting schema (the
+	// file-surgery wave: file.line's `mode` is an action enum, file.replace's
+	// `pattern` is required with a builder-tail regex compile, file.keyvalue's
+	// `key_values` is a paramtypes.StringMap with a module-local key/value
+	// merge). Each builder is itself a BuildFunc, so no providerBuild adapter.
+	{Name: "file.line", Spec: fileLineSpec, Build: NewFileLineBuilder},
+	{Name: "file.replace", Spec: fileReplaceSpec, Build: NewFileReplaceBuilder},
+	// file.comment / file.uncomment — the N:1 exemplar: one FileComment proto,
+	// two Specs (one per registered name), each with its own documentation.
+	{Name: "file.comment", Spec: fileCommentSpec, Build: NewFileCommentBuilder},
+	{Name: "file.uncomment", Spec: fileUncommentSpec, Build: NewFileUncommentBuilder},
+	{Name: "file.keyvalue", Spec: fileKeyValueSpec, Build: NewFileKeyValueBuilder},
+	// file.copy / file.touch — self-documenting schema (all-primitives wave;
+	// file.copy's source is `required`). Both builders are themselves
+	// BuildFuncs, so no adapter.
+	{Name: "file.copy", Spec: fileCopySpec, Build: NewFileCopyBuilder},
+	{Name: "file.touch", Spec: fileTouchSpec, Build: NewFileTouchBuilder},
 	// pkg.latest / pkg.purged — self-documenting schema (all-primitives
 	// migration wave). Both builders are themselves BuildFuncs, so no adapter.
 	{Name: "pkg.latest", Spec: pkgLatestSpec, Build: NewPkgLatestBuilder},

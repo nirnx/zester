@@ -203,6 +203,9 @@ func looseEqual(a, b any) bool {
 	if sl, ok := a.(paramtypes.StringList); ok {
 		return stringListMatches(sl, b)
 	}
+	if sm, ok := a.(paramtypes.StringMap); ok {
+		return stringMapMatches(sm, b)
+	}
 	if tf, ok := a.(paramtypes.TemplateFlag); ok {
 		return templateFlagMatches(tf, b)
 	}
@@ -278,6 +281,31 @@ func stringListMatches(sl paramtypes.StringList, want any) bool {
 	}
 	for i := range sl {
 		if sl[i] != fmt.Sprint(wantElems[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// stringMapMatches compares a decoded paramtypes.StringMap against a contract's
+// YAML-expressed want. yaml.v3 parses a fixture's `want` map into a
+// map[string]any of scalars, so each value is compared by its string form —
+// `want: {A: "1", B: 2}` matches whether YAML parsed a value as a string or an
+// int, which is exactly StringMap's own scalar-sprint contract. A non-map want
+// cannot match. (StringMap is the file.keyvalue key_values type; it is the third
+// semantic type — after StringList and TemplateFlag/FileMode — to gain a
+// contract matcher as its first migrated consumer lands.)
+func stringMapMatches(sm paramtypes.StringMap, want any) bool {
+	wm, ok := want.(map[string]any)
+	if !ok {
+		return false
+	}
+	if len(sm) != len(wm) {
+		return false
+	}
+	for k, wv := range wm {
+		v, ok := sm[k]
+		if !ok || v != fmt.Sprint(wv) {
 			return false
 		}
 	}

@@ -100,24 +100,6 @@ func (u *UserAbsent) Revert(_ context.Context) (state.ApplyResult, error) {
 	}, nil
 }
 
-// parseAnyStringList extracts a string slice from a config map key that
-// holds []any values (as produced by YAML parsing). It is the legacy list
-// parser still used by not-yet-migrated modules (user.absent's siblings
-// group.* and file.append); migrated modules use paramtypes.StringList.
-func parseAnyStringList(config map[string]any, key string) []string {
-	raw, ok := config[key].([]any)
-	if !ok {
-		return nil
-	}
-	var result []string
-	for _, v := range raw {
-		if s, ok := v.(string); ok {
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
 func containsString(ss []string, s string) bool {
 	for _, v := range ss {
 		if v == s {

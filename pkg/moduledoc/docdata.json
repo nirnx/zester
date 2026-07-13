@@ -1,5 +1,1434 @@
 [
   {
+    "Module": "cron.absent",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a crontab entry does not exist for a user.",
+      "Description": "`cron.absent` ensures no crontab entry with the given `command` exists in the target user's crontab. `command` is required and identifies the line to remove; `user` defaults to `root`. The `name` parameter is a label for the state only (defaulting to the state ID) — removal matches on the command, not the label.",
+      "Effects": {
+        "Check": "Lists the user's crontab and reports a change when any entry's command matches the declared command; otherwise it reports no change.",
+        "Apply": "Removes the crontab entry matching the command through the cron provider. Reports the user and command in its details.",
+        "Revert": "Cannot restore a deleted crontab entry (the removed line's schedule is not recorded), so Revert is an explicit no-op rather than a guessed re-creation.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Remove a legacy backup job",
+          "Kind": "state",
+          "Explanation": "The entry is identified by its command.",
+          "Code": "remove-legacy-backup:\n  cron.absent:\n    - user: root\n    - command: /usr/local/bin/old_backup.sh\n"
+        },
+        {
+          "Title": "Remove a cron entry ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the state's name; command is a key=value.",
+          "Code": "zester '*' cron.absent old-job command=/usr/local/bin/old_backup.sh"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Matched by command, not name",
+          "Body": "`cron.absent` removes the crontab line whose command equals the declared `command`. The `name` parameter labels the state; it does not select which line is removed."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "cron.present"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "label for the state; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "user",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "user whose crontab is managed; defaults to root",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "root",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "command",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "command line whose crontab entry is removed (required)",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "cron.present",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a crontab entry exists for a user with the given schedule and command.",
+      "Description": "`cron.present` ensures a single crontab entry exists in the target user's crontab. The entry's IDENTITY is the state's `name` (defaulting to the state ID), stamped as a `# ZESTER_CRON_ID:` marker comment on the line — so editing the `command` under an unchanged name REPLACES the old line in place instead of orphaning it, and two states with distinct names but the same command coexist. `command` is required; `user` defaults to `root` and each of the five schedule fields (`minute`, `hour`, `daymonth`, `month`, `dayweek`) defaults to `*`.",
+      "Effects": {
+        "Check": "Lists the user's crontab and locates the entry sharing this state's identity — the marker comment when present, or, as an adoption fallback, an exact command match among label-less (hand-written) lines. Reports a change when no such entry exists, or when the located entry's command (compared with internal whitespace collapsed, matching the crontab parser), schedule fields, or identifier comment drift from the declared values.",
+        "Apply": "Re-lists the crontab (a self-contained flow: a watch-forced Apply bypasses Check). An already-converged entry is a clean no-op — no crontab rewrite, no lying change. Otherwise it writes the desired entry, stamping the identifier comment (adopting a matching label-less line rather than duplicating it), and memoizes the replaced or adopted original for revert. Reports the user, command, and schedule in its details.",
+        "Revert": "Undoes only what this run's Apply wrote. An entry created under the same identity as a prior one is restored in place; an adopted label-less line is put back; a freshly created entry is removed by its (command-scoped) line, preserving other names' same-command entries which are re-added. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never deletes an entry by bare command.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Nightly database backup",
+          "Kind": "state",
+          "Explanation": "command is required; the schedule fields default to * where omitted.",
+          "Code": "backup-db:\n  cron.present:\n    - user: postgres\n    - command: /usr/local/bin/pg_backup.sh\n    - minute: \"0\"\n    - hour: \"3\"\n    - require:\n      - \"pkg.installed:postgresql\"\n"
+        },
+        {
+          "Title": "Run a command every five minutes",
+          "Kind": "state",
+          "Explanation": "A numeric minute is coerced to its string form (minute 5, not every minute — see the BD-3 divergence).",
+          "Code": "poll:\n  cron.present:\n    - command: /usr/local/bin/poll.sh\n    - minute: 5\n"
+        },
+        {
+          "Title": "Create a cron entry ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the entry's name (its identifier comment); command is a key=value.",
+          "Code": "zester 'web*' cron.present nightly command=/usr/local/bin/nightly.sh hour=2 minute=0"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Identity is the name, not the command",
+          "Body": "The entry's identity is its `name` (stamped as a `# ZESTER_CRON_ID:` marker). Editing the `command` under an unchanged name replaces the line in place; two states with distinct names and the same command coexist as separate entries."
+        },
+        {
+          "Level": "warn",
+          "Title": "An integer minute now means that minute",
+          "Body": "Under the uniform decoder a YAML/msgpack integer schedule value (for example `minute: 5`) coerces to \"5\". The legacy parser dropped a non-string value to \"\" and then to `*`, so `minute: 5` used to run EVERY minute. Quote schedule values you intend as strings; a numeric value now maps to that exact field (BD-3)."
+        }
+      ],
+      "Divergences": [
+        "BD-3",
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "cron.absent"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "identifier comment stamped on the crontab line (its Salt-identifier identity); defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "user",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "user whose crontab is managed; defaults to root",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "root",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "command",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "command line to run on the schedule (required)",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "minute",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "minute field (0-59 or *); defaults to *",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "*",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "hour",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "hour field (0-23 or *); defaults to *",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "*",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "daymonth",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "day-of-month field (1-31 or *); defaults to *",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "*",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "month",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "month field (1-12 or *); defaults to *",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "*",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "dayweek",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "day-of-week field (0-7 or *); defaults to *",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "*",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.absent",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a file or directory does not exist.",
+      "Description": "`file.absent` ensures nothing exists at the given path, removing a file or an entire directory tree. The path defaults to the state ID, so a bare `file.absent` under an `/opt/old-app:` key removes `/opt/old-app`.",
+      "Effects": {
+        "Check": "Stats the path. A stat error (the common case: the path does not exist) means no change is needed; any successful stat — file or directory — needs a change.",
+        "Apply": "Removes the path via `RemoveAll`, which recursively deletes a directory tree. Reports the removed path in its details.",
+        "Revert": "Cannot restore the removed content: nothing is captured before removal, so Revert is an explicit no-op rather than a guessed re-creation.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Remove a file by state ID",
+          "Kind": "state",
+          "Explanation": "The state ID is the path to remove; no parameters are needed.",
+          "Code": "/etc/nginx/sites-enabled/default:\n  file.absent: []\n"
+        },
+        {
+          "Title": "Remove a named path after stopping a dependent",
+          "Kind": "state",
+          "Explanation": "name overrides the path; require ensures the dependent service is stopped first.",
+          "Code": "remove_old_app:\n  file.absent:\n    - name: /opt/old-app\n    - require:\n      - \"cmd.run:stop_old_app\"\n"
+        },
+        {
+          "Title": "Remove a path ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the path.",
+          "Code": "zester 'web-01' file.absent /tmp/old-config.txt"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Revert does not restore removed content",
+          "Body": "Because nothing is captured before removal, Revert cannot be Apply's inverse. It is an honest no-op."
+        },
+        {
+          "Level": "",
+          "Title": "Removes directories recursively",
+          "Body": "A path that is a directory is removed with all of its contents, equivalent to `rm -rf`."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "file.managed",
+        "file.touch"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the file or directory to remove (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.append",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure specific lines are present in a file, appending any that are missing.",
+      "Description": "`file.append` ensures every line listed in `text` is present somewhere in the file at the given path (defaulting to the state ID). Each line is checked independently by substring match; only the lines that are missing are appended, in declared order, each followed by a newline.",
+      "Effects": {
+        "Check": "A missing file needs a change (it will be created and populated on apply). For an existing file, each declared line is checked for presence as a substring of the file's content; any missing line needs a change.",
+        "Apply": "Reads the current content (capturing it as the revert backup on first capture, if the file exists). For each declared line not already present, appends it followed by a newline — inserting a separating newline first if the existing content does not already end with one. A run where every line was already present is a no-op. Reports the count of appended lines in its details.",
+        "Revert": "A file this run's Apply created is removed (tolerating an already-missing file); a file that pre-existed is restored to its captured original content. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Add entries to /etc/hosts",
+          "Kind": "state",
+          "Explanation": "Each listed line is appended only if not already present.",
+          "Code": "/etc/hosts:\n  file.append:\n    - text:\n      - \"192.168.1.10 db-master\"\n      - \"192.168.1.11 db-replica\"\n"
+        },
+        {
+          "Title": "Append configuration after package install",
+          "Kind": "state",
+          "Explanation": "require ensures the package is installed before the config file is touched.",
+          "Code": "/etc/security/limits.conf:\n  file.append:\n    - text:\n      - \"* soft nofile 65535\"\n      - \"* hard nofile 65535\"\n    - require:\n      - \"pkg.installed:base-packages\"\n"
+        },
+        {
+          "Title": "Append a line ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the path. The CLI leg passes `text` as a plain string — one line — so a single line is given directly; a multi-line list is YAML-only (a bracketed value on the CLI is taken literally, not parsed as a list).",
+          "Code": "zester 'web-01' file.append /etc/hosts text='192.168.1.10 db-master'"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "",
+          "Title": "Lines are matched by substring",
+          "Body": "A declared line is considered present if it occurs anywhere in the file's content, not only as a whole line."
+        },
+        {
+          "Level": "",
+          "Title": "text accepts a single line too",
+          "Body": "A bare string (`text: \"some line\"`, or a CLI `text=\"some line\"`) manages exactly that one line, equivalent to a one-element list."
+        }
+      ],
+      "Divergences": [
+        "BD-5",
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "file.managed",
+        "file.line"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target file (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "text",
+        "Aliases": null,
+        "GoType": "paramtypes.StringList",
+        "SemanticType": "StringList",
+        "Usage": "lines that must be present in the file; each line is checked independently and only missing lines are appended",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "StringList",
+        "Doc": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.blockreplace",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Manage a block of content between marker lines in a file.",
+      "Description": "`file.blockreplace` keeps the content between a start and end marker line in sync with `content`. The path defaults to the state ID (this module has no `path` alias). The markers default to `# START managed zone` / `# END managed zone` and can be overridden with `marker_start`/`marker_end`. When the markers are absent, `append_if_not_found` appends the whole block (creating the file if it does not exist); without it, a file or block that is missing is a clean no-op.",
+      "Effects": {
+        "Check": "Reads the file and locates the marker block. When the block is present, it reports a change only if the content between the markers differs from `content` (normalized to a trailing newline). When the file or block is absent, a change is needed only if `append_if_not_found` is set. Any read error other than not-exist fails the check.",
+        "Apply": "Re-derives existence from a fresh read every invocation (never from a stale instance flag). On a missing file it creates the block when `append_if_not_found` is set (else no-op). On a present file it replaces the content between the markers, or — when the markers are absent and `append_if_not_found` is set — appends the block (adding a trailing newline when `append_newline` is set). Captures the original for revert on the first write and writes with mode 0644.",
+        "Revert": "Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Manage a marked block in a config file",
+          "Kind": "state",
+          "Explanation": "The default markers delimit the managed zone; append_if_not_found seeds the block on first run.",
+          "Code": "/etc/hosts:\n  file.blockreplace:\n    - content: |\n        10.0.0.1 app\n        10.0.0.2 db\n    - append_if_not_found: true\n"
+        },
+        {
+          "Title": "Custom markers",
+          "Kind": "state",
+          "Explanation": "marker_start/marker_end override the default managed-zone markers.",
+          "Code": "/etc/nginx/nginx.conf:\n  file.blockreplace:\n    - content: \"    include /etc/nginx/managed/*.conf;\"\n    - marker_start: \"# BEGIN zester\"\n    - marker_end: \"# END zester\"\n    - append_if_not_found: true\n"
+        },
+        {
+          "Title": "Manage a block ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional is the path; content and flags are key=value args.",
+          "Code": "zester 'web*' file.blockreplace /etc/hosts content='10.0.0.1 app' append_if_not_found=true"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Only the marked block is modified",
+          "Body": "Lines before the start marker and after the end marker are never modified — only the content between the markers (or an appended block when the markers are absent) is written."
+        },
+        {
+          "Level": "info",
+          "Title": "Markers must match exactly",
+          "Body": "A marker line is matched exactly (after trimming a trailing carriage return). Whitespace or comment-character differences mean the block is treated as absent, so keep the markers identical across runs."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "file.line",
+        "file.replace",
+        "file.managed"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target file; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "content",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "desired content placed between the marker lines",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "marker_start",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "line that starts the managed block",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "# START managed zone",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "marker_end",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "line that ends the managed block",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "# END managed zone",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "append_if_not_found",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "append (or create) the managed block when the markers are absent; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "append_newline",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "add a trailing newline after an appended block; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.comment",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Comment out lines matching a regular expression.",
+      "Description": "`file.comment` prefixes every line matching `regex` with a comment character (`#` by default), skipping lines that are already commented. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). `regex` is matched against the UNCOMMENTED line content and is required. A missing file is a clean no-op.",
+      "Effects": {
+        "Check": "Reads the file (a missing file needs no change; any other read error fails the check) and computes the result in memory: a change is needed when any uncommented line matching `regex` would be prefixed with the comment character.",
+        "Apply": "Reads the file (capturing the original for revert). Prefixes every uncommented line matching `regex` with `char`, leaving already-commented lines untouched, and writes the result with mode 0644, preserving the trailing newline. A missing file is a no-op.",
+        "Revert": "Restores the file's captured prior content from this run's Apply. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Disable a directive by commenting it",
+          "Kind": "state",
+          "Explanation": "Lines matching regex are prefixed with the comment character.",
+          "Code": "/etc/ssh/sshd_config:\n  file.comment:\n    - regex: \"^PermitRootLogin\"\n"
+        },
+        {
+          "Title": "Comment with a custom character",
+          "Kind": "state",
+          "Explanation": "char overrides the default # prefix (here a semicolon for an INI file).",
+          "Code": "/etc/php.ini:\n  file.comment:\n    - regex: \"^expose_php\"\n    - char: \";\"\n"
+        },
+        {
+          "Title": "Comment a line ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional is the path; regex is a key=value arg.",
+          "Code": "zester 'web*' file.comment /etc/fstab regex='\\sswap\\s'"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "regex matches the uncommented line",
+          "Body": "`regex` is always matched against the line WITHOUT its comment character, so the same expression selects a line whether or not it is currently commented."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "`regex` must be a valid Go (RE2) regular expression (the builder fails otherwise). Unlike Salt — which strips a leading `^` and trailing `$` before wrapping the pattern — Zester uses the expression as-is (an unanchored substring match unless you anchor it). Salt's `backup` parameter is not supported; Revert uses an in-memory backup instead."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "file.uncomment",
+        "file.line",
+        "file.replace"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "char",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "comment prefix added (file.comment) or stripped (file.uncomment); defaults to #",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "#",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "regex",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "Go regular expression matched against the uncommented line content",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.copy",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Copy a source file that already exists on the peel to a destination path.",
+      "Description": "`file.copy` copies `source` (a path local to the peel) to the destination. The destination path defaults to the state ID; `path` is accepted as an alias. Without `force`, an existing destination is left untouched (the copy is a one-time seed); with `force`, the destination is kept in sync with the source by content hash.",
+      "Effects": {
+        "Check": "Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.",
+        "Apply": "Reads the source file. If the destination exists and `force` is not set, Apply is a no-op. With `force` on an existing destination, the current content is captured for revert (a non-not-exist read error fails the apply rather than overwriting content it could not capture) before it is overwritten. Creates missing parent directories when `makedirs` is set, then writes the destination with mode 0644, or the source's permission mode (via an explicit chmod) when `preserve` is set. Reports the byte count in its details.",
+        "Revert": "Restores what this run's Apply changed: a destination that pre-existed (and was overwritten under `force`) is rewritten with its captured prior content; a destination this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Back up a config file before editing it",
+          "Kind": "state",
+          "Explanation": "A one-time seed copy: without force, the backup is created once and never overwritten.",
+          "Code": "/etc/nginx/nginx.conf.bak:\n  file.copy:\n    - source: /etc/nginx/nginx.conf\n"
+        },
+        {
+          "Title": "Deploy from a staging area, keeping it in sync",
+          "Kind": "state",
+          "Explanation": "force keeps the destination synced to the source; preserve copies the source's permission mode; makedirs creates missing parent directories.",
+          "Code": "/opt/app/config.yaml:\n  file.copy:\n    - source: /opt/staging/config.yaml\n    - force: true\n    - preserve: true\n    - makedirs: true\n"
+        },
+        {
+          "Title": "Copy a file ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the destination path; source is a key=value arg.",
+          "Code": "zester 'web-01' file.copy /etc/nginx/nginx.conf.bak source=/etc/nginx/nginx.conf"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "",
+          "Title": "Only regular files are copied",
+          "Body": "Salt's recursive directory copy (`subdir`), `user`/`group` ownership, and `mode` parameters are not supported."
+        },
+        {
+          "Level": "",
+          "Title": "Ownership is not preserved",
+          "Body": "Only the permission mode is copied, and only when `preserve` is set."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "file.managed",
+        "file.touch"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "destination path; the path alias is accepted for Salt compatibility (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "source",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "local path (on the peel) to copy from",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "force",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "preserve",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "makedirs",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.directory",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a directory exists with the desired permissions and ownership.",
+      "Description": "`file.directory` ensures a directory exists at its path with the desired permission mode and ownership. The path defaults to the state ID. The `mode` parameter sets the directory's permission bits and defaults to `0755`; `dir_mode` is accepted as an alias — a fallback source for the same mode, with `mode` winning when both are given. It honors an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0700` applies 0700. `user`/`group` converge ownership only when declared. The `makedirs` parameter is accepted for Salt compatibility but has no effect — the parent chain is always created.",
+      "Effects": {
+        "Check": "Compares, in order: path existence (a genuine not-exist means the directory must be created, while any other stat error fails the check rather than reporting phantom drift); that the path is a directory (an existing non-directory needs a change); the permission mode (the managed facets — permission bits plus setuid/setgid/sticky) against the desired mode, defaulting to 0755; and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.",
+        "Apply": "Probes existence for the revert memo — a non-not-exist stat error fails the apply rather than poisoning the memo, since a pre-existing tree must never be recorded as created (a same-instance Revert would RemoveAll it). Creates the directory and any missing parents with MkdirAll (unconditionally — `makedirs` is inert), records the created memo only when the directory did not pre-exist, sets the mode via Chmod, and — when `user`/`group` is declared — converges ownership via Chown. Reports the applied mode.",
+        "Revert": "Removes a directory this run's Apply created (RemoveAll). A directory that pre-existed (only its mode or ownership changed) is left untouched, and a fresh instance (a standalone revert) recorded nothing and is a no-op — it never removes a directory it did not create.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Create a directory with ownership",
+          "Kind": "state",
+          "Explanation": "The state ID is the target path; mode and ownership are set inline.",
+          "Code": "/opt/myapp:\n  file.directory:\n    - mode: \"0755\"\n    - user: root\n    - group: root\n"
+        },
+        {
+          "Title": "Private application data directory",
+          "Kind": "state",
+          "Explanation": "A restrictive 0700 mode with a service account owner; the require pulls in the user first.",
+          "Code": "/var/lib/prometheus/data:\n  file.directory:\n    - mode: \"0700\"\n    - user: prometheus\n    - group: prometheus\n    - require:\n      - \"user.present:prometheus\"\n"
+        },
+        {
+          "Title": "Create a directory ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the path; mode and ownership are key=value args.",
+          "Code": "zester 'web*' file.directory /var/log/myapp mode=0750 user=appuser group=appuser"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "makedirs has no effect",
+          "Body": "The makedirs parameter is accepted for Salt compatibility but is inert: file.directory always creates the full parent chain via MkdirAll, whether or not makedirs is set."
+        },
+        {
+          "Level": "",
+          "Title": "Mode defaults to 0755 and honors integer modes",
+          "Body": "An omitted mode applies 0755. The dir_mode alias supplies the same mode as a fallback (mode wins if both are given). A mode given as an octal integer (for example `mode: 0700`) is honored across every delivery path, including a reactor dispatch where msgpack encodes it as a sized integer; setuid/setgid/sticky bits are preserved."
+        },
+        {
+          "Level": "info",
+          "Title": "Ownership requires privilege",
+          "Body": "`user` and `group` are resolved via `os/user.Lookup` and `os/user.LookupGroup`; the peel must run with sufficient privileges to set ownership."
+        }
+      ],
+      "Divergences": [
+        "BD-1",
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "file.managed",
+        "file.recurse",
+        "file.absent"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target directory (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "mode",
+        "Aliases": [
+          "dir_mode"
+        ],
+        "GoType": "paramtypes.FileMode",
+        "SemanticType": "FileMode",
+        "Usage": "directory permission mode in octal (\"0755\", \"0700\"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755",
+        "Required": false,
+        "Primary": false,
+        "Lazy": true,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "0755",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "user",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "directory owner username; ownership is left unchanged when unset",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "group",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "directory group name; ownership is left unchanged when unset",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "makedirs",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "accepted for Salt compatibility but has NO effect — parent directories are always created via MkdirAll regardless; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "FileMode",
+        "Doc": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.keyvalue",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure key/value lines are present in a file, updating values in place.",
+      "Description": "`file.keyvalue` ensures one or more `key<separator>value` lines exist in a file, updating the value in place when the key already exists (for `sysctl.conf`, `os-release`, or environment files). The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). Supply the pairs as a `key_values` map (Salt's name), an `entries` map, a single `key`/`value` pair, or any combination — `key_values` and `entries` are UNIONED (they are two separate parameters, not aliases), with `entries` winning a per-key collision, and the single `key`/`value` pair overriding both for its key. The `separator` defaults to `=` and is matched trimmed, so an existing `k = v` line (with surrounding spaces) is recognized and updated rather than duplicated.",
+      "Effects": {
+        "Check": "Reads the file (a missing file needs a change — it will be created; any other read error fails the check) and computes the result in memory: a change is needed when any managed key is absent or its current value differs from the desired one.",
+        "Apply": "Reads the file (capturing the original for revert on the first write when it already exists). For each key, updates the matching line's value in place (preserving its leading whitespace) or appends `key<separator>value` when absent, then writes the result with mode 0644 (preserving the trailing newline). Creates the file with the managed lines when it does not exist.",
+        "Revert": "Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Set kernel parameters",
+          "Kind": "state",
+          "Explanation": "key_values sets multiple entries; an existing line's value is updated in place.",
+          "Code": "/etc/sysctl.conf:\n  file.keyvalue:\n    - key_values:\n        net.ipv4.ip_forward: \"1\"\n        vm.swappiness: \"10\"\n"
+        },
+        {
+          "Title": "Set a single value with a custom separator",
+          "Kind": "state",
+          "Explanation": "key/value is the single-entry form; separator overrides the default = (a spaced separator here).",
+          "Code": "/etc/login.defs:\n  file.keyvalue:\n    - key: UMASK\n    - value: \"027\"\n    - separator: \"   \"\n"
+        },
+        {
+          "Title": "Set a value ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional is the path; key and value are key=value args.",
+          "Code": "zester 'web*' file.keyvalue /etc/os-release key=PRETTY_NAME value='Zester Linux'"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Separator matching tolerates spaces",
+          "Body": "The separator is matched with its surrounding whitespace trimmed, so an existing `key = value` line is recognized and updated rather than a duplicate `key=value` line being appended. The written line uses the separator exactly as configured."
+        },
+        {
+          "Level": "info",
+          "Title": "key_values and entries are unioned",
+          "Body": "`key_values` (Salt's name) and `entries` are two SEPARATE parameters, not aliases. When both are supplied their maps are unioned; on a per-key collision the `entries` value wins (it merges after `key_values`). A single `key`/`value` pair is merged last, overriding both for its key."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "Keys that are not found are always appended — Salt requires `append_if_not_found: True` for that, but Zester has no such flag. Only the FIRST matching line per key is updated; duplicate lines further down are left untouched. Salt's `count`, `uncomment`, `key_ignore_case`, and `value_ignore_case` parameters are not supported."
+        }
+      ],
+      "Divergences": [
+        "BD-5",
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "file.line",
+        "file.replace",
+        "sysctl.present"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "separator",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "literal token written between key and value; defaults to =",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "=",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "key_values",
+        "Aliases": null,
+        "GoType": "paramtypes.StringMap",
+        "SemanticType": "StringMap",
+        "Usage": "map of keys to their desired values (Salt's key_values); unioned with entries, which wins a per-key collision",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "number",
+              "boolean"
+            ]
+          },
+          "type": "object"
+        }
+      },
+      {
+        "Name": "entries",
+        "Aliases": null,
+        "GoType": "paramtypes.StringMap",
+        "SemanticType": "StringMap",
+        "Usage": "map of keys to their desired values; unioned with key_values, winning a per-key collision",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "number",
+              "boolean"
+            ]
+          },
+          "type": "object"
+        }
+      },
+      {
+        "Name": "key",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "a single key to manage (used with value); merged into the entries map",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "value",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "the desired value for key; required when key is set",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "StringMap",
+        "Doc": "A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.",
+        "JSONSchema": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "number",
+              "boolean"
+            ]
+          },
+          "type": "object"
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.line",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure, replace, insert, or delete a single line in a file.",
+      "Description": "`file.line` manages one line within a file. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). The `mode` parameter selects the action — `ensure` (the default: the line exists — it replaces the first matched line, or, when nothing matches, inserts the line positioned by `before`/`after`, appending it at the end when neither anchor matches), `replace` (rewrite a matched line, never adding one), `insert` (add the line if absent, positioned by `before`/`after`), or `delete` (remove every matching line; `absent` is a synonym). `match` is a regular expression identifying the target line (falling back to a literal substring test when it is not a valid regex); with no `match`, the exact `content` line is the target.",
+      "Effects": {
+        "Check": "Reads the file and computes the resulting lines in memory. A change is needed only when the computed content differs. When the file does not exist, a change is needed only for the content-adding actions (`ensure`/`insert`); `replace`/`delete` on a missing file need no change. Any read error other than not-exist fails the check rather than risking a blind write.",
+        "Apply": "Reads the file (capturing the original for revert on the first write). A missing file is created with the single line for the content-adding actions, and is a no-op for `replace`/`delete`. Otherwise it applies the action — `ensure` replaces the first matched line, or, when no line matches, inserts `content` after the first `after` match, else before the first `before` match, else appends it at the end; `replace` rewrites matched lines in place; `insert` adds `content` after the first `after` match, else before the first `before` match, else at end; `delete` drops every matching line — and writes the result with mode 0644, preserving the trailing newline.",
+        "Revert": "Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Ensure a directive is present",
+          "Kind": "state",
+          "Explanation": "With no match, the exact content line is ensured — appended if it is not already present.",
+          "Code": "/etc/sysctl.conf:\n  file.line:\n    - content: \"net.ipv4.ip_forward=1\"\n"
+        },
+        {
+          "Title": "Replace a matched line",
+          "Kind": "state",
+          "Explanation": "match selects the line to rewrite; mode: replace never adds a line when the match is absent.",
+          "Code": "/etc/ssh/sshd_config:\n  file.line:\n    - content: \"PermitRootLogin no\"\n    - match: \"^PermitRootLogin\"\n    - mode: replace\n"
+        },
+        {
+          "Title": "Insert a line after an anchor",
+          "Kind": "state",
+          "Explanation": "mode: insert places the line after the first line matching after (before is the fallback anchor).",
+          "Code": "/etc/hosts:\n  file.line:\n    - content: \"10.0.0.5 db\"\n    - after: \"^127\\\\.0\\\\.0\\\\.1\"\n    - mode: insert\n"
+        },
+        {
+          "Title": "Delete a matching line ad hoc",
+          "Kind": "cli",
+          "Explanation": "mode=delete removes every line matching match; the bare positional is the path.",
+          "Code": "zester 'web*' file.line /etc/fstab mode=delete match='\\sswap\\s'"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "mode is an action, not a permission mode",
+          "Body": "Unlike file.managed, file.line's `mode` selects the edit operation (ensure/replace/insert/delete). It is not a file permission; file.line never changes permissions and always writes with 0644 when it creates a file."
+        },
+        {
+          "Level": "info",
+          "Title": "match is a regex with a substring fallback",
+          "Body": "`match`, `before`, and `after` are compiled as Go (RE2) regular expressions; if a value is not a valid regex it falls back to a literal substring test rather than erroring."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "Unlike Salt — which requires `match` to be a valid Python regular expression — Zester falls back to a plain substring test when `match` is not a valid Go regex. Salt's `location`, `quiet`, `indent`, and `backup` parameters are not supported."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "file.replace",
+        "file.blockreplace",
+        "file.managed"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "content",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "the line content to ensure, replace, insert, or delete",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "mode",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "operation to perform: ensure (default), replace, insert, or delete (absent = delete); case-insensitive",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "ensure",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "match",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "regular expression (or literal substring fallback) identifying the target line; when empty, the exact Content line is matched",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "before",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "regular expression (or substring); on insert/ensure the new line is placed before the first matching line",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "after",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "regular expression (or substring); on insert/ensure the new line is placed after the first matching line (takes precedence over before)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "file.managed",
     "Kind": "state",
     "Doc": {
@@ -295,6 +1724,1054 @@
               "maximum": 4095,
               "minimum": 0,
               "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.recurse",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Recursively copy a source directory tree to a destination directory.",
+      "Description": "`file.recurse` mirrors a `source` directory tree onto the destination, creating directories and copying files by SHA-256 content. The destination path defaults to the state ID. `file_mode` (default `0644`) is enforced on every copied file. `dir_mode` (default `0755`) is DECLARED-ONLY: when it is omitted, existing directory modes are left alone (it is used only as the creation mode for directories the copy makes); when it is set, managed directory modes are compared and enforced. `user`/`group` set ownership on copied files only. `clean` removes destination files absent from the source, and `makedirs` creates the destination's parent chain. Both mode parameters honor an octal string or an octal integer of any kind.",
+      "Effects": {
+        "Check": "Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.",
+        "Apply": "Requires a source. When `makedirs` is set, creates the destination's parent chain. Walks the source: creates each directory with MkdirAll (chmod'ing it to `dir_mode` ONLY when dir_mode is declared — an undeclared dir_mode never rewrites a pre-existing directory's mode), and writes each file with `file_mode`, recording newly created files for revert (a non-not-exist stat error fails the apply rather than mis-memoizing a pre-existing file), chmod'ing it to `file_mode`, and chowning it when ownership is declared. With `clean`, removes destination regular files not present in the source (directories are never removed). Reports the copied and cleaned counts.",
+        "Revert": "Removes only the files this run's Apply created (best-effort; files that already existed before Apply are left untouched). A fresh instance (a standalone revert, e.g. after a peel restart) recorded nothing and is a clean no-op — it never removes a file it did not create.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Deploy a config directory tree",
+          "Kind": "state",
+          "Explanation": "Copies a whole tree with explicit modes and ownership; clean prunes stray destination files; makedirs creates the parent chain.",
+          "Code": "/etc/app:\n  file.recurse:\n    - source: /srv/config/app\n    - file_mode: \"0640\"\n    - dir_mode: \"0750\"\n    - user: appuser\n    - group: appgroup\n    - clean: true\n    - makedirs: true\n    - require:\n      - \"pkg.installed:myapp\"\n"
+        },
+        {
+          "Title": "Mirror a tree, leaving directory modes alone",
+          "Kind": "state",
+          "Explanation": "With no dir_mode declared, existing directory modes are never touched — only file content and file_mode converge.",
+          "Code": "/opt/app/static:\n  file.recurse:\n    - source: /srv/static\n    - file_mode: \"0644\"\n"
+        },
+        {
+          "Title": "Copy a tree ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the destination; source is a key=value arg.",
+          "Code": "zester 'web*' file.recurse /etc/app source=/srv/config/app clean=true"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "dir_mode is a declared-only facet",
+          "Body": "When dir_mode is omitted, existing directory modes are neither compared (Check) nor rewritten (Apply) — an operator-set mode on a pre-existing directory (for example a private 0700 tree) is preserved, and the 0755 default is used only as the mode for directories the copy creates. Declare dir_mode to actively manage directory modes."
+        },
+        {
+          "Level": "info",
+          "Title": "clean removes regular files only",
+          "Body": "clean: true removes destination regular files that are absent from the source. Empty directories left behind after a clean are not removed (matching the Apply behavior), so a stray empty directory never churns Check."
+        },
+        {
+          "Level": "info",
+          "Title": "Ownership requires privilege",
+          "Body": "`user` and `group` are resolved via `os/user.Lookup` and `os/user.LookupGroup`; the peel must run with sufficient privileges to set ownership."
+        },
+        {
+          "Level": "",
+          "Title": "Revert loses its memo across instances",
+          "Body": "Revert removes only the files created by the most recent Apply on the same instance. If the module is re-instantiated (for example after a peel restart), that memo is lost and a standalone revert is a clean no-op."
+        }
+      ],
+      "Divergences": [
+        "BD-1",
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "file.managed",
+        "file.directory",
+        "file.copy"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "destination directory path (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "source",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "source directory path to copy from (required at run time)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "dir_mode",
+        "Aliases": null,
+        "GoType": "paramtypes.FileMode",
+        "SemanticType": "FileMode",
+        "Usage": "directory permission mode for managed directories (octal); DECLARED-ONLY — undeclared, existing directory modes are left alone (used only as the creation mode for new directories, defaulting to 0755)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": true,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "0755",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "file_mode",
+        "Aliases": null,
+        "GoType": "paramtypes.FileMode",
+        "SemanticType": "FileMode",
+        "Usage": "permission mode for copied files in octal (\"0644\"); always enforced; defaults to 0644",
+        "Required": false,
+        "Primary": false,
+        "Lazy": true,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "0644",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "user",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "owner username for copied files; ownership is left unchanged when unset",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "group",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "group name for copied files; ownership is left unchanged when unset",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "clean",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "remove files in the destination that are not present in the source (regular files only; directories are never removed); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "makedirs",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create the destination's parent directory chain if it does not exist; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "FileMode",
+        "Doc": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.replace",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Regular-expression search-and-replace within a file.",
+      "Description": "`file.replace` rewrites every match of a regular expression in a file, expanding backreferences in the replacement. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). The pattern is anchored per line (Salt's `re.MULTILINE` default), so `^`/`$` bind to line boundaries. `count` caps the number of replacements (0 replaces all). When the pattern is not found, `append_if_not_found` or `prepend_if_not_found` adds `not_found_content` (falling back to `repl`) — and, on a missing file, creates it with that content.",
+      "Effects": {
+        "Check": "Reads the file (a not-exist read is treated as empty content; any other read error fails the check) and computes the transformed content in memory: it reports a change when a match would be rewritten, or when the pattern is absent and an append/prepend would add content that is not already present.",
+        "Apply": "Reads the file (capturing the original for revert on the first write). If the pattern matches, it performs up to `count` replacements. If the pattern is absent, it appends or prepends `not_found_content`/`repl` (creating a missing file with that content when append/prepend is enabled). Writes the result with mode 0644. Note the replacement is not guaranteed idempotent: if the replacement text still matches the pattern, a re-run replaces again.",
+        "Revert": "Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created (via append/prepend on a missing file) is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Rewrite a config value",
+          "Kind": "state",
+          "Explanation": "The pattern matches the whole line; repl replaces it.",
+          "Code": "/etc/rsyslog.conf:\n  file.replace:\n    - pattern: \"^\\\\$ModLoad imudp\"\n    - repl: \"#$ModLoad imudp\"\n"
+        },
+        {
+          "Title": "Ensure a setting exists, appending if absent",
+          "Kind": "state",
+          "Explanation": "append_if_not_found adds the line when the pattern matches nothing; not_found_content is the text to add.",
+          "Code": "/etc/security/limits.conf:\n  file.replace:\n    - pattern: \"^\\\\* soft nofile\"\n    - repl: \"* soft nofile 65535\"\n    - append_if_not_found: true\n    - not_found_content: \"* soft nofile 65535\"\n"
+        },
+        {
+          "Title": "Replace only the first match",
+          "Kind": "state",
+          "Explanation": "count caps the number of replacements; here only the first occurrence is rewritten.",
+          "Code": "/etc/hosts:\n  file.replace:\n    - pattern: \"localhost\"\n    - repl: \"localhost.localdomain\"\n    - count: 1\n"
+        },
+        {
+          "Title": "Search-and-replace ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional is the path; pattern/repl are key=value args.",
+          "Code": "zester 'web*' file.replace /etc/motd pattern='old text' repl='new text'"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Pattern is anchored per line",
+          "Body": "Zester wraps the pattern with `(?m)` to match Salt's `re.MULTILINE` default, so `^` and `$` anchor to line boundaries rather than the whole file."
+        },
+        {
+          "Level": "info",
+          "Title": "Replacement is not guaranteed idempotent",
+          "Body": "If the replacement text still matches the pattern (for example replacing `x` with `xy`), a subsequent run replaces again. This mirrors Salt's file.replace; anchor the pattern or use a replacement that no longer matches to converge."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "Backreferences in `repl` use Go's `$1` / `${name}` syntax, not Python's `\\1` / `\\g<name>`. The pattern is a Go (RE2) regular expression, so lookaheads and lookbehinds are unavailable. Salt's `flags`, `ignore_if_missing`, `backup`, and `dry_run` parameters are not supported; the MULTILINE flag is always on (which is also Salt's default)."
+        }
+      ],
+      "Divergences": [
+        "BD-1",
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "file.line",
+        "file.blockreplace",
+        "file.managed"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "pattern",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "search regular expression (RE2); anchored per-line (Salt's re.MULTILINE default)",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "repl",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "replacement text; $1/${name} backreferences are expanded",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "count",
+        "Aliases": null,
+        "GoType": "int",
+        "SemanticType": "",
+        "Usage": "maximum number of replacements to perform; 0 (the default) replaces every match",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "integer"
+        }
+      },
+      {
+        "Name": "append_if_not_found",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "when the pattern is not found, append not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "prepend_if_not_found",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "when the pattern is not found, prepend not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "not_found_content",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "text used for append_if_not_found/prepend_if_not_found; defaults to repl when empty",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.symlink",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a symbolic link exists at a path, pointing to a target.",
+      "Description": "`file.symlink` ensures a symbolic link exists at the path (defaulting to the state ID) pointing to `target`. Without `force`, a pre-existing file or wrong-target symlink at the path is an error rather than being replaced.",
+      "Effects": {
+        "Check": "Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.",
+        "Apply": "Creates missing parent directories first when `makedirs` is set. If a symlink already points to `target`, Apply is a no-op. If something else exists at the path (a wrong-target symlink, or a non-symlink file/directory), it is only removed when `force` is set — otherwise Apply fails with an error naming what is in the way. Reports the created link and its target in its details.",
+        "Revert": "Removes the symlink unconditionally. It does not restore any file that `force` replaced, and a fresh instance's Revert still removes the symlink at the path (Revert is not gated on this instance having run Apply).",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Create a symlink using the state ID as the link path",
+          "Kind": "state",
+          "Explanation": "The state ID is the link path; target is the only parameter needed.",
+          "Code": "/usr/local/bin/python:\n  file.symlink:\n    - target: /usr/bin/python3\n"
+        },
+        {
+          "Title": "Replace whatever exists, creating parent directories",
+          "Kind": "state",
+          "Explanation": "force replaces an existing mismatched file or symlink; makedirs creates missing parent directories.",
+          "Code": "/opt/app/config:\n  file.symlink:\n    - target: /etc/app/config\n    - force: true\n    - makedirs: true\n    - require:\n      - \"file.directory:/opt/app\"\n"
+        },
+        {
+          "Title": "Create a symlink ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the link path; target is a key=value arg.",
+          "Code": "zester 'web-01' file.symlink /usr/local/bin/python target=/usr/bin/python3"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "",
+          "Title": "Without force, a mismatch is an error",
+          "Body": "If `force` is false (the default) and a file or symlink already exists at the path with a different target, Apply returns an error rather than replacing it."
+        },
+        {
+          "Level": "",
+          "Title": "makedirs uses a fixed mode",
+          "Body": "makedirs creates the full parent directory path with mode 0755. Use file.directory first if you need a specific mode."
+        },
+        {
+          "Level": "",
+          "Title": "Revert does not restore a replaced file",
+          "Body": "Revert removes the symlink but does not restore any file that was replaced when force: true was used."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "file.managed",
+        "file.absent"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path for the symbolic link (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "target",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "destination the symlink should point to",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "force",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "makedirs",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.touch",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Create an empty file when missing, or update its modification time.",
+      "Description": "`file.touch` ensures a file exists, creating it empty when missing. The path defaults to the state ID; `path` is accepted as an alias for Salt compatibility. If the file already exists, Check reports no change is needed regardless of its timestamp — the modification-time update only runs when the state is force-applied (for example by a `watch` requisite).",
+      "Effects": {
+        "Check": "Stats the path. An existing file (any content) needs no change; a missing path needs a change.",
+        "Apply": "Creates missing parent directories first when `makedirs` is set. If the file is missing, creates it empty with the default file mode. If the file already exists (only reached on a force-apply), runs the system `touch` command to update its modification time — a no-op (`Changed: false`) when no command provider is available.",
+        "Revert": "A file this run's Apply created is removed. A file that already existed (Apply only updated its mtime) is left alone — the previous timestamp is not restored, so Revert is a clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Create a marker file",
+          "Kind": "state",
+          "Explanation": "makedirs creates any missing parent directories before the empty file is created.",
+          "Code": "/var/lib/myapp/.provisioned:\n  file.touch:\n    - makedirs: true\n"
+        },
+        {
+          "Title": "Bump a reload trigger whenever config changes",
+          "Kind": "state",
+          "Explanation": "A watch requisite force-applies the state, which updates the file's mtime via the system touch command.",
+          "Code": "/etc/myapp/reload-trigger:\n  file.touch:\n    - watch:\n      - \"file.managed:/etc/myapp/config.yaml\"\n"
+        },
+        {
+          "Title": "Touch a file ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the path.",
+          "Code": "zester 'web-01' file.touch /var/run/myapp/.initialized"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "The mtime is not refreshed on a normal run when the file already exists",
+          "Body": "Salt's `file.touch` updates atime/mtime every time it runs; Zester's Check reports an existing file as satisfied, so the timestamp-update path in Apply only executes when the state is force-applied (for example by a `watch` requisite)."
+        },
+        {
+          "Level": "",
+          "Title": "Explicit timestamps are not supported",
+          "Body": "Salt's `atime`/`mtime` parameters (setting explicit timestamps) have no equivalent here."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "file.managed",
+        "file.absent"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the file to touch; the path alias is accepted for Salt compatibility (defaults to the state ID)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "makedirs",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create missing parent directories (mode 0755) before touching; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "file.uncomment",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Uncomment lines matching a regular expression.",
+      "Description": "`file.uncomment` strips a single leading comment character (`#` by default, after optional indentation) from every commented line whose UNCOMMENTED content matches `regex`. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). `regex` is required and is matched against the line WITHOUT its comment prefix. A missing file is a clean no-op.",
+      "Effects": {
+        "Check": "Reads the file (a missing file needs no change; any other read error fails the check) and computes the result in memory: a change is needed when a commented line, once its comment character is stripped, matches `regex`.",
+        "Apply": "Reads the file (capturing the original for revert). Removes a single leading `char` (after optional whitespace, preserving indentation) from every commented line whose uncommented text matches `regex`, and writes the result with mode 0644, preserving the trailing newline. A missing file is a no-op.",
+        "Revert": "Restores the file's captured prior content from this run's Apply. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Re-enable a commented directive",
+          "Kind": "state",
+          "Explanation": "regex is matched against the uncommented text, so the leading # is stripped from the matching line.",
+          "Code": "/etc/sysctl.conf:\n  file.uncomment:\n    - regex: \"net.ipv4.ip_forward\"\n"
+        },
+        {
+          "Title": "Uncomment with a custom character",
+          "Kind": "state",
+          "Explanation": "char selects which comment prefix to strip (a semicolon here).",
+          "Code": "/etc/samba/smb.conf:\n  file.uncomment:\n    - regex: \"load printers\"\n    - char: \";\"\n"
+        },
+        {
+          "Title": "Uncomment a line ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional is the path; regex is a key=value arg.",
+          "Code": "zester 'web*' file.uncomment /etc/apt/sources.list regex='deb-src'"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "regex matches the uncommented line",
+          "Body": "`regex` is always matched against the line WITHOUT its comment character, so the same expression selects a line whether or not it is currently commented."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "`regex` must be a valid Go (RE2) regular expression (the builder fails otherwise). Unlike Salt — which strips a leading `^` and trailing `$` before wrapping the pattern — Zester uses the expression as-is (an unanchored substring match unless you anchor it). Salt's `backup` parameter is not supported; Revert uses an in-memory backup instead."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "file.comment",
+        "file.line",
+        "file.replace"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "char",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "comment prefix added (file.comment) or stripped (file.uncomment); defaults to #",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "#",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "regex",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "Go regular expression matched against the uncommented line content",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "group.absent",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a group does not exist on the system.",
+      "Description": "`group.absent` ensures the named group is removed. The group name defaults to the state ID.",
+      "Effects": {
+        "Check": "Looks up the group and reports a change only when it exists; an already-absent group needs no change.",
+        "Apply": "Re-verifies existence (a self-contained flow: a watch-forced Apply bypasses Check, and deleting a nonexistent group would fail), then deletes the group through the group provider. An already-absent group is a clean no-op. Reports the group in its details.",
+        "Revert": "Cannot restore a deleted group (its GID and membership are not recorded), so Revert is an explicit no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Remove a group",
+          "Kind": "state",
+          "Explanation": "The group name defaults to the state ID.",
+          "Code": "oldgroup:\n  group.absent: []\n"
+        },
+        {
+          "Title": "Remove a group after removing its users",
+          "Kind": "state",
+          "Explanation": "require orders the user removals ahead of the group deletion.",
+          "Code": "decommission-team:\n  group.absent:\n    - name: oldteam\n    - require:\n      - \"user.absent:alice\"\n      - \"user.absent:bob\"\n"
+        },
+        {
+          "Title": "Remove a group ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the group name.",
+          "Code": "zester '*' group.absent tempgroup"
+        }
+      ],
+      "Notes": null,
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "group.present"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "group name to remove; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "group.present",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a group exists with the specified attributes and membership.",
+      "Description": "`group.present` ensures the named group exists and converges its numeric GID and membership. The group name defaults to the state ID. `gid` is a numeric group ID, compared and set only when non-zero. `members` declares an EXACT membership (extra members are removed, missing members added), while `addusers` and `delusers` adjust membership additively without disturbing other members. `system` selects a low-GID system group and is honored only at creation time.",
+      "Effects": {
+        "Check": "Looks up the group. Reports a change when it does not exist; otherwise it compares, in order: `gid` (only when non-zero); the exact `members` list (when declared); every `addusers` entry (a listed user that is not a member is drift); and every `delusers` entry (a listed user that IS a member is drift).",
+        "Apply": "Creates the group with the declared GID and system flag when it does not exist (adding `members`/`addusers` afterward and recording the creation for revert); a create that races another state at the same DAG level re-looks-up and falls through to the modify path. For an existing group it builds a modify set from only the drifted GID and membership (arming the revert memo), and a fully converged group is a clean no-op that leaves the memo unarmed. Reports the group and the action (created/modified) in its details.",
+        "Revert": "Undoes only what this run's Apply recorded. A group Apply created is deleted; a group Apply modified is restored by diffing the current group against the memoized original and reverting only the still-drifted GID AND membership (so an added member is removed and a removed member restored). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Create a system group",
+          "Kind": "state",
+          "Explanation": "The group name defaults to the state ID; system allocates a low GID.",
+          "Code": "docker:\n  group.present:\n    - system: true\n"
+        },
+        {
+          "Title": "Group with an exact membership list",
+          "Kind": "state",
+          "Explanation": "members declares exact membership — users not listed are removed.",
+          "Code": "webadmins:\n  group.present:\n    - gid: 3000\n    - members:\n      - alice\n      - bob\n      - charlie\n"
+        },
+        {
+          "Title": "Add and remove members without disturbing others",
+          "Kind": "state",
+          "Explanation": "addusers/delusers adjust membership additively; require orders user creation first.",
+          "Code": "developers:\n  group.present:\n    - addusers:\n      - newdev\n    - delusers:\n      - formerdev\n    - require:\n      - \"user.present:newdev\"\n"
+        },
+        {
+          "Title": "Create a group ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the group name; key=value pairs set attributes.",
+          "Code": "zester 'db*' group.present dbadmin gid=2000"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "members is exact; addusers/delusers are additive",
+          "Body": "`members` enforces an EXACT membership — a user present on the system but absent from the list is removed. Use `addusers`/`delusers` to adjust membership without touching other members."
+        },
+        {
+          "Level": "info",
+          "Title": "A bare-string member list is one member",
+          "Body": "A scalar `members: alice` decodes as the single-element list `[alice]` (and enables exact-membership management), a mixed scalar list renders each element to a string, and a nested list/map element is rejected rather than silently dropped (BD-5)."
+        }
+      ],
+      "Divergences": [
+        "BD-1",
+        "BD-2",
+        "BD-5",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "group.absent",
+        "user.present"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "group name; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "gid",
+        "Aliases": null,
+        "GoType": "int",
+        "SemanticType": "",
+        "Usage": "numeric group ID; only compared and set when non-zero (0 auto-assigns)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "integer"
+        }
+      },
+      {
+        "Name": "system",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create a system group (low GID range); used only during creation; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "members",
+        "Aliases": null,
+        "GoType": "paramtypes.StringList",
+        "SemanticType": "StringList",
+        "Usage": "exact membership list — extra members are removed and missing members are added",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "addusers",
+        "Aliases": null,
+        "GoType": "paramtypes.StringList",
+        "SemanticType": "StringList",
+        "Usage": "users to add without affecting other existing members",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "delusers",
+        "Aliases": null,
+        "GoType": "paramtypes.StringList",
+        "SemanticType": "StringList",
+        "Usage": "users to remove without affecting other existing members",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "StringList",
+        "Doc": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
             }
           ]
         }

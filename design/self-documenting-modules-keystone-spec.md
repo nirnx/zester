@@ -349,8 +349,12 @@ wrong-typed values produce typed errors (was silent zero) · BD-7 boolean intege
 coercion: `1` = true, `0` = false, any other integer a typed error (was: ints silently
 ignored). SCOPE (orchestrator ruling 2026-07-12, under the maintainer's TriState 1/0
 approval + the approved coercion table): applies to ALL boolean-typed parameters —
-primitive `bool` and TriState alike — one consistent rule; every activating module pins
-its own instances. Each activates only in the PR that migrates the affected
+primitive `bool` and TriState alike — one consistent rule. PINNING STANDARD (ruling
+2026-07-13): per-PARAM, not representative — EVERY boolean parameter of a migrated
+module gets its own int-one/int-zero/invalid-int fixtures across yaml+msgpack; a comment
+saying another param "follows the same pattern" is not a pin. Likewise BD-6 instances
+pin per-param (the numeric-scalar→string acceptance direction files under BD-6, per the
+pkg.installed `version` precedent). Each activates only in the PR that migrates the affected
 surface, with CHANGELOG entry + pinned contract fixture.
 
 SIGN-OFF STATUS (maintainer, 2026-07-12): **BD-2 APPROVED** · **BD-6 APPROVED** ·
