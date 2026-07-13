@@ -25,22 +25,22 @@ State modules implement the full Check/Apply/Revert lifecycle and participate in
 | [`pkg.installed`](/docs/guides/modules/pkg-installed) | Ensure a system package is installed (apt, yum, dnf, brew) | `pkg/state/modules/pkg_installed.go` |
 | [`pkg.removed`](/docs/guides/modules/pkg-removed) | Ensure a system package is not installed | `pkg/state/modules/pkg_removed.go` |
 | [`service.running`](/docs/guides/modules/service-running) | Ensure a service is running (and optionally enabled) | `pkg/state/modules/service_running.go` |
-| [`service.enabled`](/docs/guides/modules/service-enabled) | Ensure a service is enabled at boot | `pkg/state/modules/service.go` |
+| [`service.enabled`](/docs/guides/modules/service-enabled) | Ensure a service is enabled at boot | `pkg/state/modules/service_enabled.go` |
 | [`service.dead`](/docs/guides/modules/service-dead) | Ensure a service is stopped (and optionally disabled) | `pkg/state/modules/service_dead.go` |
-| [`cmd.run`](/docs/guides/modules/cmd-run) | Execute a command on the target system | `pkg/state/modules/cmd.go` |
+| [`cmd.run`](/docs/guides/modules/cmd-run) | Execute a command on the target system | `pkg/state/modules/cmd_run.go` |
 | [`user.present`](/docs/guides/modules/user-present) | Ensure a user account exists with desired properties | `pkg/state/modules/user_present.go` |
-| [`user.absent`](/docs/guides/modules/user-absent) | Ensure a user account does not exist | `pkg/state/modules/user.go` |
-| [`group.present`](/docs/guides/modules/group-present) | Ensure a group exists with desired properties | `pkg/state/modules/group.go` |
-| [`group.absent`](/docs/guides/modules/group-absent) | Ensure a group does not exist | `pkg/state/modules/group.go` |
-| [`cron.present`](/docs/guides/modules/cron-present) | Ensure a cron job exists | `pkg/state/modules/cron.go` |
-| [`cron.absent`](/docs/guides/modules/cron-absent) | Ensure a cron job does not exist | `pkg/state/modules/cron.go` |
-| [`sysctl.present`](/docs/guides/modules/sysctl-present) | Ensure a kernel parameter is set (and persisted) | `pkg/state/modules/sysctl.go` |
-| [`mount.mounted`](/docs/guides/modules/mount-mounted) | Ensure a filesystem is mounted (and in fstab) | `pkg/state/modules/mount.go` |
-| [`git.cloned`](/docs/guides/modules/git-cloned) | Ensure a Git repository is cloned and at the desired revision | `pkg/state/modules/git.go` |
+| [`user.absent`](/docs/guides/modules/user-absent) | Ensure a user account does not exist | `pkg/state/modules/user_absent.go` |
+| [`group.present`](/docs/guides/modules/group-present) | Ensure a group exists with desired properties | `pkg/state/modules/group_present.go` |
+| [`group.absent`](/docs/guides/modules/group-absent) | Ensure a group does not exist | `pkg/state/modules/group_absent.go` |
+| [`cron.present`](/docs/guides/modules/cron-present) | Ensure a cron job exists | `pkg/state/modules/cron_present.go` |
+| [`cron.absent`](/docs/guides/modules/cron-absent) | Ensure a cron job does not exist | `pkg/state/modules/cron_absent.go` |
+| [`sysctl.present`](/docs/guides/modules/sysctl-present) | Ensure a kernel parameter is set (and persisted) | `pkg/state/modules/sysctl_present.go` |
+| [`mount.mounted`](/docs/guides/modules/mount-mounted) | Ensure a filesystem is mounted (and in fstab) | `pkg/state/modules/mount_mounted.go` |
+| [`git.cloned`](/docs/guides/modules/git-cloned) | Ensure a Git repository is cloned and at the desired revision | `pkg/state/modules/git_cloned.go` |
 | [`git.latest`](/docs/guides/modules/git-latest) | Ensure a Git clone exists and is updated to the latest revision | `pkg/state/modules/git_latest.go` |
-| [`pip.installed`](/docs/guides/modules/pip-installed) | Ensure a Python package is installed via pip | `pkg/state/modules/pip.go` |
-| [`timezone.system`](/docs/guides/modules/timezone-system) | Ensure the system timezone is set | `pkg/state/modules/timezone.go` |
-| [`locale.present`](/docs/guides/modules/locale-present) | Ensure a system locale is generated | `pkg/state/modules/locale.go` |
+| [`pip.installed`](/docs/guides/modules/pip-installed) | Ensure a Python package is installed via pip | `pkg/state/modules/pip_installed.go` |
+| [`timezone.system`](/docs/guides/modules/timezone-system) | Ensure the system timezone is set | `pkg/state/modules/timezone_system.go` |
+| [`locale.present`](/docs/guides/modules/locale-present) | Ensure a system locale is generated | `pkg/state/modules/locale_present.go` |
 | [`file.line`](/docs/guides/modules/file-line) | Manage a single line in a file (ensure/replace/insert/delete) | `pkg/state/modules/file_line.go` |
 | [`file.replace`](/docs/guides/modules/file-replace) | Regexp search/replace in a file (Salt MULTILINE default) | `pkg/state/modules/file_replace.go` |
 | [`file.comment` / `file.uncomment`](/docs/guides/modules/file-comment) | Comment or uncomment lines matching a regex | `pkg/state/modules/file_comment.go` |
@@ -49,13 +49,13 @@ State modules implement the full Check/Apply/Revert lifecycle and participate in
 | [`file.touch`](/docs/guides/modules/file-touch) | Create an empty file / update mtime on force-apply | `pkg/state/modules/file_touch.go` |
 | [`pkg.latest`](/docs/guides/modules/pkg-latest) | Ensure a package is installed at the newest available version | `pkg/state/modules/pkg_latest.go` |
 | [`pkg.purged`](/docs/guides/modules/pkg-purged) | Remove a package and its configuration | `pkg/state/modules/pkg_purged.go` |
-| [`pkgrepo.managed`](/docs/guides/modules/pkgrepo-managed) | Manage an apt/yum package repository definition | `pkg/state/modules/pkgrepo.go` |
-| [`archive.extracted`](/docs/guides/modules/archive-extracted) | Extract a tar/zip archive (local path or URL) | `pkg/state/modules/archive.go` |
-| [`host.present` / `host.absent`](/docs/guides/modules/host) | Manage `/etc/hosts` entries | `pkg/state/modules/host.go` |
-| [`ssh_auth.present` / `ssh_auth.absent`](/docs/guides/modules/ssh-auth) | Manage a key in a user's `authorized_keys` | `pkg/state/modules/ssh_auth.go` |
+| [`pkgrepo.managed`](/docs/guides/modules/pkgrepo-managed) | Manage an apt/yum package repository definition | `pkg/state/modules/pkgrepo_managed.go` |
+| [`archive.extracted`](/docs/guides/modules/archive-extracted) | Extract a tar/zip archive (local path or URL) | `pkg/state/modules/archive_extracted.go` |
+| [`host.present` / `host.absent`](/docs/guides/modules/host) | Manage `/etc/hosts` entries | `pkg/state/modules/host_present.go`, `pkg/state/modules/host_absent.go` |
+| [`ssh_auth.present` / `ssh_auth.absent`](/docs/guides/modules/ssh-auth) | Manage a key in a user's `authorized_keys` | `pkg/state/modules/ssh_auth_present.go`, `pkg/state/modules/ssh_auth_absent.go` |
 | [`module.run`](/docs/guides/modules/module-run) | Invoke another state module by name (Salt escape hatch) | `pkg/state/modules/module_run.go` |
 | [`test.ping`](/docs/guides/modules/test-ping) | Liveness check that always succeeds | `pkg/state/modules/test_ping.go` |
-| [`test.nop` / `test.fail_without_changes` / `test.succeed_with_changes` / `test.configurable_test_state`](/docs/guides/modules/test-helpers) | Salt test helpers | `pkg/state/modules/test_extra.go` |
+| [`test.nop` / `test.fail_without_changes` / `test.succeed_with_changes` / `test.configurable_test_state`](/docs/guides/modules/test-helpers) | Salt test helpers | `pkg/state/modules/test_nop.go`, `pkg/state/modules/test_fail_without_changes.go`, `pkg/state/modules/test_succeed_with_changes.go`, `pkg/state/modules/test_configurable_test_state.go` |
 
 Every state also accepts the generic Salt-parity attributes `onlyif`, `unless`,
 `order`, `retry`, `failhard`, `names`, and the full requisite set (`require`,

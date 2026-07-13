@@ -1,0 +1,93 @@
+module: test.succeed_with_changes
+# Permanent differential contract for the test.succeed_with_changes migration.
+# Its one parameter is `comment` (a plain string, no default — included in the
+# result details only when set). Pinned per-PARAM per §11: the string param gets
+# its own BD-6 arms (numeric coerced, composite rejected) plus the empty/absent
+# parity arms. These cases were approved by the legacy-vs-new equivalence
+# comparison while the legacy constructor still existed; after its deletion
+# RunContract replays them as the permanent regression guard.
+cases:
+  - label: comment-string-yaml
+    universe: yaml
+    id: ok
+    input:
+      comment: pretend change
+    want:
+      Comment: pretend change
+  - label: comment-string-msgpack
+    universe: msgpack
+    id: ok
+    input:
+      comment: pretend change
+    want:
+      Comment: pretend change
+  - label: comment-string-cli
+    universe: cli
+    id: ok
+    input:
+      comment: changed
+    want:
+      Comment: changed
+  - label: comment-absent-yaml
+    universe: yaml
+    id: ok
+    input: {}
+    want:
+      Comment: ""
+  - label: comment-empty-string-yaml
+    universe: yaml
+    id: ok
+    input:
+      comment: ""
+    want:
+      Comment: ""
+  # BD-6: a numeric comment coerces to its string form (was dropped to "").
+  - label: comment-numeric-coerced-yaml
+    universe: yaml
+    id: ok
+    bd: BD-6
+    input:
+      comment: 7
+    want:
+      Comment: "7"
+  - label: comment-numeric-coerced-msgpack
+    universe: msgpack
+    id: ok
+    bd: BD-6
+    input:
+      comment: 7
+    want:
+      Comment: "7"
+  - label: comment-numeric-cli
+    universe: cli
+    id: ok
+    input:
+      comment: 7
+    want:
+      Comment: "7"
+  # BD-6: a composite comment is rejected (was silently dropped to "").
+  - label: comment-composite-rejected-yaml
+    universe: yaml
+    id: ok
+    bd: BD-6
+    input:
+      comment:
+        key: val
+    want_error: wrong_type
+  - label: comment-composite-rejected-msgpack
+    universe: msgpack
+    id: ok
+    bd: BD-6
+    input:
+      comment:
+        key: val
+    want_error: wrong_type
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: ok
+    input:
+      comment: changed
+      onchanges:
+        - cmd.run:react
+    want:
+      Comment: changed

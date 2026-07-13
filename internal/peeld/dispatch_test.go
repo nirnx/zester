@@ -6,6 +6,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/bus"
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
 	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/proto"
 	"github.com/nirnx/zester/pkg/state"
@@ -57,7 +58,7 @@ func TestSysDocReadOnly(t *testing.T) {
 	}
 	// A state module shadowing sys.doc drops it from the read-only fast path,
 	// mirroring the sys.list_functions/grains precedence rule.
-	a.registry.Register("sys.doc", modules.NewTestPing)
+	a.registry.Register("sys.doc", modules.NewTestPingBuilder(modschema.DecodeOptions{}))
 	if a.readOnlyModule("sys.doc") {
 		t.Error("readOnlyModule(sys.doc) = true after a state module shadowed it")
 	}
@@ -167,7 +168,7 @@ func TestPeelDocSourcePrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := a.registry.RegisterSpec(spec, func(id string, _ map[string]any) (state.State, error) {
-		return modules.NewTestPing(id, nil)
+		return modules.NewTestPingBuilder(modschema.DecodeOptions{})(id, nil)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -212,4 +213,55 @@ func TestPeelDocSourcePrecedence(t *testing.T) {
 // dualProto is a trivial schema proto for the cmd.run dual-surface test.
 type dualProto struct {
 	Command string `zester:"command,primary" usage:"the command"`
+}
+
+// TestPeelDocSourceCoversAllStateModules is the K1 permanent pin (keystone spec
+// §7, gate clause 3): the peel's sys.doc unified index (peelDocSource.Names())
+// covers EVERY registered state module, so that coverage is a TEST rather than an
+// empirical observation. It registers the full built-in state-module set the way
+// the runtime does (modules.RegisterAll) and asserts Names() is a superset of the
+// state registry's own module set (Names merges state + execmod + dispatch
+// surfaces, so it must contain every state module verbatim).
+func TestPeelDocSourceCoversAllStateModules(t *testing.T) {
+	a := newTestAgent(t)
+
+	// Register the FULL built-in state-module set (the runtime does this via
+	// registerStateModules → modules.RegisterAll); the bare test agent registers
+	// only test.ping, which would make the coverage assertion vacuous.
+	full := state.NewRegistry()
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{
+		Package: exectest.NewFakePackageExec("apt"),
+		File:    exectest.NewFakeFileExec(),
+		Command: exectest.NewFakeCommandExec(),
+		Service: exectest.NewFakeServiceExec("systemd"),
+		User:    exectest.NewFakeUserExec(),
+		Group:   exectest.NewFakeGroupExec(),
+		Cron:    exectest.NewFakeCronExec(),
+		Sysctl:  exectest.NewFakeSysctlExec(),
+		Mount:   exectest.NewFakeMountExec(),
+	}}
+	modules.RegisterAll(full, mctx, modschema.DecodeOptions{})
+	a.registry = full // peelDocSource reads a.registry live
+
+	src := peelDocSource{a: a}
+	have := map[string]bool{}
+	for _, n := range src.Names() {
+		have[n] = true
+	}
+
+	stateNames := full.Modules()
+	if len(stateNames) < 47 {
+		t.Fatalf("expected the full built-in state-module set (>=47), got %d", len(stateNames))
+	}
+	for _, n := range stateNames {
+		if !have[n] {
+			t.Errorf("sys.doc unified index (peelDocSource.Names) is missing registered state module %q", n)
+		}
+	}
+	// The gate-close arrivals (and other N:1 / OpenParams surfaces) must be indexed.
+	for _, n := range []string{"cmd.run", "service.enabled", "module.run", "test.configurable_test_state"} {
+		if !have[n] {
+			t.Errorf("sys.doc index missing %q", n)
+		}
+	}
 }

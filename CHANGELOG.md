@@ -83,6 +83,480 @@ All notable changes to Zester are documented here. The format follows
   from the live module registries.
 
 ### Changed
+- **`cmd.run` and `service.enabled` migrated — the doc-coverage ratchet reaches
+  ZERO and the gate is CLOSED.** With these two, EVERY built-in state module now
+  decodes through a single compiled schema (`modschema.Spec`) plus registered
+  documentation metadata; there is no longer an `unmigratedAllowlist` (it was
+  deleted) and the coverage conformance test is in its final form —
+  `TestDocCoverage_EveryModuleHasSpec` asserts every registered module carries a
+  Spec with no exemptions, and a Spec-less registration fails the build. The dead
+  `providerBuild` legacy adapter (its last two callers were these modules) was
+  removed. Highlights:
+  - `cmd.run`: `command` is the primary (defaults to the state ID — the legacy
+    constructor read only `command`, never `name`, so no `name` alias was added);
+    `args` is a `paramtypes.StringList` and `env` a `paramtypes.StringMap`; `cwd`
+    and `creates` are plain strings. The require-file-provider-when-`creates` rule
+    stays in the builder tail (cross-field module logic, not schema). Check/Apply/
+    Revert — the `creates` guard gating both phases, the shell-vs-direct execution
+    split on `args`, the captured `command`/`stdout`/`stderr`/`exitcode` details,
+    and the non-revertible Revert — are unchanged. `cmd.go` → `cmd_run.go`.
+  - `service.enabled`: `name` is the sole parameter (primary, defaults to the
+    state ID); Check/Apply/Revert (including the already-enabled Apply no-op that
+    does not arm the revert memo, and the standalone-revert clean no-op) are
+    unchanged. `service.go` → `service_enabled.go`.
+  Behavior is unchanged for every realistic input across all three universes
+  (YAML, CLI, msgpack) except for the flagged behavioral differences below. The
+  reference pages (`cmd-run.mdx`, `service-enabled.mdx`) are now generated from
+  the registered schema + documentation metadata rather than hand-maintained —
+  all prior content is preserved (parameter tables, the `creates` idempotency
+  mechanism, the shell-vs-direct `sh -c` behavior, the returned-details table now
+  carried as a Note, `env` merged with the process environment, every example,
+  and `cmd.run`'s dual-surface note that it is also an execution module reachable
+  from templates via `salt['cmd.run']`) and reorganized under the shared anatomy,
+  drift-corrected against the live code (notably `service.enabled`'s Apply/Revert
+  no-op semantics, which the hand page omitted). The permanent differential
+  contracts at `pkg/state/modules/testdata/contract/{cmd.run,service.enabled}.yaml`
+  guard the decode behavior across all three universes. The doc-coverage ratchet
+  shrinks by 2 (2 → 0 unmigrated modules — the ratchet is now empty).
+
+  Alongside the gate-close, several documentation-surface fixes landed: the
+  `sys.doc` unified index is now pinned to cover every registered state module by
+  a permanent peel test (`TestPeelDocSourceCoversAllStateModules`) rather than an
+  empirical observation; zero-parameter generated pages (`test.ping`, `test.nop`,
+  `module.run`) now render the auto requisites boilerplate with an
+  "no parameters of its own" note instead of silently omitting the Parameters
+  section; the N:1 page-group renderer no longer silently falls back to
+  per-member rendering on a shared-parameter mismatch — distinct-parameter groups
+  (`host`, `ssh-auth`, `test-helpers`) now opt in explicitly via a group-table
+  flag, so a genuinely mismatched shared-proto group fails generation loudly;
+  `module.run`'s two Salt-divergence facts moved from `Doc.Divergences`
+  (BD-IDs only, per convention) into Notes; and `guides/modules/index.mdx`'s
+  Source column was corrected for every renamed/split module file.
+
+  <!-- BD-5 -->
+  **Behavioral difference (BD-5, approved 2026-07-13 under the maintainer standing
+  proceed-without-sign-off grant).** `cmd.run`'s `args` (a `paramtypes.StringList`)
+  and `env` (a `paramtypes.StringMap`) now surface the values the legacy parsers
+  silently dropped: a scalar `args` list element is rendered to its string form
+  (the legacy element-wise `.(string)` assertion dropped any non-string element),
+  a nested `args` element is rejected with a typed error (was dropped), a
+  bare-string `args` value decodes as a single-element list — which, downstream,
+  switches execution to the direct (non-shell) path — where the legacy
+  `config["args"].([]any)` assertion failed entirely and left the command on the
+  shell path, and a composite `env` value is rejected with a typed error where the
+  legacy `fmt.Sprintf("%v", v)` sprint'd it into Go syntax (a scalar `env` value
+  stays parity — both render it to a string). Pinned per-param by the
+  `args-scalar-sprint-*`, `args-nested-rejected-*`, `args-bare-string-*`, and
+  `env-composite-value-rejected-*` contract fixtures.
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** The migrated string
+  parameters are now compiled plain strings: a *numeric* `cmd.run` `command`,
+  `cwd`, or `creates`, or a numeric `service.enabled` `name`, is coerced to its
+  string form (was a silent drop — for the primary `command`/`name`, a silent fall
+  back to the state ID), and a *composite* value (a list/map) is rejected with a
+  typed error rather than silently zeroing. The CLI already delivered a numeric
+  token as a string (PARITY). Pinned per-param by the `numeric-command-coerced-*`
+  / `composite-command-rejected-*`, `numeric-cwd-coerced-*` /
+  `composite-cwd-rejected-*`, `numeric-creates-coerced-*` /
+  `composite-creates-rejected-*` (cmd.run) and `numeric-name-coerced-*` /
+  `composite-name-rejected-*` (service.enabled) contract fixtures.
+
+- **The final `test.*` helpers and `module.run` migrated to the self-documenting
+  module-schema framework — the doc-coverage ratchet reaches 2.** Every built-in
+  state module except `cmd.run` and `service.enabled` now decodes through a single
+  compiled schema (`modschema.Spec`) plus registered documentation metadata,
+  replacing the hand-written `config[...].(type)` extractions. The multi-module
+  `test_extra.go` was split into per-module files (`test_nop.go`,
+  `test_fail_without_changes.go`, `test_succeed_with_changes.go`,
+  `test_configurable_test_state.go`) alongside the existing `test_ping.go`,
+  matching the per-module file convention so each generated **Source** line
+  resolves. The `Registration.BuildPlain` shape gained the decode policy
+  (`func(modschema.DecodeOptions) state.Builder`) so the provider-less test
+  helpers thread reserved keys + the fleet unknown-key policy into their decode
+  exactly like the provider-carrying modules. Highlights:
+  - `test.ping` / `test.nop` declare **no parameters**; the decode still runs so
+    reserved requisite/attribute keys are honored and unknown keys follow the
+    fleet policy.
+  - `test.fail_without_changes` / `test.succeed_with_changes` carry a single
+    `comment` string (no default; the fail helper substitutes its built-in
+    `failure without changes` message at apply time).
+  - `test.configurable_test_state` carries eager `default=true` `result` and
+    `changes` bools plus a `comment` string; Check/Apply are unchanged.
+  - `module.run` is an **OpenParams passthrough**: it declares no fixed
+    parameters (its schema has zero fields, marked `OpenParams` so unknown-key
+    validation is skipped and it is documented as accepting arbitrary parameters
+    forwarded to the target module). Its dynamic `name:` / dotted-`<module.func>:`
+    target resolution and the reserved-key filter (`state.ReservedKeySet()` plus
+    its own local `name`) are unchanged.
+  Behavior is unchanged for every realistic input across all three universes
+  (YAML, CLI, msgpack) except for the flagged behavioral differences below. The
+  reference pages (`test-ping.mdx`, `test-helpers.mdx` — the N:1 group covering
+  the four helpers, `module-run.mdx`) are now generated from the registered
+  schema + documentation metadata rather than hand-maintained — all prior content
+  is preserved (parameter tables, Check/Apply/Revert behavior, every example, the
+  `onfail`/`onchanges` chain snippets now carried as Notes, the unimplemented
+  Salt `test.show_notification`/`test.mod_watch` note, and module.run's two-form
+  usage + its Divergences-from-Salt facts: state-registry targets only, and
+  idempotent-as-its-target unlike Salt's always-changes `module.run`) and
+  reorganized under the shared anatomy, drift-corrected against the live code. The
+  permanent differential contracts at `pkg/state/modules/testdata/contract/{test.
+  fail_without_changes,test.succeed_with_changes,test.configurable_test_state}.yaml`
+  guard the decode behavior across all three universes (`test.ping`/`test.nop`
+  declare no parameters, so they have no contract fixture). The doc-coverage
+  ratchet shrinks by 6 (8 → 2 unmigrated modules — only `cmd.run` and
+  `service.enabled` remain, migrated by their own closeout).
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** String-form values that
+  the legacy `.(bool)` assertion dropped are now coerced, origin-independently (a
+  CLI `key=value` and a YAML-quoted value alike): `test.configurable_test_state`'s
+  `result`/`changes` given as a truthy/falsy string (`"true"`, `"yes"`, `"on"`,
+  `"false"`, `"no"`, `"off"`) is honored where the legacy assertion silently kept
+  the default `true`. Pinned by the `{result,changes}-falsy-string-{cli,yaml}`
+  contract fixtures.
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** Each migrated module's
+  string parameters are now compiled plain strings: a *numeric* `comment` on
+  `test.fail_without_changes`, `test.succeed_with_changes`, or
+  `test.configurable_test_state` is coerced to its string form (was a silent drop
+  to `""`), and a *composite* `comment` (a list/map) is rejected with a typed
+  error. `test.configurable_test_state`'s `result`/`changes` bools likewise reject
+  a composite or a float (a float is not a boolean) with a typed error rather than
+  silently keeping the default. The CLI already delivered a numeric comment as a
+  string (PARITY). Pinned by the `comment-numeric-coerced-*` /
+  `comment-composite-rejected-*` and `{result,changes}-float-rejected-yaml` /
+  `-composite-rejected-yaml` contract fixtures.
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** The `result` and
+  `changes` bools of `test.configurable_test_state` now accept the integers `1`
+  and `0` (`1` → true, `0` → false) and reject any other integer with a typed
+  error, per the approved §2.3 coercion table and the §11 SCOPE ruling that BD-7
+  covers ALL boolean-typed parameters (each pinned per-param). The legacy `.(bool)`
+  assertion dropped an integer entirely (a silent fall to the default `true`).
+  Pinned by the `{result,changes}-int-{one,zero}-{yaml,msgpack}` and
+  `-invalid-int-{yaml,msgpack}` contract fixtures.
+
+- **`pkgrepo.managed` and `user.absent` migrated to the self-documenting
+  module-schema framework.** Each constructor now decodes through a single
+  compiled schema (`modschema.Spec`) plus registered documentation metadata,
+  replacing the hand-written `config[...].(type)` extractions. The single-module
+  `pkgrepo.go` was renamed to `pkgrepo_managed.go` and `UserAbsent` was split out
+  of `user.go` into `user_absent.go` (leaving `user.go` as the shared slice
+  helpers `containsString`/`stringSliceEqual` used across the user/group/host
+  modules), matching the per-module file convention. Highlights:
+  - `pkgrepo.managed` is a **parameter-decode-only** migration: Check/Apply/Revert
+    and the DEFERRED in-place signing-key-rotation detection (Check is
+    presence-only — a key rotated at the same URL is not re-detected; delete the
+    keyring file to force a re-import) are unchanged. `name` is the primary
+    (default state ID); `humanname` is a **lazy DERIVED default** — the decoder
+    never materializes it and the builder tail assigns it from `name`, reproducing
+    the legacy `if HumanName == "" { HumanName = RepoName }`; `baseurl`/`ppa`/
+    `file`/`key_url` are plain strings; `enabled`/`gpgcheck`/`refresh` carry an
+    eager `default=true`. Nothing is `sensitive` (a signing-KEY URL points at a
+    PUBLIC key — a per-module sensitivity pass).
+  - `user.absent` is an all-primitives migration: `name` primary (default state
+    ID); `purge`/`force` plain bools. Nothing is `sensitive`. `force` remains
+    accepted for Salt compatibility but is not yet wired into the execution layer
+    (documented, no effect).
+  Behavior is unchanged for every realistic input across all three universes
+  (YAML, CLI, msgpack) except for the flagged behavioral differences below. The
+  reference pages (`pkgrepo-managed.mdx`, `user-absent.mdx`) are now generated
+  from the registered schema + documentation metadata rather than hand-maintained
+  — all prior content is preserved (parameter tables, Check/Apply/Revert behavior,
+  every example, the rendered `.list`/`.repo` file-format blocks, and pkgrepo's
+  Divergences-from-Salt facts: `baseurl` holding the full `deb` line, the
+  deprecated `apt-key add`, the unsupported `disabled`/`mirrorlist`/
+  `gpgautoimport`/`comps`/`architectures` parameters, and the presence-only
+  keyring-convergence caveat) and reorganized under the shared anatomy,
+  drift-corrected against the live code. The permanent differential contracts at
+  `pkg/state/modules/testdata/contract/{pkgrepo.managed,user.absent}.yaml` guard
+  the decode behavior across all three universes. The doc-coverage ratchet shrinks
+  by 2 (10 → 8 unmigrated modules).
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** String-form values that
+  the legacy `.(bool)` assertion dropped are now coerced, origin-independently (a
+  CLI `key=value` and a YAML-quoted value alike): a `pkgrepo.managed`
+  `enabled`/`gpgcheck`/`refresh` or a `user.absent` `purge`/`force` given as a
+  truthy/falsy string (`"false"`, `"no"`, `"yes"`, `"on"`) is honored (the three
+  pkgrepo bools were silently dropped to their default `true`, the two user.absent
+  bools to `false`). Pinned by the `{enabled,gpgcheck,refresh}-falsy-string-{cli,
+  yaml}` and `{purge,force}-truthy-string-{cli,yaml}` contract fixtures.
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** As with every prior
+  migration, each module's primary `name` parameter is now a compiled plain
+  string: a *non-string* `name` (for example `name: 123`) is coerced to its string
+  form (was a silent fallback to the state ID), and a *composite* `name` (a
+  list/map) is rejected with a typed error. The same acceptance/rejection class
+  covers `pkgrepo.managed`'s remaining string params — a numeric
+  `humanname`/`baseurl`/`ppa`/`file`/`key_url` is coerced to its string form and a
+  composite value for any of them is rejected — instead of the legacy silent drop.
+  The CLI already delivered a numeric name as a string (PARITY). Pinned by the
+  `numeric-name-coerced-*` / `composite-name-rejected-*` (both modules) and the
+  `{humanname,baseurl,ppa,file,key_url}-numeric-coerced-*` / `-composite-rejected-*`
+  contract fixtures.
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** The
+  `enabled`/`gpgcheck`/`refresh` bools of `pkgrepo.managed` and the `purge`/`force`
+  bools of `user.absent` now accept the integers `1` and `0` (`1` → true, `0` →
+  false) and reject any other integer with a typed error, per the approved §2.3
+  coercion table and the §11 SCOPE ruling that BD-7 covers ALL boolean-typed
+  parameters (each pinned per-param). The legacy `.(bool)` assertion dropped an
+  integer entirely (a silent fall to the pkgrepo default `true` / the user.absent
+  `false`). Pinned by the `{enabled,gpgcheck,refresh,purge,force}-int-{one,zero}-
+  {yaml,msgpack}` and `-invalid-int-{yaml,msgpack}` contract fixtures.
+
+- **`git.cloned`, `git.latest`, `pip.installed`, `archive.extracted`,
+  `locale.present`, and `timezone.system` migrated to the self-documenting
+  module-schema framework** (the tooling wave). Each constructor now decodes
+  through a single compiled schema (`modschema.Spec`) plus registered
+  documentation metadata, replacing the hand-written `config[...].(type)`
+  extractions. The legacy `git.go` was split into `git_cloned.go` (the
+  `GitCloned` module) plus `git.go` kept as the shared rev-comparison helpers
+  (`isHexRevPrefix`/`isFullHexSHA`/`resolveRevCommit`/`revAtHead`) used by both
+  `git.cloned` and `git.latest`; the single-module `mount.go`-style renames
+  (`locale.go` → `locale_present.go`, `timezone.go` → `timezone_system.go`,
+  `pip.go` → `pip_installed.go`, `archive.go` → `archive_extracted.go`) match
+  the per-module file convention. Every field in all six modules is a
+  primitive (string/int/bool) — no semantic types are needed anywhere in this
+  wave. Highlights:
+  - `git.cloned`'s `name` (defaulting to the state ID) is the clone **PATH**;
+    `git.latest`'s `name` (defaulting to the state ID) is instead the remote
+    **URL**, with the clone path in its own `target` parameter. This DIFFERENT
+    primary meaning between the two modules — the most common authoring
+    mistake between them — is called out unmissably in both generated pages
+    (a dedicated warning Note on each, plus the Description prose). `url`
+    (`git.cloned`) and `target` (`git.latest`) are `required`; `depth`
+    (`git.cloned`) is a plain int; `force` (both) is a plain bool.
+    `git.latest`'s `name` is `primary`, not `required` — it legitimately
+    falls back to the state ID — but the builder tail restores the legacy
+    `git.latest: <id>: url (name) is required` error for the case where
+    BOTH are empty (parity restoration, not a BD; pinned by the
+    `TestGitLatestMissingURL` unit test, following the same builder-tail-
+    logic-is-unit-tested-not-contract-tested convention as `ssh_auth`'s
+    user-or-config rule and `sysctl.present`'s persist-needs-file-provider
+    rule — the equivalent `git.cloned` gap doesn't exist because its
+    primary is `name`/path and `url` is independently `required`). Their
+    Doc's Check/Revert prose is **drift-corrected**: a pinned tag/symbolic
+    rev converges via a local `git rev-parse --verify <rev>^{commit}`
+    commit-id comparison, not merely a sha-prefix match as the old
+    `git.latest` hand page's "Divergences from Salt" section claimed.
+  - `pip.installed`'s `bin` carries an eager `default=pip3`, reproducing the
+    legacy construction-time default.
+  - `archive.extracted`'s `source` is `required`; `archive_format` carries an
+    eager `default=auto`; `source_hash` is `TrimSpace`'d in the builder tail
+    (a decoder never trims — same convention as `ssh_auth.present`'s `name`).
+    Its Doc is **drift-corrected**: the hand page claimed Salt's `source_hash`
+    verification "is not supported", but the module already records a
+    `source_hash` marker after extraction and re-extracts on a mismatch — it
+    is an opaque string comparison, never a byte-verified checksum, which the
+    new Doc states plainly instead of omitting the feature. The hand page's
+    "Divergences from Salt" facts — the unsupported `enforce_toplevel`/
+    `options`/`user`/`group`/`clean`/`trim_output` parameter list, and the
+    `tar`/`unzip` (plus `curl` or `wget` for remote sources) binary
+    requirement — are carried forward verbatim (verified still accurate)
+    into the new Doc's own "Divergences from Salt" Note, alongside the
+    corrected `source_hash` fact above.
+  - `locale.present` has a single parameter (`name`, the locale string) — the
+    single-primary-param exemplar. Its Doc is **drift-corrected**: the hand
+    page claimed Apply creates `/etc/locale.gen` when missing; the module in
+    fact never creates that file on a system that lacks it.
+  - `timezone.system`'s `utc` is a plain bool.
+  Behavior is unchanged for every realistic input across all three universes
+  (YAML, CLI, msgpack) except for the flagged behavioral differences below.
+  The reference pages (`git-cloned.mdx`, `git-latest.mdx`, `pip-installed.mdx`,
+  `archive-extracted.mdx`, `locale-present.mdx`, `timezone-system.mdx`) are now
+  generated from the registered schema + documentation metadata rather than
+  hand-maintained — all prior content is preserved (parameter tables,
+  Check/Apply/Revert behavior, every example, the per-manager/per-format
+  tables, the Divergences-from-Salt notes) and reorganized under the shared
+  anatomy, drift-corrected against the live code where the hand pages had
+  fallen behind. The permanent differential contracts at
+  `pkg/state/modules/testdata/contract/{git.cloned,git.latest,pip.installed,
+  archive.extracted,locale.present,timezone.system}.yaml` guard the decode
+  behavior across all three universes. The doc-coverage ratchet shrinks by 6
+  (16 → 10 unmigrated modules).
+
+  <!-- BD-1 -->
+  **Behavioral difference (BD-1, approved 2026-07-13 under the maintainer
+  standing proceed-without-sign-off grant).** A `git.cloned` `depth` given as
+  an INTEGER and delivered over msgpack is now applied. The legacy
+  `config["depth"].(int)` assertion never matched a msgpack sized kind (msgpack
+  v5 encodes a small int as a sized `int8`/`uint`), so a reactor-dispatched
+  `depth: 1` silently fell to `0` (full clone) — the same reproduced sized-int
+  class as `file.managed`'s BD-1. The uniform decoder honors the sized int.
+  Pinned by the `depth-msgpack-sized-int` contract fixture. **Presented for
+  sign-off in this PR** (keystone spec §11).
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** String-form values
+  that the legacy `.(bool)`/`.(int)` assertions dropped are now coerced,
+  origin-independently (a CLI `key=value` and a YAML-quoted value alike): a
+  `git.cloned`/`git.latest` `force`, an `archive.extracted` `makedirs`, and a
+  `timezone.system` `utc` given as a truthy/falsy string (`"true"`, `"yes"`,
+  `"false"`, `"no"`) is now honored (was silently dropped to its default
+  `false`); a `git.cloned` `depth` given as a numeric string (`"1"` — the
+  CLI's ONLY delivery form for an int) is now parsed base-10 (was silently
+  dropped to `0` by the legacy `config["depth"].(int)` assertion, which never
+  matches a string). Pinned by the `{force,makedirs,utc}-{truthy,falsy}-
+  string-{cli,yaml}` and `depth-numeric-string-{cli,yaml}` contract fixtures.
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** As with every prior
+  migration, each module's primary parameter is now a compiled plain string: a
+  *non-string* value (for example `name: 123`) is coerced to its string form
+  (was a silent fallback to the state ID), and a *composite* value (a
+  list/map) is rejected with a typed error. Further wrong-typed→typed-handling
+  changes land under BD-6's approved acceptance/rejection class in this wave:
+  - **`git.cloned` `url` and `git.latest` `target` — ERROR→ACCEPT flips on
+    REQUIRED parameters (read deliberately).** A non-string value for either
+    (for example `url: 123`) is now coerced to its string form and
+    **accepted**, where the legacy `.(string)` assertion missed the non-string
+    and raised the module's own "is required" error. `archive.extracted`'s
+    `source` gets the identical flip.
+  - **String coercion / composite rejection on the remaining string params.**
+    A numeric `branch`/`rev` (both git modules), `version`/`requirements`/`bin`
+    (`pip.installed`), `archive_format`/`if_missing`/`source_hash`
+    (`archive.extracted`) is coerced to its string form, and a composite value
+    for any of them is rejected with a typed error, instead of the legacy
+    silent drop.
+  - **`git.cloned` FLOAT `depth`.** A finite-integral float (`depth: 1.0`) is
+    coerced to the integer, where the legacy `.(int)` assertion missed a
+    float64 and left `Depth=0`.
+  The CLI already delivered a numeric primary as a string (PARITY). Pinned by
+  the `numeric-name-coerced-*`/`composite-name-rejected-*` (all six modules),
+  the `{url,target,source}-numeric-accepted-*`/`-composite-rejected-*`, the
+  `{branch,rev,version,requirements,bin,archive_format,if_missing,source_hash}
+  -numeric-coerced-*`/`-composite-rejected-*`, and the `depth-float-*` contract
+  fixtures.
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** The boolean
+  `force` (`git.cloned`/`git.latest`), `makedirs` (`archive.extracted`), and
+  `utc` (`timezone.system`) parameters now accept the integers `1` and `0`
+  (`1` → true, `0` → false) and reject any other integer with a typed error,
+  per the approved §2.3 coercion table and the §11 SCOPE ruling that BD-7
+  covers ALL boolean-typed parameters (each pinned per-param). The legacy
+  `.(bool)` assertion dropped an integer entirely (a silent fall to the
+  default `false`). Pinned by the
+  `{force,makedirs,utc}-int-{one,zero,invalid}-{yaml,msgpack}` contract
+  fixtures.
+
+- **`mount.mounted`, `sysctl.present`, `host.present`/`host.absent`, and
+  `ssh_auth.present`/`ssh_auth.absent` migrated to the self-documenting
+  module-schema framework** (the system wave). Each constructor now decodes
+  through a single compiled schema (`modschema.Spec`) plus registered
+  documentation metadata, replacing the hand-written `config[...].(type)`
+  extractions. The multi-module `host.go`/`ssh_auth.go` were split into per-module
+  files (`host_present.go`, `host_absent.go`, `ssh_auth_present.go`,
+  `ssh_auth_absent.go`), with the shared line-managed-file helpers moved to
+  `linemanaged.go`; the single-module `mount.go`/`sysctl.go` were renamed to
+  `mount_mounted.go`/`sysctl_present.go` to match the per-module file convention.
+  Highlights of the wave:
+  - `mount.mounted` is a **parameter-decode-only** migration: Check/Apply/Revert
+    and the deliberate blindness to the LIVE mount's device/fstype/options (the
+    audit's open live-facet-normalization item) are unchanged. `device` is
+    `required`; `fstype`/`opts` carry eager `default=ext4`/`default=defaults`;
+    `dump`/`pass` are plain ints; `persist` is an eager `default=true` bool.
+  - `sysctl.present`'s `value` is `required` and `persist` an eager `default=true`
+    bool. The require-file-provider-when-`persist` rule stays in the builder tail —
+    cross-field module logic, not schema.
+  - `host.present`/`host.absent` are the **per-field alias exemplar**: the
+    hosts-file path binds the `config` key with a `path` alias and an eager
+    `default=/etc/hosts`, reproducing the legacy `config` > `path` > `/etc/hosts`
+    precedence (the standalone `hostsPath` helper is gone). `host.present`'s `ip`
+    is `required`.
+  - `ssh_auth.present`/`ssh_auth.absent`: `enc` carries an eager `default=ssh-rsa`.
+    The `name` primary is `TrimSpace`'d and the require-`user`-OR-`config`
+    cross-field rule are enforced in the builder tail (a decoder never trims;
+    cross-field validation is module logic, not schema). The key material is a
+    PUBLIC key, so — per a per-module sensitivity pass — no parameter is
+    `sensitive`.
+  Behavior is unchanged for every realistic input across all three universes
+  (YAML, CLI, msgpack) except for the flagged behavioral differences below. The
+  reference pages (`mount-mounted.mdx`, `sysctl-present.mdx`, `host.mdx`,
+  `ssh-auth.mdx`) are now generated from the registered schema + documentation
+  metadata rather than hand-maintained — all prior content is preserved and
+  reorganized under the shared anatomy, drift-corrected against the live code.
+  `host` and `ssh-auth` are the first N:1 page groups whose members carry
+  **distinct** parameter surfaces (e.g. `host.present` has `ip`, `host.absent`
+  does not), so `zester-docgen` now renders each member's own `**Source**` line
+  and Parameters table under a per-module banner (extending the shared-proto
+  page-group renderer). The permanent differential contracts at
+  `pkg/state/modules/testdata/contract/{mount.mounted,sysctl.present,host.present,host.absent,ssh_auth.present,ssh_auth.absent}.yaml`
+  guard the decode behavior across all three universes. The doc-coverage ratchet
+  shrinks by 6 (22 → 16 unmigrated modules).
+
+  <!-- BD-1 -->
+  **Behavioral difference (BD-1, approved 2026-07-13 under the maintainer standing proceed-without-sign-off grant).**
+  A `mount.mounted` `dump`/`pass` given as an INTEGER and delivered over msgpack is
+  now applied. The legacy `config["dump"].(int)` / `config["pass"].(int)`
+  assertions never matched a msgpack sized kind (msgpack v5 encodes a small int as
+  a sized `int8`/`uint`), so a reactor-dispatched `pass: 2` silently fell to `0` —
+  the same reproduced sized-int class as `file.managed`'s BD-1. The uniform decoder
+  honors the sized int. Pinned by the `dump-int-msgpack` and `pass-int-msgpack`
+  contract fixtures. **Presented for sign-off in this PR** (keystone spec §11).
+
+  <!-- BD-2 -->
+  **Behavioral difference (BD-2, APPROVED 2026-07-12).** String-form values that
+  the legacy `.(int)`/`.(bool)` assertions dropped are now coerced, origin-
+  independently (a CLI `key=value` and a YAML-quoted value alike): a `mount.mounted`
+  `dump`/`pass` given as a numeric string (`"1"`/`"2"`) is parsed base-10, and a
+  `mount.mounted`/`sysctl.present` `persist` given as a truthy/falsy string
+  (`"false"`, `"no"`) is honored (was silently dropped to the default `true`).
+  Pinned by the `dump-string-cli`, `dump-numeric-string-yaml`, `pass-string-cli`,
+  `pass-numeric-string-yaml`, and `persist-falsy-string-{cli,yaml}` (mount + sysctl)
+  contract fixtures.
+
+  <!-- BD-6 -->
+  **Behavioral difference (BD-6, APPROVED 2026-07-12).** As with every prior
+  migration, each module's primary `name` parameter is now a compiled plain
+  string: a *non-string* `name` (for example `name: 123`) is coerced to its string
+  form (was a silent fallback to the state ID), and a *composite* `name` (a
+  list/map) is rejected with a typed error. Further wrong-typed→typed-handling
+  changes land under BD-6's approved acceptance/rejection class in this wave:
+  - **`mount.mounted` `device`, `sysctl.present` `value`, and `host.present` `ip` —
+    ERROR→ACCEPT flips on REQUIRED parameters (read deliberately).** A non-string
+    value for any of these required params (for example `ip: 123`) is now coerced
+    to its string form and **accepted**, where the legacy `.(string)` assertion
+    missed the non-string and raised the module's "X is required" error.
+  - **String coercion / composite rejection on the remaining string params.** A
+    numeric `fstype`/`opts` (mount), `config`/`path` (host), and
+    `user`/`enc`/`comment`/`config` (ssh_auth) is coerced to its string form, and a
+    composite value for any of them is rejected with a typed error, instead of the
+    legacy silent drop.
+  - **`mount.mounted` FLOAT `dump`/`pass` and composite `dump`/`pass`.** A
+    finite-integral float (`dump: 1.0`) is coerced to the integer, and a composite
+    `dump`/`pass` is rejected with a typed error, where the legacy `.(int)`
+    assertion left `0`. (BD-2 remains strictly string-coercion; a non-string
+    wrong-typed value such as a float is BD-6's class.)
+  The CLI already delivered a numeric name as a string (PARITY). Pinned by the
+  `numeric-name-coerced-*` / `composite-name-rejected-*` (all six modules), the
+  `{device,value,ip}-numeric-accepted-*` / `{device,value,ip}-composite-rejected-*`,
+  the `{fstype,opts,config,user,enc,comment}-numeric-coerced-*` /
+  `-composite-rejected-*`, and the `{dump,pass}-float-*` / `-composite-rejected-*`
+  contract fixtures. Because coercion/rejection is origin-independent, `host`'s
+  hosts-file path is pinned through BOTH its canonical `config` key and its `path`
+  ALIAS source — the `path-alias-numeric-coerced-*` (yaml + msgpack) and
+  `path-alias-composite-rejected-*` fixtures (host.present and host.absent) prove a
+  numeric/composite value delivered via the alias coerces/rejects exactly as
+  through `config`.
+
+  <!-- BD-7 -->
+  **Behavioral difference (BD-7, APPROVED 2026-07-12).** The `persist` boolean of
+  BOTH `mount.mounted` and `sysctl.present` now accepts the integers `1` and `0`
+  (`1` → true, `0` → false) and rejects any other integer with a typed error, per
+  the approved §2.3 coercion table and the §11 SCOPE ruling that BD-7 covers ALL
+  boolean-typed parameters (each pinned per-param). The legacy `.(bool)` assertion
+  dropped an integer entirely (a silent fall to the default `true`). Pinned by the
+  `persist-int-{one,zero,invalid}-{yaml,msgpack}` contract fixtures (mount +
+  sysctl).
+
 - **`cron.present`, `cron.absent`, `group.present`, and `group.absent` migrated
   to the self-documenting module-schema framework** (the cron/group wave). Each
   constructor now decodes through a single compiled schema (`modschema.Spec`)

@@ -132,7 +132,7 @@ func run(root string, claimed map[string]bool) error {
 			}
 		}
 		path := filepath.Join(modulesDir, slug+".mdx")
-		if err := writeModulePageGroup(path, mis, claim); err != nil {
+		if err := writeModulePageGroup(path, mis, claim, isDistinctParamSlug(slug)); err != nil {
 			return err
 		}
 	}

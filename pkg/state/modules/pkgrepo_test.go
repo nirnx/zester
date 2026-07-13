@@ -8,6 +8,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -31,7 +32,7 @@ func testPkgrepoMctx(fakeFile *exectest.FakeFileExec, fakeCmd *exectest.FakeComm
 
 func TestPkgrepoManagedName(t *testing.T) {
 	mctx := testPkgrepoMctx(exectest.NewFakeFileExec(), exectest.NewFakeCommandExec(), "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{"baseurl": "deb https://example.com stable main"})
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +44,7 @@ func TestPkgrepoManagedName(t *testing.T) {
 
 func TestPkgrepoManagedPrimaryParamDefault(t *testing.T) {
 	mctx := testPkgrepoMctx(exectest.NewFakeFileExec(), exectest.NewFakeCommandExec(), "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("myrepo", map[string]any{"baseurl": "deb https://example.com stable main"})
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +60,7 @@ func TestPkgrepoManagedPrimaryParamDefault(t *testing.T) {
 
 func TestPkgrepoManagedRequisites(t *testing.T) {
 	mctx := testPkgrepoMctx(exectest.NewFakeFileExec(), exectest.NewFakeCommandExec(), "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{
 		"baseurl":   "deb https://example.com stable main",
 		"require":   []any{"pkg.installed:curl"},
@@ -88,7 +89,7 @@ func TestPkgrepoManagedRequisites(t *testing.T) {
 func TestPkgrepoManagedCheckMissingFile(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	mctx := testPkgrepoMctx(fakeFile, exectest.NewFakeCommandExec(), "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{"baseurl": "deb https://example.com stable main"})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +107,7 @@ func TestPkgrepoManagedApplyAptWritesFile(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{
 		"humanname": "Docker CE",
 		"baseurl":   "deb https://download.docker.com/linux/ubuntu focal stable",
@@ -144,7 +145,7 @@ func TestPkgrepoManagedApplyAptIdempotent(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{"baseurl": "deb https://example.com stable main"})
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +191,7 @@ func TestPkgrepoManagedApplyAptWithKey(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{
 		"baseurl": "deb https://example.com stable main",
 		"key_url": "https://example.com/gpg",
@@ -240,7 +241,7 @@ func TestPkgrepoManagedCheckKeyringMissing(t *testing.T) {
 	fakeFile.PreCreate("/etc/apt/sources.list.d/docker.list",
 		[]byte("# Managed by Zester: docker\ndeb https://example.com stable main\n"), 0644)
 	mctx := testPkgrepoMctx(fakeFile, exectest.NewFakeCommandExec(), "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{
 		"baseurl": "deb https://example.com stable main",
 		"key_url": "https://example.com/gpg",
@@ -266,7 +267,7 @@ func TestPkgrepoManagedCheckKeyringPresent(t *testing.T) {
 		[]byte("# Managed by Zester: docker\ndeb https://example.com stable main\n"), 0644)
 	fakeFile.PreCreate("/etc/apt/keyrings/zester-docker.gpg", []byte("KEYDATA"), 0644)
 	mctx := testPkgrepoMctx(fakeFile, exectest.NewFakeCommandExec(), "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{
 		"baseurl": "deb https://example.com stable main",
 		"key_url": "https://example.com/gpg",
@@ -291,7 +292,7 @@ func TestPkgrepoManagedCheckKeyringReadErrorFailsPhase(t *testing.T) {
 		[]byte("# Managed by Zester: docker\ndeb https://example.com stable main\n"), 0644)
 	fakeFile.SetReadError("/etc/apt/keyrings/zester-docker.gpg", errors.New("permission denied"))
 	mctx := testPkgrepoMctx(fakeFile, exectest.NewFakeCommandExec(), "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{
 		"baseurl": "deb https://example.com stable main",
 		"key_url": "https://example.com/gpg",
@@ -308,7 +309,7 @@ func TestPkgrepoManagedCheckListReadErrorFailsPhase(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.SetReadError("/etc/apt/sources.list.d/docker.list", errors.New("permission denied"))
 	mctx := testPkgrepoMctx(fakeFile, exectest.NewFakeCommandExec(), "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{"baseurl": "deb https://example.com stable main"})
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +334,7 @@ func TestPkgrepoManagedApplyWritesKeyringAndConverges(t *testing.T) {
 	}
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd.FakeCommandExec, "debian", "apt")
 	mctx.Command = fakeCmd
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{
 		"baseurl": "deb https://example.com stable main",
 		"key_url": "https://example.com/gpg",
@@ -379,7 +380,7 @@ func TestPkgrepoManagedRevertRemovesKeyring(t *testing.T) {
 	}
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd.FakeCommandExec, "debian", "apt")
 	mctx.Command = fakeCmd
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{
 		"baseurl": "deb https://example.com stable main",
 		"key_url": "https://example.com/gpg",
@@ -407,7 +408,7 @@ func TestPkgrepoManagedRedHatKeyURLNeedsNoKeyring(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "redhat", "dnf")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("epel", map[string]any{
 		"baseurl": "https://download.example.com/epel/8/x86_64",
 		"key_url": "https://download.example.com/RPM-GPG-KEY-EPEL-8",
@@ -431,7 +432,7 @@ func TestPkgrepoManagedApplyYumRepoContent(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "redhat", "dnf")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("epel", map[string]any{
 		"humanname": "Extra Packages",
 		"baseurl":   "https://download.example.com/epel/8/x86_64",
@@ -467,7 +468,7 @@ func TestPkgrepoManagedApplyPPA(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx-ppa", map[string]any{"ppa": "ppa:nginx/stable"})
 	if err != nil {
 		t.Fatal(err)
@@ -495,7 +496,7 @@ func TestPkgrepoManagedApplyError(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetError("apt-get", errors.New("update failed"))
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{"baseurl": "deb https://example.com stable main"})
 	if err != nil {
 		t.Fatal(err)
@@ -509,7 +510,7 @@ func TestPkgrepoManagedRevertRemovesFile(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgrepoMctx(fakeFile, fakeCmd, "debian", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{"baseurl": "deb https://example.com stable main"})
 	if err != nil {
 		t.Fatal(err)
@@ -537,7 +538,7 @@ func TestPkgrepoManagedProviderNameFallback(t *testing.T) {
 	// from the provider name.
 	fakeFile := exectest.NewFakeFileExec()
 	mctx := testPkgrepoMctx(fakeFile, exectest.NewFakeCommandExec(), "", "apt")
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{"baseurl": "deb https://example.com stable main"})
 	if err != nil {
 		t.Fatal(err)
@@ -550,7 +551,7 @@ func TestPkgrepoManagedProviderNameFallback(t *testing.T) {
 
 func TestPkgrepoManagedNoFileProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: exectest.NewFakeCommandExec()}}
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	if _, err := builder("docker", map[string]any{}); err == nil {
 		t.Error("expected error when no file provider is set")
 	}
@@ -558,7 +559,7 @@ func TestPkgrepoManagedNoFileProvider(t *testing.T) {
 
 func TestPkgrepoManagedNoCommandProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: exectest.NewFakeFileExec()}}
-	builder := NewPkgrepoManagedBuilder(mctx)
+	builder := NewPkgrepoManagedBuilder(mctx, modschema.DecodeOptions{})
 	if _, err := builder("docker", map[string]any{}); err == nil {
 		t.Error("expected error when no command provider is set")
 	}

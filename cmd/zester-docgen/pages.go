@@ -70,45 +70,56 @@ func renderModulePage(mi modschema.ModuleInfo) (string, error) {
 }
 
 // renderModulePageGroup renders ONE MDX page shared by the N modules that map to
-// a single page slug (the §8 N:1 PageGroups — file.comment/file.uncomment is the
-// first with every member migrated). For a single-member group it is
-// byte-identical to renderModulePage. For a multi-member group it renders the
-// SHARED header (a joined title, one managed marker per module, the shared Source
-// line, and — because the members share one proto — a single Parameters and
-// Parameter Types section) followed by a per-module section (Description →
-// Effects → Examples → Notes → Divergences → See Also) under a "## `<module>`"
-// banner. The members are expected to share an identical parameter surface (they
-// share the proto); that is asserted before rendering.
-func renderModulePageGroup(mis []modschema.ModuleInfo) (string, error) {
+// a single page slug (the §8 N:1 PageGroups). For a single-member group it is
+// byte-identical to renderModulePage. For a multi-member group the caller states,
+// via distinctParams, whether the members share a parameter surface:
+//
+//   - distinctParams=false — SHARED params (file.comment/file.uncomment, one
+//     FileComment proto): the page renders one Parameters/Parameter Types section
+//     for all members, then a per-module behavior section (Description → Effects →
+//     … → See Also). assertSharedParams verifies the surface genuinely matches;
+//     a mismatch is a LOUD generation error, never a silent fallback — a
+//     shared-proto group that diverges is a real bug the flag must not mask.
+//   - distinctParams=true — DISTINCT params (host.present/host.absent — present
+//     has `ip`; ssh_auth.present/ssh_auth.absent — present has `enc`/`comment`;
+//     the test-helpers group — 0..3 params): the page renders each member's FULL
+//     body (Source → Description → Parameters → Parameter Types → Effects → … →
+//     See Also) under its own banner, because a single shared Parameters table
+//     would be wrong for at least one member. This is an EXPLICIT opt-in
+//     (isDistinctParamSlug), not an error-triggered fallback.
+func renderModulePageGroup(mis []modschema.ModuleInfo, distinctParams bool) (string, error) {
 	if len(mis) == 1 {
 		return renderModulePage(mis[0])
+	}
+	if distinctParams {
+		return renderDistinctParamPageGroup(mis)
 	}
 	if err := assertSharedParams(mis); err != nil {
 		return "", err
 	}
+	return renderSharedParamPageGroup(mis)
+}
 
+// renderSharedParamPageGroup renders a multi-member page whose members share one
+// parameter surface (they share a Go proto): a joined title, one managed marker
+// per module, the shared Source line, ONE Parameters and Parameter Types section,
+// then a per-module behavior section (Description → Effects → Examples → Notes →
+// Divergences → See Also) under a "## `<module>`" banner.
+func renderSharedParamPageGroup(mis []modschema.ModuleInfo) (string, error) {
 	var b strings.Builder
 	head := mis[0]
 	names := make([]string, len(mis))
-	summaries := make([]string, len(mis))
 	quoted := make([]string, len(mis))
 	for i, mi := range mis {
 		names[i] = mi.Module
-		summaries[i] = mi.Doc.Summary
 		quoted[i] = "`" + mi.Module + "`"
 	}
 
-	fmt.Fprintf(&b, "---\ntitle: %q\ndescription: %q\n---\n\n",
-		strings.Join(names, " / "), strings.Join(summaries, " "))
-	for _, mi := range mis {
-		b.WriteString(managedMarker(mi.Module))
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
+	renderGroupFrontmatter(&b, mis)
 	fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(head.Kind, head.Module))
 
 	// Shared parameters note + one Parameters/Parameter Types section (the
-	// members share one proto, asserted above).
+	// members share one proto, asserted by the caller).
 	b.WriteString("\n---\n\n")
 	fmt.Fprintf(&b, "%s share the same parameters and implementation.\n", joinWithAnd(quoted))
 	renderParamsSection(&b, head)
@@ -135,6 +146,67 @@ func renderModulePageGroup(mis []modschema.ModuleInfo) (string, error) {
 		return "", err
 	}
 	return rendered, nil
+}
+
+// renderDistinctParamPageGroup renders a multi-member page whose members do NOT
+// share a parameter surface (distinct Go protos — host.present/host.absent,
+// ssh_auth.present/ssh_auth.absent). The shared header carries the joined title
+// and one managed marker per module; each member then contributes its FULL body
+// (Source → Description → Parameters → Parameter Types → Effects → Examples →
+// Notes → Divergences → See Also, identical to a standalone page's body) under a
+// "## `<module>`" banner, so each member's own parameter table is documented.
+func renderDistinctParamPageGroup(mis []modschema.ModuleInfo) (string, error) {
+	var b strings.Builder
+	names := make([]string, len(mis))
+	quoted := make([]string, len(mis))
+	for i, mi := range mis {
+		names[i] = mi.Module
+		quoted[i] = "`" + mi.Module + "`"
+	}
+
+	renderGroupFrontmatter(&b, mis)
+	fmt.Fprintf(&b, "%s are documented together on this page; each has its own parameters.\n", joinWithAnd(quoted))
+
+	for _, mi := range mis {
+		fmt.Fprintf(&b, "\n---\n\n## `%s`\n\n", mi.Module)
+		fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(mi.Kind, mi.Module))
+		renderDescriptionSection(&b, mi.Doc.Description)
+		renderParamsSection(&b, mi)
+		renderParamTypesSection(&b, mi)
+		renderPageEffects(&b, mi.Doc.Effects)
+		renderExamplesSection(&b, mi.Doc.Examples)
+		renderNotesSection(&b, mi.Doc.Notes)
+		renderDivergencesSection(&b, mi.Doc.Divergences)
+		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso); err != nil {
+			return "", err
+		}
+	}
+
+	rendered := b.String()
+	if err := assertNoJSX(strings.Join(names, "/"), rendered); err != nil {
+		return "", err
+	}
+	return rendered, nil
+}
+
+// renderGroupFrontmatter writes the shared frontmatter (a "a / b" title, the
+// space-joined member summaries as the description) and one managed marker per
+// member, followed by a blank line — the common header of both multi-member page
+// shapes.
+func renderGroupFrontmatter(b *strings.Builder, mis []modschema.ModuleInfo) {
+	names := make([]string, len(mis))
+	summaries := make([]string, len(mis))
+	for i, mi := range mis {
+		names[i] = mi.Module
+		summaries[i] = mi.Doc.Summary
+	}
+	fmt.Fprintf(b, "---\ntitle: %q\ndescription: %q\n---\n\n",
+		strings.Join(names, " / "), strings.Join(summaries, " "))
+	for _, mi := range mis {
+		b.WriteString(managedMarker(mi.Module))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 }
 
 // assertSharedParams verifies every module in an N:1 page group exposes the same
@@ -196,6 +268,18 @@ func renderDescriptionSection(b *strings.Builder, description string) {
 
 func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo) {
 	if len(mi.Params) == 0 {
+		// A parameterless STATE module (test.ping, test.nop, module.run) still
+		// documents that it accepts the requisite / Salt-parity attribute set —
+		// every state does — so the page must not silently drop the requisites
+		// boilerplate. A non-state surface (dispatch/exec) has no requisites, so
+		// it renders nothing here.
+		if mi.Kind == modschema.KindState {
+			b.WriteString("\n---\n\n## Parameters\n\n")
+			b.WriteString("This module takes no parameters of its own.\n")
+			b.WriteString("\n")
+			b.WriteString(requisitesBoilerplate)
+			b.WriteString("\n")
+		}
 		return
 	}
 	b.WriteString("\n---\n\n## Parameters\n\n")
@@ -430,19 +514,21 @@ func renderPageEffects(b *strings.Builder, e modschema.Effects) {
 }
 
 // writeModulePage writes the rendered page for a single mi to path. It is the
-// single-module convenience wrapper over writeModulePageGroup.
+// single-module convenience wrapper over writeModulePageGroup (a single-member
+// group never renders per-member, so distinctParams is irrelevant here).
 func writeModulePage(path string, mi modschema.ModuleInfo, claim bool) error {
-	return writeModulePageGroup(path, []modschema.ModuleInfo{mi}, claim)
+	return writeModulePageGroup(path, []modschema.ModuleInfo{mi}, claim, false)
 }
 
 // writeModulePageGroup writes the rendered page for the N modules sharing a page
-// slug (see renderModulePageGroup). If path already exists without the managed
-// marker, it refuses to overwrite it UNLESS claim is true (the one-time adoption
-// a module's migration PR performs explicitly) — the markerless-overwrite guard
-// (§8) that protects hand-written pages for modules that have not been migrated
-// yet.
-func writeModulePageGroup(path string, mis []modschema.ModuleInfo, claim bool) error {
-	rendered, err := renderModulePageGroup(mis)
+// slug (see renderModulePageGroup). distinctParams is the caller's explicit
+// declaration (isDistinctParamSlug) that the members do NOT share a parameter
+// surface. If path already exists without the managed marker, it refuses to
+// overwrite it UNLESS claim is true (the one-time adoption a module's migration
+// PR performs explicitly) — the markerless-overwrite guard (§8) that protects
+// hand-written pages for modules that have not been migrated yet.
+func writeModulePageGroup(path string, mis []modschema.ModuleInfo, claim, distinctParams bool) error {
+	rendered, err := renderModulePageGroup(mis, distinctParams)
 	if err != nil {
 		return err
 	}

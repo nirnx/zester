@@ -108,20 +108,13 @@ func TestRegistrations_ExactlyOneBuilderShape(t *testing.T) {
 }
 
 func TestRegistrations_SpecCarryingRows(t *testing.T) {
-	// The migrated set as of the file.absent/file.touch/file.copy/file.symlink/
-	// file.append wave: pilot #1 (pkg.removed), the semantic-type pilot
-	// (service.running + service.dead on TriState),
-	// pkg.installed/pkg.latest/pkg.purged (all primitives, no semantic types),
-	// user.present (gid on GroupRef, groups/optional_groups on StringList, a
-	// sensitive password), file.managed (template on TemplateFlag, mode on a
-	// lazy FileMode — the BD-1 flagship), and file.absent/file.append/
-	// file.symlink/file.copy/file.touch (source required on file.copy, text on
-	// StringList for file.append), plus the file-surgery wave (file.line,
-	// file.replace, file.comment, file.uncomment, file.keyvalue) and the
-	// declared-facet wave (file.directory's lazy FileMode + dir_mode alias,
-	// file.recurse's DECLARED-ONLY dir_mode). This pins that no accidental extra
-	// Spec has been attached before its own tranche; the order is registration
-	// order, so file.managed (the first registration row) leads.
+	// The migration ratchet reached ZERO (keystone spec §9 gate 3): EVERY
+	// registration now carries a Spec, so the spec-carrying set is the full
+	// registration table in registration order. The FINAL gate-close wave added
+	// cmd.run (command primary; args StringList, env StringMap) after file.append
+	// and service.enabled (name primary only) after service.dead. This pins the
+	// exact registration order (file.managed leads, module.run last) and that no
+	// row lost its Spec.
 	var withSpec []string
 	for _, r := range registrations {
 		if r.Spec != nil {
@@ -132,14 +125,26 @@ func TestRegistrations_SpecCarryingRows(t *testing.T) {
 		}
 	}
 	want := []string{
-		"file.managed", "file.directory", "file.absent", "file.append", "pkg.installed",
-		"user.present", "group.present", "group.absent", "file.symlink", "file.blockreplace",
-		"file.recurse", "pkg.removed", "service.running", "service.dead", "cron.present",
-		"cron.absent", "file.line", "file.replace", "file.comment", "file.uncomment",
+		"file.managed", "file.directory", "file.absent", "file.append", "cmd.run",
+		"pkg.installed", "user.present", "user.absent", "group.present", "group.absent",
+		"file.symlink", "file.blockreplace", "file.recurse", "pkg.removed", "service.running",
+		"service.dead", "service.enabled", "cron.present", "cron.absent", "mount.mounted",
+		"sysctl.present", "locale.present", "timezone.system", "pip.installed", "git.cloned",
+		"git.latest", "file.line", "file.replace", "file.comment", "file.uncomment",
 		"file.keyvalue", "file.copy", "file.touch", "pkg.latest", "pkg.purged",
+		"pkgrepo.managed", "archive.extracted", "host.present", "host.absent", "ssh_auth.present",
+		"ssh_auth.absent",
+		// the FINAL test.*/module.run wave (registration order; module.run last)
+		"test.ping", "test.nop", "test.fail_without_changes", "test.succeed_with_changes",
+		"test.configurable_test_state", "module.run",
 	}
 	if !reflect.DeepEqual(withSpec, want) {
 		t.Errorf("spec-carrying rows = %v, want %v", withSpec, want)
+	}
+	// Gate-close pin: every registered module carries a Spec — no exemptions.
+	if len(withSpec) != len(registrations) {
+		t.Errorf("spec-carrying rows = %d, want all %d registrations (ratchet is at ZERO)",
+			len(withSpec), len(registrations))
 	}
 }
 
@@ -157,20 +162,11 @@ func TestRegisterAll_WiresBuildersAndSpec(t *testing.T) {
 		t.Errorf("registered modules mismatch:\n got %v\nwant %v", got, wantModuleNames)
 	}
 
-	// The migrated set (0C pilot + 0E semantic-type pilot + the all-primitives
-	// pkg-family wave + user.present + file.managed + the file.absent/
-	// file.touch/file.copy/file.symlink/file.append wave + the file-surgery wave
-	// + the declared-facet file.directory/file.recurse wave) is spec-registered;
-	// SpecNames is sorted.
-	wantSpecNames := []string{
-		"cron.absent", "cron.present", "file.absent", "file.append", "file.blockreplace",
-		"file.comment", "file.copy", "file.directory", "file.keyvalue", "file.line",
-		"file.managed", "file.recurse", "file.replace", "file.symlink", "file.touch",
-		"file.uncomment", "group.absent", "group.present", "pkg.installed", "pkg.latest",
-		"pkg.purged", "pkg.removed", "service.dead", "service.running", "user.present",
-	}
-	if names := reg.SpecNames(); !reflect.DeepEqual(names, wantSpecNames) {
-		t.Errorf("SpecNames = %v, want %v", names, wantSpecNames)
+	// The migration ratchet reached ZERO: EVERY built-in state module is
+	// spec-registered, so SpecNames() (sorted) is the full module set — identical
+	// to wantModuleNames.
+	if names := reg.SpecNames(); !reflect.DeepEqual(names, wantModuleNames) {
+		t.Errorf("SpecNames = %v, want %v", names, wantModuleNames)
 	}
 	mi, ok := reg.Describe("pkg.removed")
 	if !ok || mi.Module != "pkg.removed" || mi.Kind != modschema.KindState {
@@ -189,9 +185,13 @@ func TestRegisterAll_WiresBuildersAndSpec(t *testing.T) {
 			t.Errorf("Describe(%s) SemTypes = %+v, want one TriState", name, smi.SemTypes)
 		}
 	}
-	// A legacy module has no spec description.
-	if _, ok := reg.Describe("cmd.run"); ok {
-		t.Error("cmd.run should not be spec-described")
+	// The gate-close migrated cmd.run and service.enabled too, so they now
+	// describe through the spec path; an unknown module still does not.
+	if cmi, ok := reg.Describe("cmd.run"); !ok || cmi.Module != "cmd.run" || cmi.Kind != modschema.KindState {
+		t.Errorf("Describe(cmd.run) = %+v ok=%v, want a state spec", cmi, ok)
+	}
+	if _, ok := reg.Describe("no.such_module"); ok {
+		t.Error("Describe(no.such_module) should be false")
 	}
 
 	// Parse executes the migrated plan.

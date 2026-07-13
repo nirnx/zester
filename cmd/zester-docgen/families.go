@@ -114,6 +114,32 @@ var moduleToSlug = map[string]string{
 	"test.configurable_test_state": "test-helpers", // N:1 PageGroup
 }
 
+// distinctParamSlugs are the N:1 PageGroups whose members do NOT share a
+// parameter surface (distinct Go protos), so their combined page renders each
+// member's FULL body — its own Source line and Parameters table — under a
+// per-module banner. This is an EXPLICIT opt-in: for ANY OTHER multi-member
+// group the renderer requires a genuinely shared parameter surface, and a
+// mismatch is a loud generation error (renderModulePageGroup no longer falls
+// back to per-member rendering silently). Membership:
+//   - host           — host.present has `ip`, host.absent does not.
+//   - ssh-auth       — ssh_auth.present has `enc`/`comment`, ssh_auth.absent does not.
+//   - test-helpers   — test.nop (0 params), test.fail_without_changes /
+//     test.succeed_with_changes (a `comment`), and
+//     test.configurable_test_state (`result`/`changes`/`comment`)
+//     expose 0..3 distinct parameters.
+var distinctParamSlugs = map[string]bool{
+	"host":         true,
+	"ssh-auth":     true,
+	"test-helpers": true,
+}
+
+// isDistinctParamSlug reports whether slug is an explicitly-declared
+// distinct-parameter page group (its members are documented each under their own
+// banner with their own Parameters table).
+func isDistinctParamSlug(slug string) bool {
+	return distinctParamSlugs[slug]
+}
+
 // extraPages are nav entries not derived from any state module registration:
 // "query" documents the peel dispatch specials (facts.*/settings.*/pillar.*/
 // grains.*/sys.list_functions — generated from DispatchSpecials in Phase 3,

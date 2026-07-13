@@ -39,3 +39,21 @@ func TestSvcDeadContract(t *testing.T) {
 	}
 	schematest.RunContract(t, decode, "testdata/contract/service.dead.yaml")
 }
+
+// TestSvcEnabledContract replays the permanent differential contract fixtures
+// against the migrated svcEnabledSpec decoder (the FINAL gate-close wave). The
+// cases were approved by the legacy-vs-new equivalence comparison while the legacy
+// constructor still existed (see the migration changelog); after its deletion this
+// replay is the permanent regression guard for service.enabled's single-name
+// decode behavior — including the flagged BD-6 (a non-string name is coerced or
+// rejected instead of falling back to the state ID) divergence.
+func TestSvcEnabledContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var s SvcEnabled
+		if _, err := svcEnabledSpec.Decode(id, config, &s, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &s, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/service.enabled.yaml")
+}

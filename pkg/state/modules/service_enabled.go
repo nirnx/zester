@@ -5,16 +5,26 @@ import (
 	"fmt"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
 )
 
 // SvcEnabled implements the service.enabled state.
 // It ensures a service is enabled to start at boot.
+//
+// SvcEnabled is also its own schema proto: the single tagged exported field IS
+// the module's parameter declaration (one schema declaration per module).
+// `name` is the primary parameter (defaults to the state ID) — a numeric name
+// now coerces to its string form and a composite name is rejected (BD-6), where
+// the legacy `.(string)` assertion silently fell back to the state ID. The
+// unexported runtime fields (id, reqs, svc, and the revert memo) are untagged,
+// so the schema compiler skips them.
 type SvcEnabled struct {
 	id   string
 	reqs state.Requisites
 
-	Service string
+	// Service is the service name; it defaults to the state ID.
+	Service string `zester:"name,primary" usage:"service name to enable at boot; defaults to the state ID"`
 
 	svc exec.ServiceExec
 
@@ -24,27 +34,79 @@ type SvcEnabled struct {
 	wasEnabled bool
 }
 
+// svcEnabledSpec is the compiled schema + documentation for service.enabled. Its
+// Doc is drift-corrected against the live Check/Apply/Revert behavior — notably
+// the already-enabled Apply no-op (which does NOT arm the revert memo) and the
+// standalone-revert clean no-op.
+var svcEnabledSpec = mustSpec("service.enabled", modschema.KindState, SvcEnabled{}, modschema.Doc{
+	Summary: "Ensure a service is enabled to start at boot.",
+	Description: "`service.enabled` ensures a service (`name`, defaulting to the state ID) is enabled to " +
+		"start at boot. It manages ONLY the boot-time enablement — it does not start, stop, or otherwise " +
+		"affect whether the service is currently running (use `service.running` for that).",
+	Effects: modschema.Effects{
+		Check: "Reads the service's boot-enablement (via the service manager, e.g. `systemctl is-enabled " +
+			"--quiet <service>`). Reports no change when it is already enabled, and a change when it is not.",
+		Apply: "Re-reads the enablement (a self-contained flow: a watch-forced Apply bypasses Check). An " +
+			"already-enabled service is a clean no-op that does NOT arm the revert memo. Otherwise it enables " +
+			"the service and records that this run did so, reporting the service name and manager in its " +
+			"details.",
+		Revert: "Disables the service ONLY when this run's Apply actually enabled it (the revert memo). A " +
+			"fresh instance (a standalone revert) or a no-op Apply recorded nothing and is an explicit clean " +
+			"no-op — it never disables a service this run did not enable.",
+	},
+	Examples: []modschema.Example{
+		{
+			Title:       "Enable a service at boot",
+			Kind:        "state",
+			Explanation: "The service name defaults to the state ID.",
+			Code:        "sshd:\n  service.enabled: []\n",
+		},
+		{
+			Title:       "Enable a service under a descriptive ID",
+			Kind:        "state",
+			Explanation: "name selects the managed service when the state ID is not the service name.",
+			Code:        "enable-nginx-boot:\n  service.enabled:\n    - name: nginx\n",
+		},
+		{
+			Title:       "Enable a service ad hoc",
+			Kind:        "cli",
+			Explanation: "The bare positional argument is the service name.",
+			Code:        "zester 'web*' service.enabled nginx",
+		},
+	},
+	Notes: []modschema.Note{
+		{
+			Level: "info",
+			Title: "Boot enablement only, not running state",
+			Body: "`service.enabled` manages only whether the service starts at boot; it never starts or " +
+				"stops the service. Pair it with `service.running` (which can also enable) when the service " +
+				"must be both running now and enabled at boot.",
+		},
+	},
+	Divergences: []string{"BD-6"},
+	SeeAlso:     []string{"service.running", "service.dead"},
+})
+
 // NewSvcEnabledBuilder returns a state.Builder that creates SvcEnabled states.
-func NewSvcEnabledBuilder(mctx *exec.ModuleContext) state.Builder {
+// Decode policy (unknown-key handling, reserved keys) is threaded via opts; the
+// peel supplies it through modules.RegisterAll.
+func NewSvcEnabledBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions) state.Builder {
 	return func(id string, config map[string]any) (state.State, error) {
 		if mctx.Service == nil {
 			return nil, fmt.Errorf("service.enabled: no service provider available")
 		}
-		return newSvcEnabled(id, config, mctx.Service)
+		// Decode the typed parameters first. Decode is transactional and commits
+		// by replacing the whole struct, so the injected provider, id, and
+		// requisites MUST be assigned AFTER it.
+		s := &SvcEnabled{}
+		if _, err := svcEnabledSpec.Decode(id, config, s, opts); err != nil {
+			return nil, fmt.Errorf("service.enabled: %w", err)
+		}
+		s.id = id
+		s.svc = mctx.Service
+		s.reqs = state.ParseRequisites(config)
+		return s, nil
 	}
-}
-
-func newSvcEnabled(id string, config map[string]any, svc exec.ServiceExec) (state.State, error) {
-	s := &SvcEnabled{id: id, svc: svc}
-
-	s.Service, _ = config["name"].(string)
-	if s.Service == "" {
-		s.Service = id
-	}
-
-	s.reqs = state.ParseRequisites(config)
-
-	return s, nil
 }
 
 func (s *SvcEnabled) Name() string           { return "service.enabled:" + s.id }

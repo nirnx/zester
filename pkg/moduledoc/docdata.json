@@ -1,5 +1,384 @@
 [
   {
+    "Module": "archive.extracted",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Extract a tar or zip archive (from a local path or URL) into a target directory.",
+      "Description": "`archive.extracted` extracts `source` (a local file path or an http/https/ftp URL) into `name` (the target directory, defaulting to the state ID). Idempotency has three independent strengths, weakest to strongest: without `if_missing` or `source_hash`, a PRE-EXISTING target directory alone counts as \"already extracted\" (declare one of them for anything beyond throwaway use); `if_missing` names a path whose existence is the sole extraction marker (Salt parity), replacing the weak directory check; `source_hash` records the declared value in a marker file after a successful extraction and re-extracts when the declaration no longer matches — it is an OPAQUE string comparison, never a checksum verified against the archive bytes.",
+      "Effects": {
+        "Check": "With `if_missing` set: reports a change unless that path exists (the target-directory fallback is not consulted). Without it: reports a change unless the target directory exists — and a directory this run's `makedirs` created ahead of a FAILED extraction attempt does not count (a retried Apply proceeds rather than latching on its own directory). When `source_hash` is declared, ALSO requires a marker file recording that exact value to exist inside the target — an unset or mismatched marker reports a change even if the directory/`if_missing` guard passed, so bumping `source`/`source_hash` re-extracts.",
+        "Apply": "Re-evaluates the same guard as Check (a watch-forced apply bypasses Check entirely, and an already-extracted archive must be a clean no-op — never a re-download/re-extract over local modifications). When extraction is needed: creates the target directory (mode 0755) when `makedirs` is set and it does not already exist; downloads a remote `source` (http/https/ftp) to a temp file via `curl -fSL`, falling back to `wget` when curl is unavailable; extracts with `unzip -o <archive> -d <dir>` (zip) or `tar -xf <archive> -C <dir>` (tar), inferring the format from the source name when `archive_format` is `auto` (`.zip` → zip; `.tgz`/`.tbz2`/`.txz`/anything containing `.tar` → tar; anything else defaults to tar); a non-zero exit fails the state. Only AFTER a successful extraction does it write the `source_hash` marker (a failed attempt never latches the state as done). Reports the source, target, and resolved format in its details.",
+        "Revert": "If Apply created the target directory (via `makedirs`), removes it recursively. Otherwise an explicit no-op (`Changed: false`) — individual extracted files are not tracked, so there is nothing else safe to remove.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Extract a release tarball once",
+          "Kind": "state",
+          "Explanation": "if_missing points at a file the archive actually creates, the real extraction marker.",
+          "Code": "/opt/prometheus:\n  archive.extracted:\n    - source: https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz\n    - if_missing: /opt/prometheus/prometheus-2.53.0.linux-amd64\n    - makedirs: true\n"
+        },
+        {
+          "Title": "Extract a local zip archive",
+          "Kind": "state",
+          "Explanation": "archive_format overrides auto-detection; if_missing avoids re-extracting.",
+          "Code": "/srv/webapp:\n  archive.extracted:\n    - source: /tmp/webapp-release.zip\n    - archive_format: zip\n    - if_missing: /srv/webapp/index.html\n"
+        },
+        {
+          "Title": "Re-extract on a version bump with source_hash",
+          "Kind": "state",
+          "Explanation": "Changing source_hash (or source) triggers re-extraction on the next run; the value is an opaque declaration, not a verified checksum.",
+          "Code": "/opt/myapp:\n  archive.extracted:\n    - source: /srv/releases/myapp-2.0.0.tar.gz\n    - source_hash: \"sha256=<hex-of-2.0.0>\"\n    - makedirs: true\n"
+        },
+        {
+          "Title": "Extract an archive ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the target directory; source is a key=value.",
+          "Code": "zester '*' archive.extracted /opt/tool source=/tmp/tool.tar.gz"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "warn",
+          "Title": "Set if_missing or source_hash",
+          "Body": "Without `if_missing` or `source_hash`, an existing target directory is considered \"already extracted\" — even if it is empty. Point `if_missing` at a file the archive actually creates, or declare `source_hash` to force re-extraction on a version bump."
+        },
+        {
+          "Level": "info",
+          "Title": "source_hash is an opaque declaration, not a checksum",
+          "Body": "`source_hash` is compared as a plain string against a marker recorded after the LAST successful extraction — it is never verified against the actual archive bytes. It exists purely to detect \"the declared version changed since last time\", not to authenticate the download."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "Idempotency is purely path/marker-based (`if_missing`, the `source_hash` marker, or target-directory existence, per the note above) — Salt's `enforce_toplevel`, `options`, `user`/`group`, `clean`, and `trim_output` parameters are not supported. Extraction requires `tar`/`unzip` (and `curl` or `wget` for remote sources) to be present on the peel."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "target directory the archive is extracted into; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "source",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "local file path, or an http/https/ftp URL to the archive; required",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "archive_format",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "archive format: tar, zip, or auto (inferred from the source name); defaults to auto",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "auto",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "if_missing",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "path whose existence means the archive is already extracted; when set, it is the sole idempotency check (besides source_hash)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "source_hash",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "declared hash of the source archive (e.g. sha256=<hex>); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "makedirs",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "create the target directory (and parents, mode 0755) before extracting; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "cmd.run",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Execute a command on the target system and capture its output.",
+      "Description": "`cmd.run` executes a command (`command`, defaulting to the state ID) on the target and captures its output. Commands are not inherently idempotent, so the `creates` parameter provides an idempotency mechanism: a file path that, when it already exists, means the command has already run and is skipped.\n\nWhen `args` is empty the command string is run through the shell (`sh -c`), so shell features (pipes, redirection, `&&`) work; when `args` is non-empty the command is executed directly with those arguments (no shell). `cwd` sets the working directory and `env` sets environment variables (merged with the peel process's environment).\n\n`cmd.run` is ALSO a remote-execution module of the same name: the state module documented here is the primary surface, and the execmod sibling is reachable from templates via `salt['cmd.run'](...)` and from the CLI as an ad-hoc `zester '<target>' cmd.run '<command>'`.",
+      "Effects": {
+        "Check": "When `creates` is set and the path already exists, reports no change (the command is considered already run); a stat error other than not-exist fails the phase rather than re-running. Otherwise always reports a change — the command needs to run.",
+        "Apply": "Re-evaluates the `creates` guard independently of Check (a watch-forced Apply bypasses Check, and a creates-guarded one-shot must not re-run just because a watched dependency changed): when the path exists, the command is not run and Apply is a no-op. Otherwise it runs the command — through the shell (`sh -c`) when `args` is empty, directly with the arguments otherwise — in `cwd` with `env` merged into the process environment, capturing stdout, stderr, and the exit code into its details. A non-zero exit is returned as an error (with the captured output still in details).",
+        "Revert": "Commands are not revertible: Revert is a no-op (`Changed: false`). Manage any undo logic with a separate state.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Run a command ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the command string.",
+          "Code": "zester 'web*' cmd.run 'df -h'"
+        },
+        {
+          "Title": "One-shot command guarded by creates",
+          "Kind": "state",
+          "Explanation": "creates makes the command idempotent — it is skipped once the marker path exists.",
+          "Code": "initialize_database:\n  cmd.run:\n    - command: /usr/local/bin/init-db --setup\n    - creates: /var/lib/myapp/.db-initialized\n"
+        },
+        {
+          "Title": "Command with arguments and a working directory",
+          "Kind": "state",
+          "Explanation": "A non-empty args list runs the command directly (no shell) in cwd.",
+          "Code": "build_application:\n  cmd.run:\n    - command: make\n    - args:\n      - build\n      - \"-j4\"\n    - cwd: /opt/myapp/src\n"
+        },
+        {
+          "Title": "Command with environment variables after a dependency",
+          "Kind": "state",
+          "Explanation": "env is merged with the process environment; require orders this after the package install.",
+          "Code": "run_migrations:\n  cmd.run:\n    - command: python manage.py migrate --noinput\n    - cwd: /opt/webapp\n    - env:\n        DJANGO_SETTINGS_MODULE: myproject.settings.production\n    - creates: /opt/webapp/.migrations-done\n    - require:\n      - \"pkg.installed:python3\"\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "creates provides idempotency and guards both phases",
+          "Body": "A command is not inherently idempotent. Set `creates` to a path the command produces: once it exists, both Check and Apply skip the command (a watch-forced Apply honors it too). A stat error other than \"not found\" fails the phase rather than falling through to re-running a destructive one-shot."
+        },
+        {
+          "Level": "info",
+          "Title": "Shell vs. direct execution depends on args",
+          "Body": "With no `args`, the command string is run through `sh -c`, so pipes, redirection, and `&&` work. With a non-empty `args` list the command is executed directly with those arguments and no shell. Under the uniform decoder a bare-string `args` value (or a CLI `args=...`) is a one-element list — which switches execution to the direct (non-shell) path — where the legacy list assertion silently dropped it and left the shell path in effect (BD-5)."
+        },
+        {
+          "Level": "info",
+          "Title": "Also a remote-execution module",
+          "Body": "`cmd.run` is also an execution module of the same name — reachable from templates via `salt['cmd.run'](...)` and from the CLI as `zester '<target>' cmd.run '<command>'`. The state module documented here (with `creates` idempotency and the Check/Apply/Revert lifecycle) is the primary surface."
+        },
+        {
+          "Level": "info",
+          "Title": "Details returned",
+          "Body": "After execution the result details carry `command` (the command run), `stdout` and `stderr` (captured output), and `exitcode` (the process exit code as a string)."
+        }
+      ],
+      "Divergences": [
+        "BD-5",
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "module.run"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "command",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "command to execute; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "args",
+        "Aliases": null,
+        "GoType": "paramtypes.StringList",
+        "SemanticType": "StringList",
+        "Usage": "additional arguments passed to the command; when empty the command runs via the shell (sh -c), when non-empty it is executed directly with these arguments",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "cwd",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "working directory for the command; defaults to the peel process's working directory",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "env",
+        "Aliases": null,
+        "GoType": "paramtypes.StringMap",
+        "SemanticType": "StringMap",
+        "Usage": "environment variables to set for the command; merged with the peel process's environment",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "number",
+              "boolean"
+            ]
+          },
+          "type": "object"
+        }
+      },
+      {
+        "Name": "creates",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "a file path that, if it exists, means the command has already run — provides idempotency by skipping execution when the path exists",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": [
+      {
+        "Name": "StringList",
+        "Doc": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.",
+        "JSONSchema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "StringMap",
+        "Doc": "A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.",
+        "JSONSchema": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "number",
+              "boolean"
+            ]
+          },
+          "type": "object"
+        }
+      }
+    ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "cron.absent",
     "Kind": "state",
     "Doc": {
@@ -2487,6 +2866,317 @@
     "AlsoExecmod": false
   },
   {
+    "Module": "git.cloned",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a Git repository is cloned at a target path, optionally pinned to a branch or revision.",
+      "Description": "`git.cloned` ensures a Git repository is present at `name` (the clone PATH, defaulting to the state ID — NOTE: this is the opposite of `git.latest`, whose `name`/primary is the remote URL). `url` is required. `branch` or `rev` optionally pins the checkout; `rev` takes precedence when both are set. `depth` shallow-clones (0 is a full clone) and `force` discards local changes before checkout. Unlike `git.latest`, an existing clone is never fetched/updated unless a declared `rev`/`branch` requires a different checkout — `git.cloned` only ensures presence at a revision, it does not track a moving branch tip.",
+      "Effects": {
+        "Check": "Reports a change when the target directory does not exist (any stat error OTHER than not-exist fails the phase, rather than risking a blind clone over an unreadable existing checkout). Otherwise compares `git -C <path> remote get-url origin` against `url`; a mismatch needs a change. With `rev` or `branch` declared, also compares HEAD: a hex `rev` matches by sha PREFIX (no subprocess); a tag or other symbolic rev/branch is resolved LOCALLY (`git rev-parse --verify <rev>^{commit}`, no network) and compared by commit id, so a checked-out tag CONVERGES rather than perpetually reporting a change. `branch` also documents tags: `git clone --branch <tag>` leaves a detached HEAD with no local branch, so branch comparison falls back to the same symbolic-rev resolution when no matching local branch ref exists.",
+        "Apply": "Clones with `git clone [--depth N] [--branch B] <url> <path>` when the directory is missing; otherwise corrects the remote URL with `git remote set-url origin <url>` if it drifted (same not-exist discrimination as Check). When `rev` or `branch` is set: optionally `git reset --hard HEAD` first when `force` is set, then `git fetch origin` and `git checkout <rev-or-branch>`. Reports the url and path in its details.",
+        "Revert": "Removes the directory with `RemoveAll` ONLY if this run's Apply created it (a same-instance memo). If the directory existed before Apply (for example only the remote URL was fixed), Revert is an explicit clean no-op — it never deletes a pre-existing checkout.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Clone a public repo with no pinned version",
+          "Kind": "state",
+          "Explanation": "name is the clone path (defaults to the state ID); url is required.",
+          "Code": "/opt/myapp:\n  git.cloned:\n    - url: https://github.com/example/myapp\n"
+        },
+        {
+          "Title": "Clone a specific branch with shallow depth",
+          "Kind": "state",
+          "Explanation": "branch checks out a branch/tag; depth shallow-clones.",
+          "Code": "/srv/deploy/myapp:\n  git.cloned:\n    - url: git@github.com:example/myapp.git\n    - branch: production\n    - depth: 1\n"
+        },
+        {
+          "Title": "Pin to a specific commit",
+          "Kind": "state",
+          "Explanation": "rev takes precedence over branch for the HEAD comparison; require orders git installation first.",
+          "Code": "/opt/tools/mylib:\n  git.cloned:\n    - url: https://github.com/example/mylib\n    - rev: a1b2c3d4e5f6\n    - require:\n      - pkg.installed:git\n"
+        },
+        {
+          "Title": "Clone a repo ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the clone PATH; url is a key=value.",
+          "Code": "zester '*' git.cloned /opt/myapp url=https://github.com/example/myapp"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "warn",
+          "Title": "name means the PATH here — the opposite of git.latest",
+          "Body": "`git.cloned`'s `name` (and state-ID default) is the CLONE PATH. `git.latest`'s `name` is instead the remote URL, and its clone path is the separate `target` parameter. Mixing the two up under a shared naming assumption is the most common authoring mistake between these two modules."
+        },
+        {
+          "Level": "info",
+          "Title": "rev and branch: rev takes precedence, both resolve tags locally",
+          "Body": "`rev` and `branch` can both be set; `rev` takes precedence when comparing whether HEAD matches. A hex-looking rev matches by sha PREFIX; a tag name or other symbolic rev/branch is resolved with a local, network-free `git rev-parse --verify <rev>^{commit}` and compared by commit id, so a pinned tag converges after checkout instead of re-applying every run."
+        },
+        {
+          "Level": "info",
+          "Title": "git must be installed; auth is ambient",
+          "Body": "The state shells out to the `git` binary via the command execution provider; `git` must be installed on the target node. TLS verification and SSH key configuration are handled by the system Git config, not by this module."
+        }
+      ],
+      "Divergences": [
+        "BD-1",
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "git.latest"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "filesystem path where the repo should be cloned; defaults to the state ID (contrast with git.latest, whose name/primary is the remote URL)",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "url",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "remote repository URL; required",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "branch",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "branch or tag to checkout after cloning",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "rev",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "specific commit sha (full or abbreviated), tag, or any locally-resolvable rev to check out; takes precedence over branch for comparison",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "depth",
+        "Aliases": null,
+        "GoType": "int",
+        "SemanticType": "",
+        "Usage": "shallow clone depth passed to git clone --depth; 0 (the default) means a full clone",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "integer"
+        }
+      },
+      {
+        "Name": "force",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "reset local changes (git reset --hard HEAD) before checkout; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "git.latest",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a Git repository is cloned at a target directory and kept up to date with its remote.",
+      "Description": "`git.latest` ensures a repository is present at `target` (required) AND keeps it current with its remote: an existing clone is fetched and fast-forwarded (or hard-reset with `force`). `name` (defaulting to the state ID) is the remote URL — NOTE: this is the opposite of `git.cloned`, whose `name`/primary is the clone PATH and whose `target`-equivalent is instead folded into `name`. Compare with [`git.cloned`](/docs/guides/modules/git-cloned), which only ensures the clone exists at a revision and never updates a moving branch tip. `name`'s state-ID fallback still applies, but a state declaring neither `name` NOR a non-empty state ID has no URL at all — that combination is rejected with a required-parameter error.",
+      "Effects": {
+        "Check": "Reports a change when `target` does not exist (any stat error OTHER than not-exist fails the phase). Otherwise compares `git remote get-url origin` against `name`; a mismatch needs a change. With `rev` set: no change needed if local `HEAD` matches `rev` — a hex-looking rev by sha PREFIX (no subprocess), a tag or other symbolic rev resolved LOCALLY via `git rev-parse --verify <rev>^{commit}` (no network) and compared by commit id, so a checked-out tag CONVERGES rather than perpetually reporting a change. Without `rev`: `git ls-remote origin <branch|HEAD>` is compared against the local `HEAD`; a differing remote tip needs a change.",
+        "Apply": "Fresh clone (target missing): `git clone [--branch <branch>] <name> <target>`, then `git checkout <rev>` when `rev` is set. Existing clone: corrects the origin URL with `git remote set-url` if it drifted, records the current HEAD (for revert), then `git fetch origin`. Update strategy: `force: true` → `git reset --hard` to `rev`, `origin/<branch>`, or `origin/HEAD`; `rev` set → `git checkout <rev>`; `branch` set → `git checkout <branch>` + `git merge --ff-only origin/<branch>`; neither → `git merge --ff-only` (fails if the local branch diverged — use `force`). Reports the url and target in its details.",
+        "Revert": "If Apply cloned the repository, removes the target directory recursively. If Apply updated an existing clone, runs `git reset --hard <previous HEAD>` to the HEAD recorded before the update. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Track a branch",
+          "Kind": "state",
+          "Explanation": "name (the state ID here) is the remote URL; target is the clone path.",
+          "Code": "https://github.com/example/app.git:\n  git.latest:\n    - target: /opt/app\n    - branch: main\n"
+        },
+        {
+          "Title": "Force-sync, discarding local changes",
+          "Kind": "state",
+          "Explanation": "force replaces a fast-forward merge with a hard reset when the local branch has diverged.",
+          "Code": "deploy-config:\n  git.latest:\n    - name: git@git.internal:ops/config.git\n    - target: /etc/app-config\n    - branch: production\n    - force: true\n    - require:\n      - pkg.installed:git\n"
+        },
+        {
+          "Title": "Clone/update ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the remote URL; target is a key=value.",
+          "Code": "zester '*' git.latest https://github.com/example/app.git target=/opt/app"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "warn",
+          "Title": "name means the remote URL here — the opposite of git.cloned",
+          "Body": "`git.latest`'s `name` (and state-ID default) is the remote URL; the clone path is the separate `target` parameter. `git.cloned`'s `name` is instead the clone PATH. Mixing the two up under a shared naming assumption is the most common authoring mistake between these two modules."
+        },
+        {
+          "Level": "info",
+          "Title": "rev resolves tags locally, no network round-trip",
+          "Body": "A hex-looking `rev` matches by sha PREFIX against local `HEAD`. A tag name or other symbolic rev is resolved with a local, network-free `git rev-parse --verify <rev>^{commit}` and compared by commit id, so a pinned tag converges once checked out — it is not limited to a literal prefix match against a hash."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "Salt's `user`, `identity` (SSH key), `submodules`, and `depth` parameters are not supported. Authentication relies on the peel's ambient git configuration (credential helpers, ssh-agent)."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "git.cloned"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "remote repository URL; defaults to the state ID (contrast with git.cloned, whose name/primary is the clone path); required if the state ID is also empty",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "target",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "filesystem path for the working tree; required",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "branch",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "branch to track; used for git clone --branch, checkout, and the remote-tip comparison",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "rev",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "pin to a specific commit/ref; when set, the up-to-date check is a local HEAD comparison (no network)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "force",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "discard local changes: update with git reset --hard (to rev, origin/<branch>, or origin/HEAD) instead of a fast-forward merge; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "group.absent",
     "Kind": "state",
     "Doc": {
@@ -2777,6 +3467,621 @@
         }
       }
     ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "host.absent",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a hostname is absent from the hosts file.",
+      "Description": "`host.absent` ensures a hostname (`name`, defaulting to the state ID) does not appear in the hosts file (`/etc/hosts` by default; override with `config` or its `path` alias). The hostname is removed from every line it appears on; a line left with no remaining names is dropped.",
+      "Effects": {
+        "Check": "Reads the hosts file (a non-not-exist read error fails the phase). Reports no change when the file does not exist or the hostname is already absent; otherwise reports a change.",
+        "Apply": "Reads the hosts file and, when the hostname is present, memoizes the prior content for revert and rewrites the file with the hostname removed from every line (dropping any line left with no names). A missing file or an already-absent hostname is a clean no-op. Reports the hostname and path in its details.",
+        "Revert": "Restores the hosts file to the content this run's Apply captured before removing the hostname. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a hosts file it did not touch.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Remove a hostname",
+          "Kind": "state",
+          "Explanation": "The hostname defaults to the state ID.",
+          "Code": "old-host:\n  host.absent: []\n"
+        },
+        {
+          "Title": "Remove a host mapping ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the hostname.",
+          "Code": "zester '*' host.absent old-host"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Comment and blank lines are preserved",
+          "Body": "The hosts file is rewritten in memory with existing comment (`#`) and blank lines kept verbatim; the hostname is removed from every line it appears on and a line left with no remaining names is dropped. A missing hosts file is a clean no-op."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "host.present"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "host name to remove from the hosts file; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "config",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "hosts file path; the path alias is also accepted; defaults to /etc/hosts",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "/etc/hosts",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "host.present",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a hostname maps to an IP address in the hosts file.",
+      "Description": "`host.present` ensures a hostname (`name`, defaulting to the state ID) is mapped to `ip` in the hosts file (`/etc/hosts` by default; override with `config` or its `path` alias). It adds the hostname to an existing line for that IP or appends a new line, and REMOVES the hostname from any line that maps it to a different IP — so a host is never listed under two addresses. `ip` is required.",
+      "Effects": {
+        "Check": "Reads the hosts file (a non-not-exist read error fails the phase rather than risking a blind overwrite) and computes the desired content. Reports a change when the desired mapping is not already present — the hostname is absent, mapped to a different IP, or on a line that would be rewritten.",
+        "Apply": "Reads the hosts file, memoizes its prior content (or that it did not exist) for revert, and rewrites it so the hostname maps to `ip`: the hostname is added to the existing line for that IP or a new line is appended, and it is dropped from any line for a different IP (a line left with no names is removed). An already-correct mapping is a clean no-op. Reports the hostname, IP, and path in its details.",
+        "Revert": "Restores what this run's Apply changed: a hosts file that pre-existed is rewritten with its captured prior content; a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites or deletes a hosts file it did not touch.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Map a hostname to an IP",
+          "Kind": "state",
+          "Explanation": "The hostname defaults to the state ID; ip is required.",
+          "Code": "web1:\n  host.present:\n    - ip: 10.0.0.5\n"
+        },
+        {
+          "Title": "Manage an alternate hosts file",
+          "Kind": "state",
+          "Explanation": "config (or its path alias) overrides the default /etc/hosts.",
+          "Code": "db-primary:\n  host.present:\n    - ip: 10.0.0.9\n    - config: /etc/hosts\n"
+        },
+        {
+          "Title": "Add a host mapping ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the hostname; ip is a key=value.",
+          "Code": "zester '*' host.present web1 ip=10.0.0.5"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "A hostname is moved, not duplicated",
+          "Body": "If the hostname already appears on a line for a DIFFERENT IP, host.present removes it there and maps it to the declared IP, so a name is never resolvable to two addresses at once. A line left with no remaining names is dropped."
+        },
+        {
+          "Level": "info",
+          "Title": "The hosts-file path: config, path, or the default",
+          "Body": "The managed file defaults to `/etc/hosts`. Override it with `config`; the legacy `path` alias is also accepted. `config` takes precedence over `path`, and either takes precedence over the `/etc/hosts` default."
+        },
+        {
+          "Level": "info",
+          "Title": "Comment and blank lines are preserved",
+          "Body": "The hosts file is rewritten in memory: existing comment (`#`) and blank lines are kept verbatim. The hostname is added to the existing line for its IP or appended as a new tab-separated line for that IP, and a missing hosts file is created."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "`host.present` enforces exactly ONE IP per hostname — any line mapping the hostname to a different IP has the name removed — whereas Salt's `host.present` accepts a LIST of IPs and only cleans up other mappings under `clean: True`. Salt's per-entry `comment` parameter is not supported."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "host.absent"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "host name to manage; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "ip",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "IP address the hostname should map to; required",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "config",
+        "Aliases": [
+          "path"
+        ],
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "hosts file path; the path alias is also accepted; defaults to /etc/hosts",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "/etc/hosts",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "locale.present",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a locale is enabled in /etc/locale.gen and generated via locale-gen.",
+      "Description": "`locale.present` ensures a locale (`name`, defaulting to the state ID) is enabled and generated. It verifies two independent halves: that `locale -a` lists the locale, and — only on systems that have `/etc/locale.gen` (the Debian family) — that the locale's line in that file is present and uncommented. Both halves compare locale names case-insensitively with dashes stripped, so `en_US.UTF-8` matches the `locale -a` spelling `en_US.utf8`.",
+      "Effects": {
+        "Check": "Runs `locale -a` and reports a change when the locale is absent from its output. When present, and only when `/etc/locale.gen` exists, it ALSO verifies the locale's line in that file is present and uncommented — a locale generated out-of-band (localedef, image bakery) or whose line was later commented out is reported as needing a change, so the next Apply re-enables it. On a system without `/etc/locale.gen` (non-Debian: glibc langpacks, musl), `locale -a` membership alone satisfies the state.",
+        "Apply": "On systems with `/etc/locale.gen`: uncomments the locale's existing line, or appends a new `<locale> UTF-8` line when none matches — the file itself is NEVER created if it does not already exist (a system without it is left without it). Then runs `locale-gen` to regenerate the locale database. Reports Changed with the locale in its details.",
+        "Revert": "Undoes only what this run's Apply actually changed in `/etc/locale.gen` (re-commenting the line it uncommented or appended) and re-runs `locale-gen`. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — a locale.gen line enabled by the distro installer or an admin is never safe to comment out.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Enable a locale",
+          "Kind": "state",
+          "Explanation": "The locale defaults to the state ID.",
+          "Code": "en_US.UTF-8:\n  locale.present:\n    - require:\n      - pkg.installed:locales\n"
+        },
+        {
+          "Title": "Enable a second locale in order",
+          "Kind": "state",
+          "Explanation": "require orders one locale.gen edit after another (here, de_DE.UTF-8) to avoid concurrent rewrites.",
+          "Code": "fr_FR.UTF-8:\n  locale.present:\n    - require:\n      - \"locale.present:de_DE.UTF-8\"\n"
+        },
+        {
+          "Title": "Enable a locale ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the locale string.",
+          "Code": "zester '*' locale.present en_US.UTF-8"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Debian/Ubuntu only for the locale.gen facet",
+          "Body": "This module targets systems that use `/etc/locale.gen` and `locale-gen` (Debian, Ubuntu). On Red Hat-based systems, locale management uses `localectl` instead — use `cmd.run` with `localectl set-locale` there. The `locale` binary and `locale-gen` must be available on the target (the `locales` package on Debian/Ubuntu)."
+        },
+        {
+          "Level": "info",
+          "Title": "locale.gen is never created from scratch",
+          "Body": "On a system that already has `/etc/locale.gen`, a missing locale line is APPENDED (with a default `UTF-8` encoding suffix). On a system without the file at all, it is never created — the locale.gen facet simply does not apply there, and the state is satisfied by `locale -a` membership alone."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "locale string to enable (e.g. en_US.UTF-8); defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "module.run",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Invoke another registered state module by name (Salt-compatibility escape hatch).",
+      "Description": "`module.run` is a Salt-compatibility escape hatch that invokes another **registered state module** by name. The target module is built at compile time with the supplied arguments and its Check/Apply/Revert are delegated to — so `module.run` is exactly as idempotent as its target.\n\nIt **accepts arbitrary parameters**, which are forwarded to the target module, and supports two forms:\n\n- **Classic `name:` form** — set `name:` to the target module (for example `file.touch`); every other non-`name`, non-directive key is forwarded as the target's config.\n- **Dotted-key form** (newer Salt style) — a single dotted key (for example `file.touch:`) names the target and its map value is the argument set.\n\nIf neither a `name:` nor a dotted `<module.func>:` key is present, the build fails with `no target module`. Requisite and generic-attribute keys (`require`, `watch`, `onlyif`, `order`, …) declared alongside the target are recognized as directives and carried through to the target — never mistaken for a dotted module key. The `module.run` state ID is passed to the target as ITS state ID, so the target's primary-parameter-defaults-to-ID convention applies to the `module.run` ID. Other states reference this one as `module.run:<id>` in their requisites — not by the wrapped target's name.",
+      "Effects": {
+        "Check": "Delegates to the target module's Check (the target is built once at compile time with the resolved arguments).",
+        "Apply": "Delegates to the target module's Apply.",
+        "Revert": "Delegates to the target module's Revert.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Wrap a state module under a descriptive ID (classic form)",
+          "Kind": "state",
+          "Explanation": "name selects the target; the remaining keys (path, makedirs) are forwarded to file.touch.",
+          "Code": "mark-provisioned:\n  module.run:\n    - name: file.touch\n    - path: /var/lib/myapp/.provisioned\n    - makedirs: true\n"
+        },
+        {
+          "Title": "Dotted-key form with a requisite",
+          "Kind": "state",
+          "Explanation": "The dotted key names the target; the requisite alongside it is carried through, never treated as the target.",
+          "Code": "refresh-cache:\n  module.run:\n    - cmd.run:\n        command: apt-get update\n    - onchanges:\n      - \"pkgrepo.managed:docker\"\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "State registry targets only",
+          "Body": "The target must be a module registered in Zester's STATE registry (a built-in state module or a Starlark custom module). This diverges from Salt: Salt's `module.run` invokes EXECUTION modules, whereas Zester resolves the target in its STATE registry — Zester's remote-execution functions (`pkg.version`, `service.restart`, …) cannot be targeted here, so call them directly from the CLI instead."
+        },
+        {
+          "Level": "info",
+          "Title": "Idempotent as its target (unlike Salt)",
+          "Body": "Unlike Salt — where `module.run` always reports a change — Zester delegates the full Check/Apply/Revert lifecycle to the target module, so `module.run` is exactly as idempotent as whatever it wraps."
+        }
+      ],
+      "Divergences": null,
+      "SeeAlso": null
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "mount.mounted",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a filesystem is mounted at a mount point and recorded in fstab.",
+      "Description": "`mount.mounted` ensures SOMETHING is mounted at the mount point and, with `persist` (the default), that the declared fstab entry — `device`, `fstype`, `opts`, `dump`, and `pass` — is present. The mount point defaults to the state ID. `device` is required; `fstype` defaults to `ext4` and `opts` to `defaults`.\n\n**Deliberately not compared:** the LIVE mount's device/fstype/options. Comparing the declared fstab-language configuration against the kernel's `/proc/mounts` view needs Salt-style normalization (fstab-only options like `nofail`/`_netdev` never appear in `/proc/mounts`, negotiated fstypes like `nfs`→`nfs4`, `UUID=`/`LABEL=` device aliasing) — without it every mismatch would escalate to an unmount+remount of a live production filesystem on every run. That facet is deferred until the normalization exists; silent blindness beats production unmounts.",
+      "Effects": {
+        "Check": "Probes whether anything is mounted at the mount point (by reading `/proc/mounts`). With `persist` (the default) it also verifies the `/etc/fstab` entry EXACTLY matches the declared device, fstype, options, dump, and pass. Reports a change when the mount point is unmounted, or when the fstab entry is missing or differs. It deliberately does NOT compare the live mount's own device/fstype/options (see the deferred live-facet note), so a mount already serving the point never re-triggers a churn.",
+        "Apply": "Re-probes the mount state (a self-contained flow: a watch-forced Apply bypasses Check). With `persist`, it writes or updates the fstab entry when it is missing or mismatched. It mounts the device ONLY when nothing is currently mounted at the point — an existing mount is never unmounted or remounted, even one that would look \"wrong\" under a naive live comparison. A fully converged entry (mounted, fstab matches) is a clean no-op. Reports the device, mount point, fstype, options, and persist flag in its details.",
+        "Revert": "Undoes only what this run's Apply did: it unmounts a filesystem THIS Apply mounted and removes an fstab entry THIS Apply added — nothing else. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op; it never unmounts a live filesystem or edits fstab for a mount it did not create.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Mount a data volume and record it in fstab",
+          "Kind": "state",
+          "Explanation": "The mount point defaults to the state ID; device is required; persist (default true) writes the fstab entry.",
+          "Code": "/mnt/data:\n  mount.mounted:\n    - device: /dev/sdb1\n    - fstype: xfs\n    - opts: defaults,noatime\n    - pass: 2\n"
+        },
+        {
+          "Title": "Mount an NFS export",
+          "Kind": "state",
+          "Explanation": "fstab-only options like nofail/_netdev are recorded in fstab but never compared against the live mount.",
+          "Code": "nfs-share:\n  mount.mounted:\n    - name: /mnt/share\n    - device: 10.0.0.5:/vol\n    - fstype: nfs\n    - opts: defaults,nofail,_netdev\n    - require:\n      - \"pkg.installed:nfs-common\"\n"
+        },
+        {
+          "Title": "Mount a device ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the mount point; device is a key=value.",
+          "Code": "zester 'db*' mount.mounted /mnt/data device=/dev/sdb1 fstype=xfs"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "warning",
+          "Title": "The live mount's config is not compared",
+          "Body": "mount.mounted compares only mount-point PRESENCE and the fstab entry — never the live mount's own device/fstype/options. Reconciling fstab-language configuration with the kernel's `/proc/mounts` view needs normalization (fstab-only options, negotiated fstypes, UUID=/LABEL= aliasing) that does not yet exist; without it, a naive comparison would perpetually escalate to unmounting a live production filesystem. Apply mounts only when nothing is mounted at the point and NEVER unmounts."
+        },
+        {
+          "Level": "info",
+          "Title": "persist defaults to true; integer dump/pass are honored",
+          "Body": "`persist` defaults to true (the fstab entry is written so the mount survives a reboot); set `persist: false` to mount without editing fstab. Under the uniform decoder an integer `dump`/`pass` (including a reactor-dispatched msgpack-sized integer) coerces to the integer field, and an integer or truthy-string `persist` (`1`, `\"true\"`) is honored where the legacy `.(int)`/`.(bool)` assertions silently dropped them."
+        }
+      ],
+      "Divergences": [
+        "BD-1",
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "mount point path; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "device",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "device or source to mount (a block device, UUID=/LABEL= alias, or NFS export); required",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "fstype",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "filesystem type (ext4, xfs, nfs, …); defaults to ext4",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "ext4",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "opts",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "mount options recorded in fstab (comma-separated); defaults to \"defaults\"",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "defaults",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "dump",
+        "Aliases": null,
+        "GoType": "int",
+        "SemanticType": "",
+        "Usage": "fstab dump field (fifth column); defaults to 0",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "integer"
+        }
+      },
+      {
+        "Name": "pass",
+        "Aliases": null,
+        "GoType": "int",
+        "SemanticType": "",
+        "Usage": "fstab fsck pass-order field (sixth column); defaults to 0",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "integer"
+        }
+      },
+      {
+        "Name": "persist",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "record the entry in fstab so it survives a reboot; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "true",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "pip.installed",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a Python package is installed via pip, optionally pinned or from a requirements file.",
+      "Description": "`pip.installed` ensures a Python package (`name`, defaulting to the state ID) is installed via `bin` (defaulting to `pip3`). Declaring `requirements` switches to installing from a requirements.txt file instead — `name`/`version` are then ignored for the install itself, though `name` still names the state.",
+      "Effects": {
+        "Check": "With `requirements` set, ALWAYS reports a change: a requirements file cannot be verified without actually running the install. Otherwise runs `<bin> show <name>`; a non-zero exit means the package needs installing. When `version` is declared and the package is present, parses the `Version:` line from `pip show` output and reports a change on any mismatch (compared as strings, so pre-release suffixes matter).",
+        "Apply": "Package mode: `<bin> install <name>[==version]`. Requirements mode: `<bin> install -r <requirements>`. Reports the package and bin in its details.",
+        "Revert": "Package mode: `<bin> uninstall -y <name>`. Requirements mode: an explicit no-op (`Changed: false`) — there is no record of which packages a requirements file installed, so there is nothing safe to uninstall.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Install the latest version",
+          "Kind": "state",
+          "Explanation": "The package name defaults to the state ID.",
+          "Code": "requests:\n  pip.installed: []\n"
+        },
+        {
+          "Title": "Pin to a specific version",
+          "Kind": "state",
+          "Explanation": "version makes exact version equality part of the desired state.",
+          "Code": "requests:\n  pip.installed:\n    - version: \"2.28.0\"\n"
+        },
+        {
+          "Title": "Install from a requirements file",
+          "Kind": "state",
+          "Explanation": "requirements installs every dependency listed in the file; name is ignored for install.",
+          "Code": "myapp-dependencies:\n  pip.installed:\n    - requirements: /opt/myapp/requirements.txt\n    - require:\n      - pkg.installed:python3-pip\n"
+        },
+        {
+          "Title": "Use a virtual environment's pip",
+          "Kind": "state",
+          "Explanation": "bin overrides the pip binary, e.g. to target a venv.",
+          "Code": "myapp-venv-requests:\n  pip.installed:\n    - name: requests\n    - bin: /opt/myapp/venv/bin/pip\n"
+        },
+        {
+          "Title": "Install a package ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the package name.",
+          "Code": "zester '*' pip.installed requests"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "bin must be on PATH (or an absolute path)",
+          "Body": "The module requires `pip3` (or the configured `bin`) to be resolvable. There is no cache refresh step; run `pip install --upgrade pip` separately if needed."
+        },
+        {
+          "Level": "info",
+          "Title": "Version comparison is string-based",
+          "Body": "Version comparison uses the `Version:` field from `pip show` output, compared as a string. Pre-release suffixes (e.g. `2.28.0rc1`) are compared literally, not semantically."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "pip package name; defaults to the state ID; ignored when requirements is set",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "version",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "optional pinned version (e.g. 1.2.3), appended as package==version",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "requirements",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "path to a requirements.txt file; when set, name is ignored for install",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "bin",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "path or name of the pip binary to use; defaults to pip3",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "pip3",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
     "HasSpec": true,
     "AlsoExecmod": false
   },
@@ -3170,6 +4475,230 @@
     "AlsoExecmod": false
   },
   {
+    "Module": "pkgrepo.managed",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Manage an apt or yum/dnf package repository definition.",
+      "Description": "`pkgrepo.managed` manages an apt or yum/dnf package repository definition file. On the Debian family it writes `/etc/apt/sources.list.d/<name>.list` (optionally fetching a signing key and refreshing the cache); on the RedHat family it writes `/etc/yum.repos.d/<name>.repo`. A PPA (`ppa:user/name`) is handled via `add-apt-repository`. The repository identifier defaults to the state ID and is used for both the default filename and the yum section header; `humanname` defaults to it. `enabled`, `gpgcheck`, and `refresh` default to `true`. Setting `ppa` also forces the Debian code path when the OS family cannot otherwise be detected.\n\nThe rendered repository file body is:\n\nDebian (`.list`):\n\n```\n# Managed by Zester: <humanname>\n<baseurl>\n```\n\nRedHat (`.repo`):\n\n```ini\n[<name>]\nname=<humanname>\nbaseurl=<baseurl>\nenabled=1\ngpgcheck=1\ngpgkey=<key_url>          # only when key_url is set\n```",
+      "Effects": {
+        "Check": "Errors when the OS family cannot be determined. A **PPA** repo always reports a change — a PPA cannot be verified from a single file, so the idempotent `add-apt-repository` is re-run on every Apply. Otherwise it renders the desired file content and compares it byte-for-byte with the current repo file; a missing or differing file needs a change, and a read failure other than \"file does not exist\" fails the check (it is never treated as a missing file, so an unreadable file is never blindly overwritten). On Debian with `key_url` declared it ALSO verifies the imported keyring file `/etc/apt/keyrings/zester-<name>.gpg` exists — the key URL appears nowhere in the compared `.list` bytes, so a matching repo file with a never-imported (or deleted) signing key still reports a change. This is presence-only: a key rotated in place at the same URL is not detected. RedHat needs no keyring probe — `gpgkey=` is part of the compared content and dnf fetches it at transaction time.",
+        "Apply": "On **Debian**: imports the signing key when `key_url` is set (`curl` writing DIRECTLY to the persistent keyring file `/etc/apt/keyrings/zester-<name>.gpg`, then `apt-key add`), then either runs `add-apt-repository -y <ppa>` or writes the `.list` file (creating the parent directory), then runs `apt-get update` when `refresh` is true. On **RedHat**: writes the `.repo` file, then runs `<mgr> makecache` when `refresh` is true. Reports the repo name, file, and family in its details.",
+        "Revert": "A PPA repo is removed via `add-apt-repository -r -y <ppa>`. A file-based repo has its definition file deleted; on Debian with `key_url` declared the keyring file `/etc/apt/keyrings/zester-<name>.gpg` is removed too (an already-absent keyring is fine). Revert removes the whole repo file rather than restoring any prior content.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Apt repository",
+          "Kind": "state",
+          "Explanation": "On apt, baseurl holds the full deb line; key_url is fetched and imported.",
+          "Code": "docker:\n  pkgrepo.managed:\n    - humanname: Docker CE\n    - baseurl: \"deb [arch=amd64] https://download.docker.com/linux/ubuntu jammy stable\"\n    - key_url: https://download.docker.com/linux/ubuntu/gpg\n"
+        },
+        {
+          "Title": "Yum repository",
+          "Kind": "state",
+          "Explanation": "On yum, baseurl is the baseurl= value; enabled/gpgcheck default to true.",
+          "Code": "epel:\n  pkgrepo.managed:\n    - humanname: Extra Packages for Enterprise Linux\n    - baseurl: \"https://download.fedoraproject.org/pub/epel/9/Everything/x86_64/\"\n    - gpgcheck: false\n"
+        },
+        {
+          "Title": "PPA",
+          "Kind": "state",
+          "Explanation": "A PPA is added via add-apt-repository; setting ppa forces the Debian path.",
+          "Code": "deadsnakes:\n  pkgrepo.managed:\n    - ppa: \"ppa:deadsnakes/ppa\"\n"
+        },
+        {
+          "Title": "Add an apt repository ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the repository name; baseurl is a key=value.",
+          "Code": "zester 'web*' pkgrepo.managed docker baseurl='deb https://download.docker.com/linux/ubuntu jammy stable'"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "warning",
+          "Title": "On apt, baseurl holds the full deb line",
+          "Body": "On apt, `baseurl` holds the ENTIRE `deb ...` source line. In Salt the deb line goes in `name:`; Zester keeps `name` as the repo identifier and reuses `baseurl` for both families."
+        },
+        {
+          "Level": "info",
+          "Title": "Signing-key convergence is presence-only",
+          "Body": "On Debian a declared `key_url` is fetched to `/etc/apt/keyrings/zester-<name>.gpg` and imported; Check verifies that keyring file EXISTS (the key URL is invisible in the compared `.list` bytes, so a matching repo file with a never-imported key still needs a change). Detection is presence-only: a key rotated in place at the SAME URL is not re-detected — delete the keyring file to force a re-import. RedHat needs no keyring probe: `gpgkey=` is part of the compared `.repo` content and dnf fetches it at transaction time."
+        },
+        {
+          "Level": "warning",
+          "Title": "Apt keys use the deprecated apt-key add",
+          "Body": "Apt keys are imported with the deprecated `apt-key add`; Salt supports `signed-by` / keyring-file placement. The key bytes are written direct-to-disk with `curl -o` (never routed through captured stdout, which would corrupt a binary non-armored `.gpg` key)."
+        },
+        {
+          "Level": "info",
+          "Title": "Unsupported Salt parameters",
+          "Body": "Salt's `disabled`, `mirrorlist`, `gpgautoimport`, `comps`, and `architectures` parameters are not supported. Reverting removes the whole repo file rather than restoring prior content."
+        },
+        {
+          "Level": "info",
+          "Title": "enabled/gpgcheck/refresh default to true; integer values honored",
+          "Body": "`enabled`, `gpgcheck`, and `refresh` default to `true`; set one `false` to override. Under the uniform decoder an integer (`1`/`0`) or a truthy/falsy string is honored for each of them, where the legacy `.(bool)` assertion silently dropped a non-bool value to the default."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "pkg.installed"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "repository identifier, used for the default filename and the yum section header; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "humanname",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "descriptive display name (yum name= field / apt comment line); defaults to the repository name",
+        "Required": false,
+        "Primary": false,
+        "Lazy": true,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "baseurl",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "the repository line — on apt the full \"deb ...\" source line, on yum the baseurl= value",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "ppa",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "apt PPA reference (e.g. \"ppa:user/name\"); when set and baseurl is empty the repo is added via add-apt-repository, and it forces the Debian code path when the OS family cannot be detected",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "file",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "override the default repository definition file path",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "key_url",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "signing-key URL; on apt it is fetched to /etc/apt/keyrings/zester-<name>.gpg and imported via apt-key add, on yum it becomes the gpgkey= field",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "enabled",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "the yum enabled= field (1/0), ignored on apt; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "true",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "gpgcheck",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "the yum gpgcheck= field (1/0), ignored on apt; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "true",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "refresh",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "refresh the package cache after writing the repo (apt-get update / <mgr> makecache); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "true",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
     "Module": "service.dead",
     "Kind": "state",
     "Doc": {
@@ -3315,6 +4844,75 @@
         }
       }
     ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "service.enabled",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a service is enabled to start at boot.",
+      "Description": "`service.enabled` ensures a service (`name`, defaulting to the state ID) is enabled to start at boot. It manages ONLY the boot-time enablement — it does not start, stop, or otherwise affect whether the service is currently running (use `service.running` for that).",
+      "Effects": {
+        "Check": "Reads the service's boot-enablement (via the service manager, e.g. `systemctl is-enabled --quiet <service>`). Reports no change when it is already enabled, and a change when it is not.",
+        "Apply": "Re-reads the enablement (a self-contained flow: a watch-forced Apply bypasses Check). An already-enabled service is a clean no-op that does NOT arm the revert memo. Otherwise it enables the service and records that this run did so, reporting the service name and manager in its details.",
+        "Revert": "Disables the service ONLY when this run's Apply actually enabled it (the revert memo). A fresh instance (a standalone revert) or a no-op Apply recorded nothing and is an explicit clean no-op — it never disables a service this run did not enable.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Enable a service at boot",
+          "Kind": "state",
+          "Explanation": "The service name defaults to the state ID.",
+          "Code": "sshd:\n  service.enabled: []\n"
+        },
+        {
+          "Title": "Enable a service under a descriptive ID",
+          "Kind": "state",
+          "Explanation": "name selects the managed service when the state ID is not the service name.",
+          "Code": "enable-nginx-boot:\n  service.enabled:\n    - name: nginx\n"
+        },
+        {
+          "Title": "Enable a service ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the service name.",
+          "Code": "zester 'web*' service.enabled nginx"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Boot enablement only, not running state",
+          "Body": "`service.enabled` manages only whether the service starts at boot; it never starts or stops the service. Pair it with `service.running` (which can also enable) when the service must be both running now and enabled at boot."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "service.running",
+        "service.dead"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "service name to enable at boot; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
     "HasSpec": true,
     "AlsoExecmod": false
   },
@@ -3469,6 +5067,847 @@
         }
       }
     ],
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "ssh_auth.absent",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure an SSH public key is absent from a user's authorized_keys.",
+      "Description": "`ssh_auth.absent` ensures an SSH public key line is NOT present in a user's `authorized_keys`. The key is given as `name` (defaulting to the state ID) and matched on its BLOB (the base64 body), so a bare blob or a full key line both identify the same authorized line. The managed file is resolved from `config` when set or the `user`'s home directory — one of `user` or `config` is required.",
+      "Effects": {
+        "Check": "Resolves the authorized_keys path (from `config`, or the `user`'s home) and reads it (a non-not-exist read error fails the phase). Reports no change when the file does not exist or no line carries the key blob; otherwise reports a change.",
+        "Apply": "Reads authorized_keys and, when a line carries the key blob, memoizes the prior content for revert and rewrites the file with every matching line removed. A missing file or an already-absent key is a clean no-op. Reports the path and user in its details.",
+        "Revert": "Restores the authorized_keys content this run's Apply captured before removing the key (with 0600 mode). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a user's authorized_keys it did not touch.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Revoke a key for a user",
+          "Kind": "state",
+          "Explanation": "name is the key blob to remove; matched on the blob.",
+          "Code": "AAAAB3NzaC1yc2EAAAADAQABAAAB...:\n  ssh_auth.absent:\n    - user: deploy\n"
+        },
+        {
+          "Title": "Revoke a key ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the key blob; user is a key=value.",
+          "Code": "zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Comment and blank lines are preserved",
+          "Body": "The `authorized_keys` file is rewritten in memory with existing comment (`#`) and blank lines kept verbatim; every line carrying the key blob is removed."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "`config` is used as the LITERAL `authorized_keys` path (Salt's `config` is relative to the user's home directory). The `user` is resolved via the peel's OS user database. Salt's `options` and `source` parameters are not supported."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "ssh_auth.present"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "public key blob (or full key line) to remove; matched on the blob; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "user",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "account whose authorized_keys is managed; user or config is required",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "config",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "explicit authorized_keys path; user or config is required (config takes precedence over the user's home)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "ssh_auth.present",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure an SSH public key is present in a user's authorized_keys.",
+      "Description": "`ssh_auth.present` ensures an SSH public key line is present in a user's `authorized_keys`, creating `~/.ssh` (0700) and `authorized_keys` (0600) as needed. The key is given as `name` (defaulting to the state ID): a bare base64 blob is combined with `enc` (default `ssh-rsa`) and an optional `comment`, while a full `\"ssh-… AAAA… comment\"` line is used verbatim. Idempotency keys on the key BLOB, so re-running with a changed comment or encoding replaces the matching line rather than duplicating it. The managed file is the target user's `authorized_keys`, resolved from `config` when set or the account's home directory otherwise — one of `user` or `config` is required.",
+      "Effects": {
+        "Check": "Resolves the authorized_keys path (from `config`, or the `user`'s home) and reads it (a non-not-exist read error fails the phase). Reports a change when no line carries the desired key blob, or when the matching line differs from the desired line (a changed comment or encoding).",
+        "Apply": "Ensures `~/.ssh` exists (0700), reads authorized_keys, memoizes its prior content (or that it did not exist) for revert, and rewrites it so a single line carries the key blob — replacing any existing line for the same blob and deduplicating, or writing the file (0600) when absent. An already-present identical line is a clean no-op. Reports the path and user in its details.",
+        "Revert": "Restores what this run's Apply changed: an authorized_keys that pre-existed is rewritten with its captured prior content and 0600 mode; a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a user's authorized_keys it did not touch.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Authorize a key for a user",
+          "Kind": "state",
+          "Explanation": "name is the key blob; enc defaults to ssh-rsa; comment labels the line.",
+          "Code": "AAAAB3NzaC1yc2EAAAADAQABAAAB...:\n  ssh_auth.present:\n    - user: deploy\n    - comment: deploy@ci\n"
+        },
+        {
+          "Title": "Authorize a full ed25519 key line",
+          "Kind": "state",
+          "Explanation": "A full \"ssh-… AAAA… comment\" line is used verbatim; enc/comment are ignored.",
+          "Code": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... alice@laptop:\n  ssh_auth.present:\n    - user: alice\n"
+        },
+        {
+          "Title": "Authorize a key ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the key blob; user/enc/comment are key=values.",
+          "Code": "zester 'web*' ssh_auth.present AAAAB3Nza... user=deploy enc=ssh-rsa"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Identity is the key blob",
+          "Body": "The managed line's identity is the key BLOB (its base64 body). Re-running with a different `comment` or `enc` replaces the matching line in place rather than adding a duplicate. Provide either a bare blob (combined with `enc`/`comment`) or a full key line (used verbatim)."
+        },
+        {
+          "Level": "info",
+          "Title": "user or config selects the file",
+          "Body": "The managed file is resolved from `config` (an explicit authorized_keys path) when set, otherwise from the `user`'s home directory (`~user/.ssh/authorized_keys`). One of the two is required."
+        },
+        {
+          "Level": "info",
+          "Title": "Comment and blank lines are preserved",
+          "Body": "The `authorized_keys` file is rewritten in memory: existing comment (`#`) and blank lines are kept verbatim, and only the line carrying the key blob is added, replaced in place, or deduplicated."
+        },
+        {
+          "Level": "info",
+          "Title": "Divergences from Salt",
+          "Body": "`config` is used as the LITERAL `authorized_keys` path (so it must be absolute to be meaningful), whereas Salt's `config` is relative to the user's home directory (default `.ssh/authorized_keys`). Salt's `options` (key options such as `no-pty`) and `source` (key-file URL) parameters are not supported. The `user` is resolved via the peel's OS user database, and the `.ssh` directory and file are written by the peel's file provider — ownership is not changed to the target user."
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "ssh_auth.absent"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "public key blob (the base64 body) or a full key line; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "user",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "account whose authorized_keys is managed; user or config is required",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "enc",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "key encoding/type (ssh-rsa, ssh-ed25519, …); defaults to ssh-rsa; ignored when name is a full key line",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "ssh-rsa",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "comment",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "optional trailing comment on the key line",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "config",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "explicit authorized_keys path; user or config is required (config takes precedence over the user's home)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "sysctl.present",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a kernel parameter is set to a value at runtime and, by default, persisted.",
+      "Description": "`sysctl.present` ensures a kernel parameter (`name`, defaulting to the state ID) is set to the desired `value` at runtime and, with `persist` (the default), that the same value is recorded in the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) so it survives a reboot. `value` is required. With `persist` enabled a runtime-only match — for example a manual `sysctl -w` — counts as drift, because the value would not survive a reboot.",
+      "Effects": {
+        "Check": "Reads the current runtime value (via `sysctl -n`) and reports a change when it differs from `value`. With `persist` (the default) it ALSO reads the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) and reports a change when the key is absent from it or persisted with a different value — so a runtime-only match is drift. A non-not-exist read error on the drop-in fails the phase rather than being treated as \"no entry\".",
+        "Apply": "Re-reads the runtime value and, with `persist`, the drop-in (a self-contained flow: a watch-forced Apply bypasses Check). It sets the runtime value (via `sysctl -w key=value`) only when it differs and writes the drop-in entry (`/etc/sysctl.d/99-zester.conf`) only when it is missing or wrong — each facet is memoized for revert independently. A fully converged key is a clean no-op. Reports the key, value, previous runtime value, and persist flag in its details.",
+        "Revert": "Undoes only the facets this run's Apply actually changed. A runtime value Apply set is restored to its pre-Apply value; a drop-in entry Apply changed is restored to its prior value (or removed outright when Apply introduced it) — never re-persisting the old RUNTIME value. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op; it never writes the zero value or invents a persist entry.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Enable IP forwarding persistently",
+          "Kind": "state",
+          "Explanation": "The parameter name defaults to the state ID; persist (default true) writes the drop-in entry.",
+          "Code": "net.ipv4.ip_forward:\n  sysctl.present:\n    - value: \"1\"\n"
+        },
+        {
+          "Title": "Tune swappiness at runtime only",
+          "Kind": "state",
+          "Explanation": "persist: false sets the runtime value without recording a drop-in entry.",
+          "Code": "vm.swappiness:\n  sysctl.present:\n    - value: \"10\"\n    - persist: false\n"
+        },
+        {
+          "Title": "Set a kernel parameter ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the parameter name; value is a key=value.",
+          "Code": "zester '*' sysctl.present net.ipv4.ip_forward value=1"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "persist defaults to true and verifies the drop-in",
+          "Body": "`persist` defaults to true: the value is written to the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) AND that entry is verified during Check, so a runtime-only change (a manual `sysctl -w`) reads as drift because it would not survive a reboot. Set `persist: false` to manage only the runtime value. Under the uniform decoder an integer or truthy-string `persist` (`1`, `\"true\"`) is honored where the legacy `.(bool)` assertion dropped it."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "kernel parameter name (e.g. net.ipv4.ip_forward); defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "value",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "desired parameter value; required",
+        "Required": true,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "persist",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "persist the value in a sysctl drop-in so it survives a reboot; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "true",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "test.configurable_test_state",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Result and change reporting fully driven by config.",
+      "Description": "`test.configurable_test_state` lets a state file dial in an exact outcome: `result` selects success or failure and `changes` selects whether a change is reported — each defaulting to true. Check always forces Apply, so the configuration alone controls the reported result. `comment` customizes the message (and, on failure, the error).",
+      "Effects": {
+        "Check": "Always reports that a change is needed so Apply runs and fully controls the reported outcome.",
+        "Apply": "When `result` is true, succeeds with Changed set to `changes` and Details `{\"result\": \"true\"}` (plus `comment` when set). When `result` is false, fails: returns an error carrying `comment` (or `configured failure`) together with Changed set to `changes` and Details `{\"result\": \"false\"}` (plus `comment` when set) — so a change and the comment can be reported on failure too.",
+        "Revert": "No-op (Changed: false).",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Succeed without reporting a change",
+          "Kind": "state",
+          "Explanation": "result true + changes false models a healthy, unchanged resource.",
+          "Code": "scenario:\n  test.configurable_test_state:\n    - result: true\n    - changes: false\n    - comment: \"healthy, nothing changed\"\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Boolean parameters accept 1/0 and truthy strings",
+          "Body": "Under the uniform decoder `result` and `changes` accept a real boolean, the integers `1` (true) and `0` (false), and the case-insensitive truthy/falsy strings (`true`/`yes`/`on` and `false`/`no`/`off`) — so a reactor-dispatched or CLI value is honored where the legacy `.(bool)` assertion silently kept the default. Any other value (for example the integer `2`, or Salt's `Sometimes`/`Random`) is a decode error, not a silent fallback."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "test.succeed_with_changes",
+        "test.fail_without_changes"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "result",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "whether the state succeeds; false makes it fail (with the comment message, or \"configured failure\"); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "true",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "changes",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "whether the state reports Changed: true (honored on both success and failure); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "true",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "comment",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "message included in the result details and, on failure, the error",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "test.fail_without_changes",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Always fails, reporting no changes.",
+      "Description": "`test.fail_without_changes` always fails and reports no changes — useful for testing `onfail` chains and failure propagation. The `comment` parameter customizes the error message; when omitted the built-in message `failure without changes` is used.",
+      "Effects": {
+        "Check": "Always reports that a change is needed so Apply runs and the failure is surfaced.",
+        "Apply": "Always fails: returns an error carrying `comment` (or `failure without changes` when unset) together with Details `{\"result\": \"false\", \"comment\": <message>}`, and Changed: false.",
+        "Revert": "No-op (Changed: false).",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Simulate a failure",
+          "Kind": "state",
+          "Explanation": "The comment becomes the error message.",
+          "Code": "simulated-failure:\n  test.fail_without_changes:\n    - comment: \"primary service unavailable\"\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Use in onfail chains",
+          "Body": "Hang an `onfail` requisite on another state so it runs only when this one fails:\n\n```yaml\nfallback:\n  cmd.run:\n    - command: /usr/local/bin/failover.sh\n    - onfail:\n      - \"test.fail_without_changes:simulated-failure\"\n```"
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "test.succeed_with_changes",
+        "test.configurable_test_state"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "comment",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "message included in the error and result details; defaults to \"failure without changes\"",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "test.nop",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "A no-op that always succeeds and reports no changes.",
+      "Description": "`test.nop` is a placeholder state that always succeeds and reports no changes. Check reports the state as already satisfied, so under normal ordering Apply does not even run — useful as a requisite anchor or an inert placeholder.",
+      "Effects": {
+        "Check": "Reports NeedsChange: false — the state is always already satisfied, so the runner normally skips Apply entirely.",
+        "Apply": "If reached (for example via a watch-forced apply), performs no work: returns Changed: false with Details `{\"result\": \"true\"}`.",
+        "Revert": "No-op (Changed: false).",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "An inert placeholder",
+          "Kind": "state",
+          "Explanation": "test.nop is satisfied immediately and never touches the system.",
+          "Code": "placeholder:\n  test.nop: []\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Unimplemented Salt test states",
+          "Body": "Salt's `test.show_notification` and `test.mod_watch` behaviors are not implemented; the Zester test helpers are `test.ping`, `test.nop`, `test.fail_without_changes`, `test.succeed_with_changes`, and `test.configurable_test_state`."
+        }
+      ],
+      "Divergences": null,
+      "SeeAlso": [
+        "test.ping",
+        "test.succeed_with_changes",
+        "test.fail_without_changes",
+        "test.configurable_test_state"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "test.ping",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "A simple liveness check that always succeeds.",
+      "Description": "`test.ping` is a no-op \"are you alive?\" check — the Zester equivalent of Salt's `test.ping`. It takes no parameters of its own and always succeeds, returning `{\"result\": \"true\"}` in its result details.",
+      "Effects": {
+        "Check": "Always reports that a change is needed, so the runner proceeds to Apply and the result is returned.",
+        "Apply": "Performs no work: returns Changed: false with Details `{\"result\": \"true\"}`.",
+        "Revert": "No-op (Changed: false) — there is nothing to undo.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Ping all peels",
+          "Kind": "cli",
+          "Explanation": "The bare invocation checks liveness across every matched peel.",
+          "Code": "zester '*' test.ping"
+        },
+        {
+          "Title": "Ping a specific peel",
+          "Kind": "cli",
+          "Explanation": "Target a single peel by id.",
+          "Code": "zester 'web-01' test.ping"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "test.nop"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "test.succeed_with_changes",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Always succeeds and reports that changes were made.",
+      "Description": "`test.succeed_with_changes` always succeeds and reports `Changed: true` — useful for testing `watch` and `onchanges` chains. The optional `comment` parameter is included in the result details when set.",
+      "Effects": {
+        "Check": "Always reports that a change is needed so Apply runs.",
+        "Apply": "Always succeeds with Changed: true and Details `{\"result\": \"true\"}` (plus `comment` when set).",
+        "Revert": "No-op (Changed: false).",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Simulate a change",
+          "Kind": "state",
+          "Explanation": "The state always reports Changed: true.",
+          "Code": "simulated-change:\n  test.succeed_with_changes: []\n"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Use in watch / onchanges chains",
+          "Body": "Hang a `watch` or `onchanges` requisite on another state so it reacts to this one's reported change:\n\n```yaml\nreactor:\n  cmd.run:\n    - command: echo \"reacting to change\"\n    - onchanges:\n      - \"test.succeed_with_changes:simulated-change\"\n```"
+        }
+      ],
+      "Divergences": [
+        "BD-6"
+      ],
+      "SeeAlso": [
+        "test.fail_without_changes",
+        "test.configurable_test_state"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "comment",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "optional message included in the result details",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "timezone.system",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure the system timezone is set to a desired value.",
+      "Description": "`timezone.system` ensures the system timezone (`name`, defaulting to the state ID) is set. It uses `timedatectl` as the primary mechanism, falling back to writing `/etc/timezone` and invoking `dpkg-reconfigure` on systems without it (non-systemd). `utc` additionally sets the hardware clock to UTC.",
+      "Effects": {
+        "Check": "Reads the current timezone via `timedatectl show --property=Timezone --value`, falling back to `/etc/timezone` when `timedatectl` fails or is unavailable. Reports a change when the current value does not match `name`.",
+        "Apply": "Reads and remembers the current timezone (for Revert), then runs `timedatectl set-timezone <name>`. If that fails, it writes `<name>` to `/etc/timezone` and runs `dpkg-reconfigure -f noninteractive tzdata` instead. When `utc` is set, it additionally runs `timedatectl set-local-rtc 0`. Reports the timezone and its previous value in its details.",
+        "Revert": "Restores the timezone that was active immediately before this run's Apply, via `timedatectl set-timezone <previous>`. If Apply was never called on this instance the previous timezone is unknown, and Revert is an explicit no-op rather than a guess.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Set the timezone to UTC",
+          "Kind": "state",
+          "Explanation": "The timezone defaults to the state ID.",
+          "Code": "UTC:\n  timezone.system: []\n"
+        },
+        {
+          "Title": "Set a regional timezone and sync the hardware clock",
+          "Kind": "state",
+          "Explanation": "utc: true additionally sets the hardware clock to UTC.",
+          "Code": "America/Chicago:\n  timezone.system:\n    - utc: true\n    - require:\n      - pkg.installed:tzdata\n"
+        },
+        {
+          "Title": "Use an explicit name parameter",
+          "Kind": "state",
+          "Explanation": "name overrides the state ID as the desired timezone.",
+          "Code": "system-timezone:\n  timezone.system:\n    - name: Europe/Berlin\n"
+        },
+        {
+          "Title": "Set the timezone ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the timezone string.",
+          "Code": "zester '*' timezone.system America/New_York"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "Timezone strings are IANA names",
+          "Body": "`name` must match an entry in the IANA Time Zone Database (e.g. `America/New_York`, not `EST`)."
+        },
+        {
+          "Level": "info",
+          "Title": "Non-systemd fallback",
+          "Body": "On systems without `timedatectl` (non-systemd), Apply falls back to writing `/etc/timezone` and invoking `dpkg-reconfigure -f noninteractive tzdata`; the `dpkg-reconfigure` binary must be available there."
+        },
+        {
+          "Level": "info",
+          "Title": "utc only affects the hardware clock",
+          "Body": "The `utc` parameter only controls whether the hardware clock is set to UTC (`timedatectl set-local-rtc 0`); it does not change the timezone string itself."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": null
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "desired timezone (e.g. America/New_York, UTC); defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "utc",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "set the hardware clock to UTC (timedatectl set-local-rtc 0); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
+    "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "user.absent",
+    "Kind": "state",
+    "Doc": {
+      "Summary": "Ensure a user account does not exist on the system.",
+      "Description": "`user.absent` ensures the named user account is removed. The username defaults to the state ID. With `purge` the account's home directory and mail spool are removed as well (`userdel -r`); without it only the account is deleted. `force` is accepted for Salt compatibility but is not yet wired into the execution layer, so it currently has no effect.",
+      "Effects": {
+        "Check": "Looks up the user by name and reports a change only when the account exists; an already-absent user needs no change.",
+        "Apply": "Re-verifies existence (a self-contained flow: a watch-forced Apply bypasses Check, and `userdel` on a nonexistent user exits non-zero), then deletes the account through the user provider — removing the home directory and mail spool as well when `purge` is set (`userdel -r`). An already-absent user is a clean no-op. Reports the username and the purge flag in its details.",
+        "Revert": "Cannot restore a deleted user: the original account data (password hash, groups, uid) is not recorded and cannot be re-derived, so Revert is an explicit no-op.",
+        "Execution": ""
+      },
+      "Examples": [
+        {
+          "Title": "Remove a user",
+          "Kind": "state",
+          "Explanation": "The username defaults to the state ID; the home directory is left in place.",
+          "Code": "olduser:\n  user.absent: []\n"
+        },
+        {
+          "Title": "Remove a user and purge the home directory",
+          "Kind": "state",
+          "Explanation": "purge runs userdel -r, removing the home directory and mail spool too.",
+          "Code": "remove-temp-user:\n  user.absent:\n    - name: tempuser\n    - purge: true\n"
+        },
+        {
+          "Title": "Remove a user after stopping their service",
+          "Kind": "state",
+          "Explanation": "require orders the service stop ahead of the account removal.",
+          "Code": "decommission-app:\n  user.absent:\n    - name: appuser\n    - purge: true\n    - require:\n      - \"cmd.run:stop-app-service\"\n"
+        },
+        {
+          "Title": "Remove a user ad hoc",
+          "Kind": "cli",
+          "Explanation": "The bare positional argument is the username; purge=true also removes the home directory.",
+          "Code": "zester 'web*' user.absent olduser purge=true"
+        }
+      ],
+      "Notes": [
+        {
+          "Level": "info",
+          "Title": "purge removes the home directory",
+          "Body": "`purge` runs `userdel -r`, removing the account's home directory and mail spool as well as the account; without it only the account is deleted and the home directory is left in place."
+        },
+        {
+          "Level": "info",
+          "Title": "force is not yet implemented",
+          "Body": "`force` is accepted for Salt compatibility but is not yet wired into the execution layer (it does not forward `userdel -f`), so it currently has no effect."
+        }
+      ],
+      "Divergences": [
+        "BD-2",
+        "BD-6",
+        "BD-7"
+      ],
+      "SeeAlso": [
+        "user.present"
+      ]
+    },
+    "Params": [
+      {
+        "Name": "name",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "username of the account to remove; defaults to the state ID",
+        "Required": false,
+        "Primary": true,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "string"
+        }
+      },
+      {
+        "Name": "purge",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "also remove the user's home directory and mail spool (userdel -r); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      },
+      {
+        "Name": "force",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "parsed for Salt compatibility but not yet implemented in the execution layer — currently has no effect; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "type": "boolean"
+        }
+      }
+    ],
+    "SemTypes": null,
     "HasSpec": true,
     "AlsoExecmod": false
   },

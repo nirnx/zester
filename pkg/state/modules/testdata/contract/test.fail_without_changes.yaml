@@ -1,0 +1,105 @@
+module: test.fail_without_changes
+# Permanent differential contract for the test.fail_without_changes migration.
+# Its one parameter is `comment` (a plain string, no default — an empty Comment
+# means "use the built-in `failure without changes` message" at apply time).
+# These cases were approved by the legacy-vs-new equivalence comparison while the
+# legacy constructor still existed (see the migration changelog); after its
+# deletion RunContract replays them as the permanent regression guard. Accept
+# cases pin the decoded exported-field projection; reject cases pin the error
+# kind. Per the §11 per-PARAM pinning standard the single string param gets its
+# own arms:
+#   BD-6 — a numeric comment is coerced to its string form (the legacy
+#          config["comment"].(string) assertion dropped a non-string to ""); a
+#          composite comment is rejected instead of silently dropped;
+#   PARITY (not a BD) — an absent or empty-string comment stays "" (the module
+#          substitutes the built-in message at apply time).
+cases:
+  - label: comment-string-yaml
+    universe: yaml
+    id: boom
+    input:
+      comment: primary unavailable
+    want:
+      Comment: primary unavailable
+  - label: comment-string-msgpack
+    universe: msgpack
+    id: boom
+    input:
+      comment: primary unavailable
+    want:
+      Comment: primary unavailable
+  - label: comment-string-cli
+    universe: cli
+    id: boom
+    input:
+      comment: unavailable
+    want:
+      Comment: unavailable
+  - label: comment-absent-yaml
+    universe: yaml
+    id: boom
+    input: {}
+    want:
+      Comment: ""
+  - label: comment-empty-string-yaml
+    universe: yaml
+    id: boom
+    input:
+      comment: ""
+    want:
+      Comment: ""
+  # BD-6: a numeric comment coerces to its string form (was dropped to "").
+  - label: comment-numeric-coerced-yaml
+    universe: yaml
+    id: boom
+    bd: BD-6
+    input:
+      comment: 123
+    want:
+      Comment: "123"
+  - label: comment-numeric-coerced-msgpack
+    universe: msgpack
+    id: boom
+    bd: BD-6
+    input:
+      comment: 123
+    want:
+      Comment: "123"
+  # A CLI comment=123 is already the string "123" (the CLI delivers everything as
+  # strings), so there is no legacy divergence — pinned as a plain accept.
+  - label: comment-numeric-cli
+    universe: cli
+    id: boom
+    input:
+      comment: 123
+    want:
+      Comment: "123"
+  # BD-6: a composite comment is rejected (was silently dropped to "").
+  - label: comment-composite-rejected-yaml
+    universe: yaml
+    id: boom
+    bd: BD-6
+    input:
+      comment:
+        - a
+        - b
+    want_error: wrong_type
+  - label: comment-composite-rejected-msgpack
+    universe: msgpack
+    id: boom
+    bd: BD-6
+    input:
+      comment:
+        - a
+        - b
+    want_error: wrong_type
+  # A reserved requisite key is not a parameter and does not break the decode.
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: boom
+    input:
+      comment: down
+      onfail:
+        - cmd.run:failover
+    want:
+      Comment: down

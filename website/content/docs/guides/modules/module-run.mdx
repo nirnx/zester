@@ -1,58 +1,55 @@
 ---
 title: "module.run"
+description: "Invoke another registered state module by name (Salt-compatibility escape hatch)."
 ---
 
-A Salt-compatibility escape hatch that invokes another **registered state module** by name. The target module is built at compile time with the supplied arguments, and Check/Apply/Revert are delegated to it — so idempotency is preserved.
+{/* zester-docgen:managed module="module.run" */}
 
 **Source**: `pkg/state/modules/module_run.go`
 
 ---
 
-## Parameters
+`module.run` is a Salt-compatibility escape hatch that invokes another **registered state module** by name. The target module is built at compile time with the supplied arguments and its Check/Apply/Revert are delegated to — so `module.run` is exactly as idempotent as its target.
 
-Two forms are supported.
+It **accepts arbitrary parameters**, which are forwarded to the target module, and supports two forms:
 
-### Classic `name:` form
+- **Classic `name:` form** — set `name:` to the target module (for example `file.touch`); every other non-`name`, non-directive key is forwarded as the target's config.
+- **Dotted-key form** (newer Salt style) — a single dotted key (for example `file.touch:`) names the target and its map value is the argument set.
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | `string` | **Yes*** | — | The target module (e.g. `file.touch`). Every other non-`name` key is forwarded as the target module's config. |
-
-```yaml
-run_it:
-  module.run:
-    - name: file.touch
-    - path: /var/run/flag
-```
-
-### Dotted-key form (newer Salt style)
-
-*Alternative to `name:`* — a single dotted key (e.g. `file.touch:`) names the target; its map value is the argument set. Requisites and generic attributes declared next to the dotted key are carried through.
-
-```yaml
-run_it:
-  module.run:
-    - file.touch:
-        path: /var/run/flag
-```
-
-If neither `name:` nor a dotted key is present, the builder fails with `no target module`.
-
-The state ID of the `module.run` state is passed to the target module as its state ID, so the target's primary-parameter-defaults-to-ID convention applies to the `module.run` ID.
-
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies). Requisite and attribute keys (`require`, `watch`, `onlyif`, `order`, ...) are recognized and never mistaken for a dotted module key.
+If neither a `name:` nor a dotted `<module.func>:` key is present, the build fails with `no target module`. Requisite and generic-attribute keys (`require`, `watch`, `onlyif`, `order`, …) declared alongside the target are recognized as directives and carried through to the target — never mistaken for a dotted module key. The `module.run` state ID is passed to the target as ITS state ID, so the target's primary-parameter-defaults-to-ID convention applies to the `module.run` ID. Other states reference this one as `module.run:<id>` in their requisites — not by the wrapped target's name.
 
 ---
 
-## Check / Apply / Revert Behavior
+## Parameters
 
-All three methods delegate directly to the target module instance. The state's `Name()` is `module.run:<id>` (requisites from other states must reference it as such).
+This module takes no parameters of its own.
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Delegates to the target module's Check (the target is built once at compile time with the resolved arguments).
+
+### Apply
+
+Delegates to the target module's Apply.
+
+### Revert
+
+Delegates to the target module's Revert.
+
 
 ---
 
 ## Examples
 
-**Wrap a state module under a descriptive ID:**
+### Wrap a state module under a descriptive ID (classic form)
+
+name selects the target; the remaining keys (path, makedirs) are forwarded to file.touch.
 
 ```yaml
 mark-provisioned:
@@ -62,7 +59,9 @@ mark-provisioned:
     - makedirs: true
 ```
 
-**Dotted-key form with a requisite:**
+### Dotted-key form with a requisite
+
+The dotted key names the target; the requisite alongside it is carried through, never treated as the target.
 
 ```yaml
 refresh-cache:
@@ -73,9 +72,16 @@ refresh-cache:
       - "pkgrepo.managed:docker"
 ```
 
+
 ---
 
-## Divergences from Salt
+## Notes
 
-- The target must be a module registered in the **state registry** (built-in state modules or Starlark custom modules). Salt's `module.run` invokes *execution* modules; Zester's remote-execution functions (`pkg.version`, `service.restart`, ...) cannot be targeted here — call them directly from the CLI instead.
-- Because the full Check/Apply/Revert lifecycle is delegated, `module.run` is as idempotent as its target — unlike Salt, where `module.run` always reports changes.
+> **State registry targets only**
+>
+> The target must be a module registered in Zester's STATE registry (a built-in state module or a Starlark custom module). This diverges from Salt: Salt's `module.run` invokes EXECUTION modules, whereas Zester resolves the target in its STATE registry — Zester's remote-execution functions (`pkg.version`, `service.restart`, …) cannot be targeted here, so call them directly from the CLI instead.
+
+> **Idempotent as its target (unlike Salt)**
+>
+> Unlike Salt — where `module.run` always reports a change — Zester delegates the full Check/Apply/Revert lifecycle to the target module, so `module.run` is exactly as idempotent as whatever it wraps.
+

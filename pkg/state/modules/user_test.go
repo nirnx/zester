@@ -724,7 +724,7 @@ func TestUserPresentNoProvider(t *testing.T) {
 
 func TestUserAbsentName(t *testing.T) {
 	mctx := testUserMctx(exectest.NewFakeUserExec())
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("olduser", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -737,7 +737,7 @@ func TestUserAbsentName(t *testing.T) {
 func TestUserAbsentCheckNotExists(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("nobody", map[string]any{})
 	if err != nil {
@@ -757,7 +757,7 @@ func TestUserAbsentCheckExists(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.PreCreate(&exec.UserInfo{Name: "olduser"})
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("olduser", map[string]any{})
 	if err != nil {
@@ -777,7 +777,7 @@ func TestUserAbsentApply(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.PreCreate(&exec.UserInfo{Name: "olduser"})
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("olduser", map[string]any{})
 	if err != nil {
@@ -802,7 +802,7 @@ func TestUserAbsentApplyWithPurge(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.PreCreate(&exec.UserInfo{Name: "olduser"})
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("olduser", map[string]any{
 		"purge": true,
@@ -825,7 +825,7 @@ func TestUserAbsentApplyWithPurge(t *testing.T) {
 
 func TestUserAbsentNameFromConfig(t *testing.T) {
 	mctx := testUserMctx(exectest.NewFakeUserExec())
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("remove-legacy", map[string]any{
 		"name": "legacy",
 	})
@@ -840,7 +840,7 @@ func TestUserAbsentNameFromConfig(t *testing.T) {
 
 func TestUserAbsentRequisites(t *testing.T) {
 	mctx := testUserMctx(exectest.NewFakeUserExec())
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"cmd.run:stop-service"},
 		"watch":     []any{"file.managed:/etc/cron.d/olduser"},
@@ -872,7 +872,7 @@ func TestUserAbsentApplyAlreadyAbsentNoOp(t *testing.T) {
 	fakeUser := exectest.NewFakeUserExec()
 	fakeUser.DeleteErr = fmt.Errorf("userdel: user does not exist (exit 6)")
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("ghost", map[string]any{})
 	if err != nil {
@@ -893,7 +893,7 @@ func TestUserAbsentApplyError(t *testing.T) {
 	fakeUser.PreCreate(&exec.UserInfo{Name: "olduser"}) // exists, so Delete IS attempted
 	fakeUser.DeleteErr = fmt.Errorf("user is logged in")
 	mctx := testUserMctx(fakeUser)
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("olduser", map[string]any{})
 	if err != nil {
@@ -908,7 +908,7 @@ func TestUserAbsentApplyError(t *testing.T) {
 
 func TestUserAbsentRevert(t *testing.T) {
 	mctx := testUserMctx(exectest.NewFakeUserExec())
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("olduser", map[string]any{})
 	if err != nil {
@@ -933,7 +933,7 @@ func TestUserAbsentNoProvider(t *testing.T) {
 			Command: exectest.NewFakeCommandExec(),
 		},
 	}
-	builder := NewUserAbsentBuilder(mctx)
+	builder := NewUserAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	_, err := builder("olduser", map[string]any{})
 	if err == nil {

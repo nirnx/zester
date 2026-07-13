@@ -11,6 +11,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 func testCmdMctx() *exec.ModuleContext {
@@ -24,7 +25,7 @@ func testCmdMctx() *exec.ModuleContext {
 
 func TestCmdRunBasic(t *testing.T) {
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("echo-test", map[string]any{
 		"command": "echo",
 		"args":    []any{"hello"},
@@ -60,7 +61,7 @@ func TestCmdRunBasic(t *testing.T) {
 
 func TestCmdRunShellCommand(t *testing.T) {
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("shell-test", map[string]any{
 		"command": "echo hello world",
 	})
@@ -82,7 +83,7 @@ func TestCmdRunCreatesGuard(t *testing.T) {
 	guardPath := filepath.Join(dir, "guard.txt")
 
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"command": "true",
 		"creates": guardPath,
@@ -136,7 +137,7 @@ func TestCmdRunCreatesGuardGatesApply(t *testing.T) {
 	fakeFile.PreCreate("/var/lib/db/PG_VERSION", []byte("16"), 0644)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: fakeFile}}
-	s, err := NewCmdRunBuilder(mctx)("initdb", map[string]any{
+	s, err := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})("initdb", map[string]any{
 		"command": "initdb -D /var/lib/db",
 		"creates": "/var/lib/db/PG_VERSION",
 	})
@@ -186,7 +187,7 @@ func TestCmdRunCreatesStatErrorFailsPhases(t *testing.T) {
 	}
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: file}}
-	s, err := NewCmdRunBuilder(mctx)("initdb", map[string]any{
+	s, err := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})("initdb", map[string]any{
 		"command": "initdb -D /var/lib/db",
 		"creates": "/var/lib/db/PG_VERSION",
 	})
@@ -206,7 +207,7 @@ func TestCmdRunCreatesStatErrorFailsPhases(t *testing.T) {
 
 func TestCmdRunCreatesRequiresFileProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: &exec.OSCommandExec{}}}
-	_, err := NewCmdRunBuilder(mctx)("test", map[string]any{
+	_, err := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})("test", map[string]any{
 		"command": "true",
 		"creates": "/tmp/guard",
 	})
@@ -219,7 +220,7 @@ func TestCmdRunWithCwd(t *testing.T) {
 	dir := t.TempDir()
 
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("pwd-test", map[string]any{
 		"command": "pwd",
 		"cwd":     dir,
@@ -239,7 +240,7 @@ func TestCmdRunWithCwd(t *testing.T) {
 
 func TestCmdRunWithEnv(t *testing.T) {
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("env-test", map[string]any{
 		"command": "sh -c 'echo $MY_VAR'",
 		"env": map[string]any{
@@ -261,7 +262,7 @@ func TestCmdRunWithEnv(t *testing.T) {
 
 func TestCmdRunFailedCommand(t *testing.T) {
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("fail-test", map[string]any{
 		"command": "false",
 	})
@@ -277,7 +278,7 @@ func TestCmdRunFailedCommand(t *testing.T) {
 
 func TestCmdRunRevert(t *testing.T) {
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"command": "echo test",
 	})
@@ -296,7 +297,7 @@ func TestCmdRunRevert(t *testing.T) {
 
 func TestCmdRunName(t *testing.T) {
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("my-cmd", map[string]any{
 		"command": "true",
 	})
@@ -310,7 +311,7 @@ func TestCmdRunName(t *testing.T) {
 
 func TestCmdRunRequires(t *testing.T) {
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"command": "true",
 		"require": []any{"file.managed:/etc/config"},
@@ -326,7 +327,7 @@ func TestCmdRunRequires(t *testing.T) {
 
 func TestCmdRunRequisites(t *testing.T) {
 	mctx := testCmdMctx()
-	builder := NewCmdRunBuilder(mctx)
+	builder := NewCmdRunBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"command":   "true",
 		"require":   []any{"file.managed:/etc/config"},

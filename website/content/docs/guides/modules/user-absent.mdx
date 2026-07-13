@@ -1,9 +1,15 @@
 ---
 title: "user.absent"
-description: "Ensures a user account does not exist on the system."
+description: "Ensure a user account does not exist on the system."
 ---
 
-**Source**: `pkg/state/modules/user.go`
+{/* zester-docgen:managed module="user.absent" */}
+
+**Source**: `pkg/state/modules/user_absent.go`
+
+---
+
+`user.absent` ensures the named user account is removed. The username defaults to the state ID. With `purge` the account's home directory and mail spool are removed as well (`userdel -r`); without it only the account is deleted. `force` is accepted for Salt compatibility but is not yet wired into the execution layer, so it currently has no effect.
 
 ---
 
@@ -11,72 +17,98 @@ description: "Ensures a user account does not exist on the system."
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Username to remove. If omitted, the state ID is used as the username. |
-| `purge` | `bool` | No | `false` | If `true`, remove the user's home directory and mail spool (`userdel -r`). |
-| `force` | `bool` | No | `false` | Parsed but not yet implemented in the execution layer. Has no effect. |
+| `name` | `string` | No | State ID | username of the account to remove; defaults to the state ID |
+| `purge` | `bool` | No | *(none)* | also remove the user's home directory and mail spool (userdel -r); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `force` | `bool` | No | *(none)* | parsed for Salt compatibility but not yet implemented in the execution layer — currently has no effect; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-1. **User lookup** — looks up the user by name.
-2. If the user does not exist, the state reports no changes needed.
-3. If the user exists, the state needs changes.
+### Check
 
----
+Looks up the user by name and reports a change only when the account exists; an already-absent user needs no change.
 
-## Apply Behavior
+### Apply
 
-1. Deletes the user via `userdel`.
-2. If `purge` is `true`, the home directory and mail spool are also removed (`userdel -r`).
+Re-verifies existence (a self-contained flow: a watch-forced Apply bypasses Check, and `userdel` on a nonexistent user exits non-zero), then deletes the account through the user provider — removing the home directory and mail spool as well when `purge` is set (`userdel -r`). An already-absent user is a clean no-op. Reports the username and the purge flag in its details.
 
----
+### Revert
 
-## Revert Behavior
+Cannot restore a deleted user: the original account data (password hash, groups, uid) is not recorded and cannot be re-derived, so Revert is an explicit no-op.
 
-No-op. User deletion cannot be reverted because the original user data (password hash, groups, etc.) is not preserved.
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Remove a user
 
-```bash
-# Remove a user, keeping their home directory
-zester 'web-01' user.absent olduser
-
-# Remove a user and purge their home directory
-zester 'web*' user.absent olduser purge=true
-```
-
-### State File
-
-**Simple user removal:**
+The username defaults to the state ID; the home directory is left in place.
 
 ```yaml
 olduser:
   user.absent: []
 ```
 
-**Remove user and home directory:**
+### Remove a user and purge the home directory
+
+purge runs userdel -r, removing the home directory and mail spool too.
 
 ```yaml
-remove_temp_user:
+remove-temp-user:
   user.absent:
     - name: tempuser
     - purge: true
 ```
 
-**Remove user after stopping their service:**
+### Remove a user after stopping their service
+
+require orders the service stop ahead of the account removal.
 
 ```yaml
-decommission_app:
+decommission-app:
   user.absent:
     - name: appuser
     - purge: true
     - require:
-      - "cmd.run:stop_app_service"
+      - "cmd.run:stop-app-service"
 ```
+
+### Remove a user ad hoc
+
+The bare positional argument is the username; purge=true also removes the home directory.
+
+```bash
+zester 'web*' user.absent olduser purge=true
+```
+
+
+---
+
+## Notes
+
+> **purge removes the home directory**
+>
+> `purge` runs `userdel -r`, removing the account's home directory and mail spool as well as the account; without it only the account is deleted and the home directory is left in place.
+
+> **force is not yet implemented**
+>
+> `force` is accepted for Salt compatibility but is not yet wired into the execution layer (it does not forward `userdel -f`), so it currently has no effect.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [user.present](/docs/guides/modules/user-present)

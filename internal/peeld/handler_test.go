@@ -11,6 +11,7 @@ import (
 	"github.com/nirnx/zester/pkg/execmod"
 	"github.com/nirnx/zester/pkg/facts"
 	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/proto"
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/state/modules"
@@ -30,7 +31,7 @@ func newTestAgent(t *testing.T) *Agent {
 	a.ps = bustest.NewFakePubSub()
 	a.execReg = execmod.DefaultRegistry()
 	a.registry = state.NewRegistry()
-	a.registry.Register("test.ping", modules.NewTestPing)
+	a.registry.Register("test.ping", modules.NewTestPingBuilder(modschema.DecodeOptions{}))
 	a.wireDocSource() // registers sys.doc + merged sys.list_functions on execReg
 	a.runner = state.NewRunner(discardLogger())
 
@@ -90,7 +91,7 @@ func TestReadOnlyModuleClassification(t *testing.T) {
 	// A state module shadowing an exec-registry name must keep precedence:
 	// grains.items overridden by a (Starlark) state module leaves the
 	// read-only fast path.
-	a.registry.Register("grains.items", modules.NewTestPing)
+	a.registry.Register("grains.items", modules.NewTestPingBuilder(modschema.DecodeOptions{}))
 	if a.readOnlyModule("grains.items") {
 		t.Error("readOnlyModule(grains.items) = true after state module shadowed it")
 	}

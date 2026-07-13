@@ -1,80 +1,61 @@
 ---
-title: "Test Helpers"
+title: "test.configurable_test_state / test.fail_without_changes / test.nop / test.succeed_with_changes"
+description: "Result and change reporting fully driven by config. Always fails, reporting no changes. A no-op that always succeeds and reports no changes. Always succeeds and reports that changes were made."
 ---
 
-Salt-compatible test states for exercising requisites, failure handling, and reporting without touching the system. Like [`test.ping`](/docs/guides/modules/test-ping), they need no exec providers.
+{/* zester-docgen:managed module="test.configurable_test_state" */}
+{/* zester-docgen:managed module="test.fail_without_changes" */}
+{/* zester-docgen:managed module="test.nop" */}
+{/* zester-docgen:managed module="test.succeed_with_changes" */}
 
-**Source**: `pkg/state/modules/test_extra.go`
+`test.configurable_test_state`, `test.fail_without_changes`, `test.nop`, and `test.succeed_with_changes` are documented together on this page; each has its own parameters.
 
 ---
 
-## test.nop
+## `test.configurable_test_state`
 
-A no-op that always succeeds and reports no changes. Check reports the state as already satisfied, so Apply normally does not even run.
+**Source**: `pkg/state/modules/test_configurable_test_state.go`
 
-```yaml
-placeholder:
-  test.nop: []
-```
+---
+
+`test.configurable_test_state` lets a state file dial in an exact outcome: `result` selects success or failure and `changes` selects whether a change is reported — each defaulting to true. Check always forces Apply, so the configuration alone controls the reported result. `comment` customizes the message (and, on failure, the error).
+
+---
+
+## Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| *(none)* | | | | |
+| `result` | `bool` | No | `true` | whether the state succeeds; false makes it fail (with the comment message, or "configured failure"); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `changes` | `bool` | No | `true` | whether the state reports Changed: true (honored on both success and failure); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `comment` | `string` | No | *(none)* | message included in the result details and, on failure, the error |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## test.fail_without_changes
+## Effects
 
-Always fails, reporting no changes. Useful for testing `onfail` chains and failure propagation.
+### Check
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `comment` | `string` | No | `failure without changes` | Message included in the error and result details. |
+Always reports that a change is needed so Apply runs and fully controls the reported outcome.
 
-```yaml
-simulated-failure:
-  test.fail_without_changes:
-    - comment: "primary service unavailable"
+### Apply
 
-fallback:
-  cmd.run:
-    - command: /usr/local/bin/failover.sh
-    - onfail:
-      - "test.fail_without_changes:simulated-failure"
-```
+When `result` is true, succeeds with Changed set to `changes` and Details `{"result": "true"}` (plus `comment` when set). When `result` is false, fails: returns an error carrying `comment` (or `configured failure`) together with Changed set to `changes` and Details `{"result": "false"}` (plus `comment` when set) — so a change and the comment can be reported on failure too.
+
+### Revert
+
+No-op (Changed: false).
+
 
 ---
 
-## test.succeed_with_changes
+## Examples
 
-Always succeeds and reports `Changed: true`. Useful for testing `watch` and `onchanges` chains.
+### Succeed without reporting a change
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `comment` | `string` | No | `""` | Optional message included in the result details. |
-
-```yaml
-simulated-change:
-  test.succeed_with_changes: []
-
-reactor:
-  cmd.run:
-    - command: echo "reacting to change"
-    - onchanges:
-      - "test.succeed_with_changes:simulated-change"
-```
-
----
-
-## test.configurable_test_state
-
-Result and change reporting fully driven by config. Check always forces Apply so the configuration controls the reported outcome.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `result` | `bool` | No | `true` | `false` makes the state fail (error message from `comment`, or `configured failure`). |
-| `changes` | `bool` | No | `true` | Whether the state reports `Changed: true` — honored on both success and failure. |
-| `comment` | `string` | No | `""` | Message included in the result details / error. |
+result true + changes false models a healthy, unchanged resource.
 
 ```yaml
 scenario:
@@ -84,17 +65,257 @@ scenario:
     - comment: "healthy, nothing changed"
 ```
 
+
 ---
+
+## Notes
+
+> **Boolean parameters accept 1/0 and truthy strings**
+>
+> Under the uniform decoder `result` and `changes` accept a real boolean, the integers `1` (true) and `0` (false), and the case-insensitive truthy/falsy strings (`true`/`yes`/`on` and `false`/`no`/`off`) — so a reactor-dispatched or CLI value is honored where the legacy `.(bool)` assertion silently kept the default. Any other value (for example the integer `2`, or Salt's `Sometimes`/`Random`) is a decode error, not a silent fallback.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [test.succeed_with_changes](/docs/guides/modules/test-helpers)
+- [test.fail_without_changes](/docs/guides/modules/test-helpers)
+
+---
+
+## `test.fail_without_changes`
+
+**Source**: `pkg/state/modules/test_fail_without_changes.go`
+
+---
+
+`test.fail_without_changes` always fails and reports no changes — useful for testing `onfail` chains and failure propagation. The `comment` parameter customizes the error message; when omitted the built-in message `failure without changes` is used.
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `comment` | `string` | No | *(none)* | message included in the error and result details; defaults to "failure without changes" |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
-## Revert Behavior
+---
 
-All test helpers are no-ops on Revert (`Changed: false`).
+## Effects
+
+### Check
+
+Always reports that a change is needed so Apply runs and the failure is surfaced.
+
+### Apply
+
+Always fails: returns an error carrying `comment` (or `failure without changes` when unset) together with Details `{"result": "false", "comment": <message>}`, and Changed: false.
+
+### Revert
+
+No-op (Changed: false).
+
 
 ---
 
-## Divergences from Salt
+## Examples
 
-- Salt's `test.show_notification` and `test.mod_watch` behaviors are not implemented.
-- In Salt, `test.configurable_test_state` accepts `result: Sometimes` / `changes: Random` for randomized outcomes; Zester only accepts booleans (non-bool values fall back to the defaults).
+### Simulate a failure
+
+The comment becomes the error message.
+
+```yaml
+simulated-failure:
+  test.fail_without_changes:
+    - comment: "primary service unavailable"
+```
+
+
+---
+
+## Notes
+
+> **Use in onfail chains**
+>
+> Hang an `onfail` requisite on another state so it runs only when this one fails:
+>
+> ```yaml
+> fallback:
+>   cmd.run:
+>     - command: /usr/local/bin/failover.sh
+>     - onfail:
+>       - "test.fail_without_changes:simulated-failure"
+> ```
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [test.succeed_with_changes](/docs/guides/modules/test-helpers)
+- [test.configurable_test_state](/docs/guides/modules/test-helpers)
+
+---
+
+## `test.nop`
+
+**Source**: `pkg/state/modules/test_nop.go`
+
+---
+
+`test.nop` is a placeholder state that always succeeds and reports no changes. Check reports the state as already satisfied, so under normal ordering Apply does not even run — useful as a requisite anchor or an inert placeholder.
+
+---
+
+## Parameters
+
+This module takes no parameters of its own.
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Reports NeedsChange: false — the state is always already satisfied, so the runner normally skips Apply entirely.
+
+### Apply
+
+If reached (for example via a watch-forced apply), performs no work: returns Changed: false with Details `{"result": "true"}`.
+
+### Revert
+
+No-op (Changed: false).
+
+
+---
+
+## Examples
+
+### An inert placeholder
+
+test.nop is satisfied immediately and never touches the system.
+
+```yaml
+placeholder:
+  test.nop: []
+```
+
+
+---
+
+## Notes
+
+> **Unimplemented Salt test states**
+>
+> Salt's `test.show_notification` and `test.mod_watch` behaviors are not implemented; the Zester test helpers are `test.ping`, `test.nop`, `test.fail_without_changes`, `test.succeed_with_changes`, and `test.configurable_test_state`.
+
+
+---
+
+## See Also
+
+- [test.ping](/docs/guides/modules/test-ping)
+- [test.succeed_with_changes](/docs/guides/modules/test-helpers)
+- [test.fail_without_changes](/docs/guides/modules/test-helpers)
+- [test.configurable_test_state](/docs/guides/modules/test-helpers)
+
+---
+
+## `test.succeed_with_changes`
+
+**Source**: `pkg/state/modules/test_succeed_with_changes.go`
+
+---
+
+`test.succeed_with_changes` always succeeds and reports `Changed: true` — useful for testing `watch` and `onchanges` chains. The optional `comment` parameter is included in the result details when set.
+
+---
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `comment` | `string` | No | *(none)* | optional message included in the result details |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Always reports that a change is needed so Apply runs.
+
+### Apply
+
+Always succeeds with Changed: true and Details `{"result": "true"}` (plus `comment` when set).
+
+### Revert
+
+No-op (Changed: false).
+
+
+---
+
+## Examples
+
+### Simulate a change
+
+The state always reports Changed: true.
+
+```yaml
+simulated-change:
+  test.succeed_with_changes: []
+```
+
+
+---
+
+## Notes
+
+> **Use in watch / onchanges chains**
+>
+> Hang a `watch` or `onchanges` requisite on another state so it reacts to this one's reported change:
+>
+> ```yaml
+> reactor:
+>   cmd.run:
+>     - command: echo "reacting to change"
+>     - onchanges:
+>       - "test.succeed_with_changes:simulated-change"
+> ```
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [test.fail_without_changes](/docs/guides/modules/test-helpers)
+- [test.configurable_test_state](/docs/guides/modules/test-helpers)

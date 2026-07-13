@@ -218,7 +218,7 @@ func TestRenderModulePageGroup_SingleMemberEqualsRenderModulePage(t *testing.T) 
 	if err != nil {
 		t.Fatalf("renderModulePage: %v", err)
 	}
-	group, err := renderModulePageGroup([]modschema.ModuleInfo{mi})
+	group, err := renderModulePageGroup([]modschema.ModuleInfo{mi}, false)
 	if err != nil {
 		t.Fatalf("renderModulePageGroup: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRenderModulePageGroup_SingleMemberEqualsRenderModulePage(t *testing.T) 
 // that module's own Effects.
 func TestRenderModulePageGroup_MultiMember(t *testing.T) {
 	mis := commentGroupInfos(t)
-	got, err := renderModulePageGroup(mis)
+	got, err := renderModulePageGroup(mis, false)
 	if err != nil {
 		t.Fatalf("renderModulePageGroup: %v", err)
 	}
@@ -271,10 +271,14 @@ func TestRenderModulePageGroup_MultiMember(t *testing.T) {
 	}
 }
 
-// TestRenderModulePageGroup_MismatchedParamsFails is the renderer-surface guard:
-// a group whose members expose divergent parameter surfaces fails generation
-// (via assertSharedParams) rather than emitting a silently wrong shared table.
-func TestRenderModulePageGroup_MismatchedParamsFails(t *testing.T) {
+// TestRenderModulePageGroup_DistinctParamsRendersPerMember pins the N:1 page-group
+// behavior when members do NOT share a parameter surface (distinct protos, like
+// host.present/host.absent or ssh_auth.present/ssh_auth.absent) AND the caller
+// explicitly opts in via distinctParams=true (isDistinctParamSlug): the renderer
+// emits each member's FULL body — its own Source line and its own Parameters
+// section — under a per-module banner, so no member is documented against
+// another's parameters.
+func TestRenderModulePageGroup_DistinctParamsRendersPerMember(t *testing.T) {
 	mis := []modschema.ModuleInfo{
 		syntheticInfo("mod.a",
 			stateField("name", "string", "", "", false, true),
@@ -284,8 +288,84 @@ func TestRenderModulePageGroup_MismatchedParamsFails(t *testing.T) {
 			stateField("name", "string", "", "", false, true),
 		),
 	}
-	if _, err := renderModulePageGroup(mis); err == nil {
-		t.Fatal("renderModulePageGroup: expected error for mismatched shared params, got nil")
+	got, err := renderModulePageGroup(mis, true)
+	if err != nil {
+		t.Fatalf("renderModulePageGroup: %v", err)
+	}
+
+	mustContain := []string{
+		`title: "mod.a / mod.b"`,
+		managedMarker("mod.a"),
+		managedMarker("mod.b"),
+		"`mod.a` and `mod.b` are documented together on this page; each has its own parameters.",
+		"## `mod.a`",
+		"## `mod.b`",
+		"**Source**: `pkg/state/modules/mod_a.go`",
+		"**Source**: `pkg/state/modules/mod_b.go`",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(got, want) {
+			t.Errorf("distinct-param page missing %q\n--- page ---\n%s", want, got)
+		}
+	}
+
+	// Each member documents its OWN Parameters (two sections, not one shared),
+	// so mod.a's extra `char` field only appears once and mod.b never claims it.
+	if n := strings.Count(got, "## Parameters"); n != 2 {
+		t.Errorf("expected one Parameters section per member (2), got %d", n)
+	}
+	if n := strings.Count(got, "`char`"); n != 1 {
+		t.Errorf("expected mod.a's `char` param to appear exactly once, got %d", n)
+	}
+	// The shared-params sentence must NOT appear — the members do not share params.
+	if strings.Contains(got, "share the same parameters and implementation") {
+		t.Error("distinct-param page must not claim members share parameters")
+	}
+}
+
+// TestRenderModulePageGroup_MismatchWithoutFlagFails pins the K3 tightening: a
+// multi-member group whose members do NOT share a parameter surface but was NOT
+// declared distinctParams (isDistinctParamSlug=false) is a LOUD generation error,
+// not a silent fallback to per-member rendering. This is what protects a genuinely
+// shared-proto page group (file-comment) from silently degrading if a future edit
+// makes its members' surfaces diverge.
+func TestRenderModulePageGroup_MismatchWithoutFlagFails(t *testing.T) {
+	mis := []modschema.ModuleInfo{
+		syntheticInfo("mod.a",
+			stateField("name", "string", "", "", false, true),
+			stateField("char", "string", "", "#", false, false),
+		),
+		syntheticInfo("mod.b",
+			stateField("name", "string", "", "", false, true),
+		),
+	}
+	if _, err := renderModulePageGroup(mis, false); err == nil {
+		t.Fatal("renderModulePageGroup: expected an error for a param-surface mismatch without the distinctParams opt-in")
+	}
+	// With the opt-in it renders fine (the positive path is pinned separately).
+	if _, err := renderModulePageGroup(mis, true); err != nil {
+		t.Fatalf("renderModulePageGroup with distinctParams=true: %v", err)
+	}
+}
+
+// TestDistinctParamSlugsAreLiveGroups pins that every declared distinct-param slug
+// is a real multi-member page group in moduleToSlug — a stale entry (e.g. after a
+// group is merged or a member renamed) is caught here rather than silently
+// mis-rendering. It also asserts the three known distinct groups are declared.
+func TestDistinctParamSlugsAreLiveGroups(t *testing.T) {
+	members := map[string]int{}
+	for _, slug := range moduleToSlug {
+		members[slug]++
+	}
+	for slug := range distinctParamSlugs {
+		if members[slug] < 2 {
+			t.Errorf("distinctParamSlugs[%q] is not a multi-member page group (has %d members)", slug, members[slug])
+		}
+	}
+	for _, slug := range []string{"host", "ssh-auth", "test-helpers"} {
+		if !isDistinctParamSlug(slug) {
+			t.Errorf("expected %q to be a declared distinct-param slug", slug)
+		}
 	}
 }
 
@@ -297,7 +377,7 @@ func TestWriteModulePageGroup_MultiMember(t *testing.T) {
 	path := filepath.Join(dir, "file-comment.mdx")
 	mis := commentGroupInfos(t)
 
-	if err := writeModulePageGroup(path, mis, false); err != nil {
+	if err := writeModulePageGroup(path, mis, false, false); err != nil {
 		t.Fatalf("writeModulePageGroup on a nonexistent file: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -323,14 +403,14 @@ func TestWriteModulePageGroup_RefusesMarkerlessOverwrite(t *testing.T) {
 	}
 	mis := commentGroupInfos(t)
 
-	if err := writeModulePageGroup(path, mis, false); err == nil {
+	if err := writeModulePageGroup(path, mis, false, false); err == nil {
 		t.Fatal("writeModulePageGroup: expected refusal for markerless existing page")
 	}
 	if got, _ := os.ReadFile(path); string(got) != original {
 		t.Errorf("markerless page modified despite refusal:\n%s", got)
 	}
 
-	if err := writeModulePageGroup(path, mis, true); err != nil {
+	if err := writeModulePageGroup(path, mis, true, false); err != nil {
 		t.Fatalf("writeModulePageGroup with claim=true: %v", err)
 	}
 	got, _ := os.ReadFile(path)
