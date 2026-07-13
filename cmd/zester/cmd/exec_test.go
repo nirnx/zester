@@ -521,3 +521,21 @@ func TestDirectGlobMatching(t *testing.T) {
 		t.Fatal("expected error for invalid glob pattern")
 	}
 }
+
+// TestParseModuleArgs_BareSysDocDispatchesEmptyID pins the bare-invocation
+// contract for execution functions with an OPTIONAL primary: `zester '*'
+// sys.doc` must dispatch with an empty ID and no primary argument (the peel
+// then returns the unified index) instead of erroring or falling back to the
+// generic "ad-hoc" ID. Regression: TestSysDoc_UnifiedIndex (integration).
+func TestParseModuleArgs_BareSysDocDispatchesEmptyID(t *testing.T) {
+	id, args, err := parseModuleArgs("sys.doc", nil)
+	if err != nil {
+		t.Fatalf("bare sys.doc: unexpected error: %v", err)
+	}
+	if id != "" {
+		t.Fatalf("bare sys.doc: id = %q, want empty (peel returns the unified index)", id)
+	}
+	if len(args) != 0 {
+		t.Fatalf("bare sys.doc: args = %v, want empty", args)
+	}
+}

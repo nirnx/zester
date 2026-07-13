@@ -436,6 +436,14 @@ func docdataPositional(module string, remaining []string) (id string, args map[s
 			// The primary can be omitted; let the generic fallback apply.
 			return "", nil, false, nil
 		}
+		if mi.Kind == modschema.KindExec && !primary.Required {
+			// An execution function with an OPTIONAL primary supports bare
+			// invocation: dispatch with an empty ID and no primary arg so the
+			// function sees an absent name (e.g. bare `sys.doc` returns the
+			// unified index; the state-module rule below does not apply since
+			// there is no state ID to stand in).
+			return "", map[string]any{}, true, nil
+		}
 		return "", nil, true, fmt.Errorf("%s requires a %s argument", module, primary.Name)
 	}
 	args = make(map[string]any)
