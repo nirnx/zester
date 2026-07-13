@@ -42,11 +42,15 @@ func liveRegistry() *state.Registry {
 }
 
 // liveDescribe mirrors the peel's DocSource precedence for the docdata universe:
-// docdata carries both state modules and execution-only functions, so a live
-// lookup resolves a name against the state registry first (a dual-surface module
-// like cmd.run is documented by its STATE spec — which is what docgen emitted),
-// then the execution registry.
+// docdata carries the dispatch specials, the state modules, and the
+// execution-only functions — resolution order matches sys.doc's (dispatch
+// specials first, then the state registry — a dual-surface module like cmd.run
+// is documented by its STATE spec, which is what docgen emitted — then the
+// execution registry).
 func liveDescribe(stateReg *state.Registry, execReg *execmod.Registry, name string) (modschema.ModuleInfo, bool) {
+	if mi, ok := modules.DispatchInfo(name); ok {
+		return mi, true
+	}
 	if mi, ok := stateReg.Describe(name); ok {
 		return mi, true
 	}

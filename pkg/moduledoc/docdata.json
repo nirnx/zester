@@ -75,7 +75,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -91,7 +101,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -107,7 +127,17 @@
         "HasDefault": true,
         "Default": "auto",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -123,7 +153,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -139,7 +179,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -155,7 +205,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -253,7 +333,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -300,7 +390,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -340,7 +440,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -440,7 +550,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -456,7 +576,17 @@
         "HasDefault": true,
         "Default": "root",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -472,7 +602,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -546,7 +686,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -562,7 +712,17 @@
         "HasDefault": true,
         "Default": "root",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -578,7 +738,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -594,7 +764,17 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -610,7 +790,17 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -626,7 +816,17 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -642,7 +842,17 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -658,7 +868,17 @@
         "HasDefault": true,
         "Default": "*",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -712,12 +932,166 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
     "SemTypes": null,
     "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "event.send",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Publish a custom peel event onto the bus.",
+      "Description": "`event.send` publishes an event under the peel's own origin, feeding the master reactor. The bare positional argument is the tag (slash or dotted); remaining arguments become the event data.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Publishes an event.Event on the peel's event subject: the tag comes from the bare positional (or `tag=`), the remaining arguments become the event data, and the reactor chain depth is threaded from the dispatch. Errors when NATS is down (publishing needs the bus). Runs on the serialized (mutating) worker so per-peel event order stays deterministic."
+      },
+      "Examples": [
+        {
+          "Title": "Emit a deployment event",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester '*' event.send app/deployed version=1.2.3"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": null
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "facts.get",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Read a single fact by dotted key.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the value at the dotted `key` from the peel's live collected facts — a scalar verbatim, a composite as trimmed YAML. When the key is absent it returns the `default` argument if given, otherwise an empty result. Read-only: it runs on the concurrent fast path (outside the mutating exec worker), so it answers even during a long state run."
+      },
+      "Examples": [
+        {
+          "Title": "Read the OS family",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester '*' facts.get os.family"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "facts.items",
+        "facts.keys",
+        "facts.set"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "facts.items",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Dump the entire facts map.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the peel's complete live facts map rendered as trimmed YAML. Read-only (concurrent fast path)."
+      },
+      "Examples": null,
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "facts.get",
+        "facts.keys"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "facts.keys",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "List the top-level fact key names.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the sorted top-level fact key names, one per line. Read-only (concurrent fast path)."
+      },
+      "Examples": null,
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "facts.get",
+        "facts.items"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "facts.set",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Persist a custom fact on the node.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Writes `key`→`value` into the node's custom-facts file (YAML-parsing the value) and updates the in-memory facts so subsequent queries and template renders observe it. This is the one MUTATING facts.* function: because its custom-facts-file read-modify-write is not atomic, it runs ONLY on the serialized exec worker, never the concurrent read-only path."
+      },
+      "Examples": [
+        {
+          "Title": "Set a role fact",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester '*' facts.set key=role value=web"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "facts.get",
+        "facts.items"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
     "AlsoExecmod": false
   },
   {
@@ -786,7 +1160,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -861,7 +1245,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -992,7 +1386,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1008,7 +1412,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1024,7 +1438,17 @@
         "HasDefault": true,
         "Default": "# START managed zone",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1040,7 +1464,17 @@
         "HasDefault": true,
         "Default": "# END managed zone",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1056,7 +1490,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -1072,7 +1536,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -1149,7 +1643,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1165,7 +1669,17 @@
         "HasDefault": true,
         "Default": "#",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1181,7 +1695,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -1259,7 +1783,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1275,7 +1809,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1291,7 +1835,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -1307,7 +1881,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -1323,7 +1927,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -1406,7 +2040,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1449,7 +2093,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1465,7 +2119,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1481,7 +2145,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -1581,7 +2275,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1597,7 +2301,17 @@
         "HasDefault": true,
         "Default": "=",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1661,7 +2375,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1677,7 +2401,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -1781,7 +2515,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1797,7 +2541,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1813,7 +2567,17 @@
         "HasDefault": true,
         "Default": "ensure",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1829,7 +2593,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1845,7 +2619,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1861,7 +2645,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -1974,7 +2768,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -1990,7 +2794,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2006,7 +2820,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2102,7 +2926,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2118,7 +2952,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2134,7 +2978,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -2253,7 +3127,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2269,7 +3153,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2335,7 +3229,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2351,7 +3255,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2367,7 +3281,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -2383,7 +3327,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -2491,7 +3465,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2507,7 +3491,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2523,7 +3517,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2539,7 +3543,19 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "integer"
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "multipleOf": 1,
+              "type": "number"
+            },
+            {
+              "pattern": "^[+-]?[0-9]+$",
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -2555,7 +3571,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -2571,7 +3617,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -2587,7 +3663,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -2668,7 +3754,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2684,7 +3780,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2700,7 +3806,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -2716,7 +3852,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -2794,7 +3960,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2810,7 +3986,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -2887,7 +4093,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2903,7 +4119,17 @@
         "HasDefault": true,
         "Default": "#",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -2919,7 +4145,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -3006,7 +4242,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3022,7 +4268,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3038,7 +4294,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3054,7 +4320,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3070,7 +4346,19 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "integer"
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "multipleOf": 1,
+              "type": "number"
+            },
+            {
+              "pattern": "^[+-]?[0-9]+$",
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -3086,7 +4374,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -3166,7 +4484,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3182,7 +4510,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3198,7 +4536,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3214,7 +4562,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3230,7 +4588,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -3280,7 +4668,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -3373,7 +4771,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -3457,7 +4865,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3473,7 +4891,19 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "integer"
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "multipleOf": 1,
+              "type": "number"
+            },
+            {
+              "pattern": "^[+-]?[0-9]+$",
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -3489,7 +4919,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -3667,7 +5127,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3685,7 +5155,17 @@
         "HasDefault": true,
         "Default": "/etc/hosts",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -3768,7 +5248,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3784,7 +5274,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -3802,7 +5302,17 @@
         "HasDefault": true,
         "Default": "/etc/hosts",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -3873,7 +5383,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -3993,7 +5513,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4009,7 +5539,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4025,7 +5565,17 @@
         "HasDefault": true,
         "Default": "ext4",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4041,7 +5591,17 @@
         "HasDefault": true,
         "Default": "defaults",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4057,7 +5617,19 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "integer"
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "multipleOf": 1,
+              "type": "number"
+            },
+            {
+              "pattern": "^[+-]?[0-9]+$",
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -4073,7 +5645,19 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "integer"
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "multipleOf": 1,
+              "type": "number"
+            },
+            {
+              "pattern": "^[+-]?[0-9]+$",
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -4089,12 +5673,114 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
     "SemTypes": null,
     "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "pillar.get",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Salt-compat alias of settings.get.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Salt-compatibility alias: `pillar.get` maps to `settings.get`, reading a dotted `key` (or `default`) from the peel's resolved settings snapshot. Read-only."
+      },
+      "Examples": null,
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "settings.get"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "pillar.items",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Salt-compat alias of settings.items.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Salt-compatibility alias: `pillar.items` maps to `settings.items`, dumping the resolved settings map as YAML. Read-only."
+      },
+      "Examples": null,
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "settings.items"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "pillar.keys",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Salt-compat alias of settings.keys.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Salt-compatibility alias: `pillar.keys` maps to `settings.keys`, listing the top-level settings key names. Read-only."
+      },
+      "Examples": null,
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "settings.keys"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
     "AlsoExecmod": false
   },
   {
@@ -4172,7 +5858,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4188,7 +5884,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4204,7 +5910,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4220,7 +5936,17 @@
         "HasDefault": true,
         "Default": "pip3",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -4318,7 +6044,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4334,7 +6070,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4350,7 +6096,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -4442,7 +6218,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4458,7 +6244,37 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -4569,7 +6385,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -4640,7 +6466,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -4691,7 +6527,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -4787,7 +6633,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4803,7 +6659,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4819,7 +6685,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4835,7 +6711,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4851,7 +6737,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4867,7 +6763,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -4883,7 +6789,37 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -4899,7 +6835,37 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -4915,7 +6881,37 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -4992,7 +6988,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5133,7 +7139,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -5183,7 +7199,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -5265,7 +7291,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5387,7 +7423,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -5437,7 +7483,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -5487,12 +7543,104 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
     "SemTypes": null,
     "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "settings.get",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Read a single resolved setting by dotted key.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the value at the dotted `key` from the peel's last-resolved settings snapshot — a scalar verbatim, a composite as trimmed YAML — or the `default` argument when absent. Errors when settings have never resolved on this peel. Read-only (concurrent fast path)."
+      },
+      "Examples": [
+        {
+          "Title": "Read a setting",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester '*' settings.get app.port"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "settings.items",
+        "settings.keys"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "settings.items",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Dump the entire resolved settings map.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the peel's complete resolved settings map rendered as trimmed YAML. Errors when settings have never resolved. Read-only (concurrent fast path)."
+      },
+      "Examples": null,
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "settings.get",
+        "settings.keys"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "settings.keys",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "List the top-level resolved settings key names.",
+      "Description": "",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Returns the sorted top-level settings key names, one per line. Errors when settings have never resolved. Read-only (concurrent fast path)."
+      },
+      "Examples": null,
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "settings.get",
+        "settings.items"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
     "AlsoExecmod": false
   },
   {
@@ -5554,7 +7702,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5570,7 +7728,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5586,7 +7754,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -5669,7 +7847,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5685,7 +7873,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5701,7 +7899,17 @@
         "HasDefault": true,
         "Default": "ssh-rsa",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5717,7 +7925,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5733,12 +7951,84 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
     "SemTypes": null,
     "HasSpec": true,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "state.apply",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Compile and apply a named state set on the peel.",
+      "Description": "`state.apply` compiles the state referenced by the `state` argument and applies it. It is the ad-hoc single-tree counterpart of `state.highstate`.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Resolves the peel's settings (falling back to the last-known-good cache on a resolve failure, failing closed if the peel has never resolved), then compiles the `state` reference — loading its `.zy` file, resolving includes/extends, rendering templates against local facts and settings, and building the requisite DAG — and runs every compiled state through Check→Apply (Check-only under `test=True`). Returns one result per compiled state. A peel with no states directory yet (KV-only, before its first state-file sync) returns a 'states engine unavailable' error."
+      },
+      "Examples": [
+        {
+          "Title": "Apply a state tree",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester '*' state.apply nginx"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "state.highstate"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
+    "AlsoExecmod": false
+  },
+  {
+    "Module": "state.highstate",
+    "Kind": "dispatch",
+    "Doc": {
+      "Summary": "Compile and apply every state that matches the peel in the state top file.",
+      "Description": "`state.highstate` resolves the state top file (`top.zy`) for this peel and applies every matching state set.",
+      "Effects": {
+        "Check": "",
+        "Apply": "",
+        "Revert": "",
+        "Execution": "Resolves the peel's settings, evaluates the state top file for this peel, compiles every matching state set (includes/extends, template rendering, requisite DAG), and runs them through Check→Apply (Check-only under `test=True`). Errors when no state set matches the peel in `top.zy`."
+      },
+      "Examples": [
+        {
+          "Title": "Apply the highstate",
+          "Kind": "cli",
+          "Explanation": "",
+          "Code": "zester '*' state.highstate"
+        }
+      ],
+      "Notes": null,
+      "Divergences": null,
+      "SeeAlso": [
+        "state.apply"
+      ]
+    },
+    "Params": null,
+    "SemTypes": null,
+    "HasSpec": false,
     "AlsoExecmod": false
   },
   {
@@ -5789,7 +8079,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -5888,7 +8188,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5904,7 +8214,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -5920,7 +8240,37 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -5979,7 +8329,37 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -5995,7 +8375,37 @@
         "HasDefault": true,
         "Default": "true",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -6011,7 +8421,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -6059,7 +8479,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -6116,7 +8546,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -6281,7 +8721,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       }
     ],
@@ -6425,7 +8875,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -6441,7 +8901,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -6522,7 +9012,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -6538,7 +9038,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -6554,7 +9084,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],
@@ -6644,7 +9204,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -6660,7 +9230,19 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "integer"
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "multipleOf": 1,
+              "type": "number"
+            },
+            {
+              "pattern": "^[+-]?[0-9]+$",
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -6701,7 +9283,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -6779,7 +9371,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -6795,7 +9397,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -6811,7 +9423,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -6827,7 +9469,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       {
@@ -6843,7 +9515,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
           "writeOnly": true
         }
       },
@@ -6860,7 +9542,17 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "string"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
         }
       },
       {
@@ -6876,7 +9568,37 @@
         "HasDefault": false,
         "Default": "",
         "JSONSchema": {
-          "type": "boolean"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "enum": [
+                "true",
+                "True",
+                "yes",
+                "Yes",
+                "1",
+                "on",
+                "On",
+                "false",
+                "False",
+                "no",
+                "No",
+                "0",
+                "off",
+                "Off"
+              ],
+              "type": "string"
+            }
+          ]
         }
       }
     ],

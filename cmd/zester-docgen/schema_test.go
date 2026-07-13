@@ -67,13 +67,17 @@ func TestRenderModuleSchemaArtifact_ValidDraft202012(t *testing.T) {
 		t.Errorf("expected valid pkg.removed instance to pass: %v", err)
 	}
 
+	// A NUMERIC name is a valid representation (the runtime sprints scalars
+	// into string params, BD-6) — the representation-faithful schema accepts
+	// it. A COMPOSITE name is what both the runtime (wrong_type) and the
+	// schema reject.
 	invalidType := map[string]any{
 		"remove-telnet": map[string]any{
-			"pkg.removed": map[string]any{"name": 12345}, // name must be a string
+			"pkg.removed": map[string]any{"name": []any{"a", "b"}}, // composite: rejected everywhere
 		},
 	}
 	if err := sch.Validate(jsonInstance(t, invalidType)); err == nil {
-		t.Error("expected a wrong-typed pkg.removed.name to fail validation")
+		t.Error("expected a composite pkg.removed.name to fail validation")
 	}
 
 	// A not-yet-migrated module under a different state ID must still be

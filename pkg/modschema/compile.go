@@ -392,17 +392,43 @@ func withWriteOnly(frag map[string]any) map[string]any {
 	return out
 }
 
-// primitiveJSONSchema renders a minimal JSON Schema fragment for a primitive.
+// primitiveJSONSchema renders the JSON Schema fragment for a primitive,
+// REPRESENTATION-FAITHFUL to the coercion table (§2.3): the schema accepts
+// exactly the shapes the runtime decoder accepts, so an editor never flags a
+// value the peel would take (schema/runtime agreement). The decoder remains
+// the enforcement authority for value-level rules the schema cannot express
+// (base-10 range checks, whitespace trimming).
 func primitiveJSONSchema(pk primKind, t reflect.Type) map[string]any {
 	switch pk {
 	case primString:
-		return map[string]any{"type": "string"}
+		// Scalars coerce into strings via fmt.Sprint (declared, deliberate).
+		return map[string]any{"oneOf": []any{
+			map[string]any{"type": "string"},
+			map[string]any{"type": "number"},
+			map[string]any{"type": "boolean"},
+		}}
 	case primBool:
-		return map[string]any{"type": "boolean"}
+		// bool | integer 0/1 (BD-7) | truthy/falsy strings (BD-2).
+		return map[string]any{"oneOf": []any{
+			map[string]any{"type": "boolean"},
+			map[string]any{"type": "integer", "enum": []any{0, 1}},
+			map[string]any{"type": "string", "enum": []any{
+				"true", "True", "yes", "Yes", "1", "on", "On",
+				"false", "False", "no", "No", "0", "off", "Off",
+			}},
+		}}
 	case primInt:
-		return map[string]any{"type": "integer"}
+		// any integer kind | integral float | base-10 numeric string (BD-2).
+		return map[string]any{"oneOf": []any{
+			map[string]any{"type": "integer"},
+			map[string]any{"type": "number", "multipleOf": 1},
+			map[string]any{"type": "string", "pattern": `^[+-]?[0-9]+$`},
+		}}
 	case primFloat:
-		return map[string]any{"type": "number"}
+		return map[string]any{"oneOf": []any{
+			map[string]any{"type": "number"},
+			map[string]any{"type": "string", "pattern": `^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$`},
+		}}
 	case primMapAny:
 		return map[string]any{"type": "object"}
 	case primSliceAny:

@@ -26,7 +26,10 @@ func renderDocdataJSON(infos []modschema.ModuleInfo) ([]byte, error) {
 	// regardless of how many modules currently populate it.
 	specd := []modschema.ModuleInfo{}
 	for _, mi := range infos {
-		if mi.HasSpec {
+		// Spec-carrying modules AND the dispatch specials: the specials have a
+		// Doc but no param schema (HasSpec false), yet offline `zester doc`
+		// must answer them exactly as live sys.doc does (review fix).
+		if mi.HasSpec || mi.Kind == modschema.KindDispatch {
 			specd = append(specd, mi)
 		}
 	}

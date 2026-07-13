@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/state/modules"
 )
 
 func main() {
@@ -89,7 +90,17 @@ func run(root string, claimed map[string]bool) error {
 	// Schema artifact, by contrast, is a STATE-FILE schema (state ID -> module ->
 	// params) — execution functions are never state-file constructs, so they are
 	// excluded from it and only stateSpecd feeds renderModuleSchemaArtifact.
-	allInfos := append(append([]modschema.ModuleInfo(nil), stateSpecd...), execOnly...)
+	// Dispatch specials (state.apply, facts.*, settings.*, pillar.*, event.send)
+	// join docdata so offline `zester doc` answers exactly what live sys.doc
+	// answers. They stay out of the JSON Schema (not state-file constructs
+	// beyond their own pages) and out of the exec reference page.
+	var dispatchInfos []modschema.ModuleInfo
+	for _, name := range modules.DispatchNames() {
+		if mi, ok := modules.DispatchInfo(name); ok {
+			dispatchInfos = append(dispatchInfos, mi)
+		}
+	}
+	allInfos := append(append(append([]modschema.ModuleInfo(nil), stateSpecd...), execOnly...), dispatchInfos...)
 
 	// Effects-by-kind coverage (§4/§9 gate 3) — a module reaching docgen with
 	// an incomplete or fake Doc.Effects fails generation loudly rather than

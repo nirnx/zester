@@ -55,29 +55,22 @@ func renderModuleSchemaArtifact(infos []modschema.ModuleInfo) ([]byte, error) {
 	}
 	sort.Strings(names)
 
-	stateMapValue := map[string]any{
-		"type":          "object",
-		"minProperties": 1,
-		"maxProperties": 1,
+	// The state-entry schema validates PARAMS for every KNOWN module key while
+	// allowing (a) MULTIPLE modules under one state ID — explicitly supported by
+	// the compiler (same ID, different modules = separate DAG states) — and
+	// (b) unknown module keys (per-peel Starlark custom modules), which stay
+	// unconstrained. A properties map does exactly that; the earlier
+	// oneOf-over-required-branches design (with maxProperties: 1) wrongly
+	// rejected valid multi-module entries.
+	moduleProps := make(map[string]any, len(names))
+	for _, name := range names {
+		moduleProps[name] = map[string]any{"$ref": "#/$defs/modules/" + name}
 	}
-	if len(names) > 0 {
-		branches := make([]any, 0, len(names)+1)
-		for _, name := range names {
-			branches = append(branches, map[string]any{
-				"required": []string{name},
-				"properties": map[string]any{
-					name: map[string]any{"$ref": "#/$defs/modules/" + name},
-				},
-			})
-		}
-		noneMigrated := make([]any, 0, len(names))
-		for _, name := range names {
-			noneMigrated = append(noneMigrated, map[string]any{
-				"not": map[string]any{"required": []string{name}},
-			})
-		}
-		branches = append(branches, map[string]any{"allOf": noneMigrated})
-		stateMapValue["oneOf"] = branches
+	stateMapValue := map[string]any{
+		"type":                 "object",
+		"minProperties":        1,
+		"properties":           moduleProps,
+		"additionalProperties": true,
 	}
 
 	top := map[string]any{

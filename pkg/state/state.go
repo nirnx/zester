@@ -222,10 +222,15 @@ func NewRegistry() *Registry {
 }
 
 // Register adds a state module builder under the given name (e.g., "file.managed").
+// A plain registration is UNDOCUMENTED by definition: any spec previously stored
+// under the name (e.g. by a Starlark hot-reload whose doc re-capture later
+// failed) is removed, so Describe never serves stale documentation for a
+// builder that no longer matches it.
 func (r *Registry) Register(name string, b Builder) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.builders[name] = b
+	delete(r.specs, name)
 }
 
 // Build constructs a state by looking up the module name in the registry.

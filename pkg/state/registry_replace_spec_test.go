@@ -84,3 +84,24 @@ func TestBuiltinsNeverReplaceSpec(t *testing.T) {
 		t.Fatal("pkg/state/modules/register.go calls ReplaceSpec — built-ins must register via the strict RegisterSpec only")
 	}
 }
+
+// TestPlainRegisterClearsStaleSpec pins the review fix: a plain Register is an
+// UNDOCUMENTED registration, so it removes any spec previously stored under the
+// name — after a Starlark hot-reload whose doc re-capture fails, Describe must
+// report not-documented rather than serving the OLD spec for the NEW builder.
+func TestPlainRegisterClearsStaleSpec(t *testing.T) {
+	r := state.NewRegistry()
+	if err := r.ReplaceSpec(newTestSpec(t, "star.mod"), testBuilder); err != nil {
+		t.Fatalf("seed spec: %v", err)
+	}
+	if _, ok := r.Describe("star.mod"); !ok {
+		t.Fatal("seed spec not visible")
+	}
+	r.Register("star.mod", testBuilder) // capture-failure fallback path
+	if _, ok := r.Describe("star.mod"); ok {
+		t.Fatal("Describe served a stale spec after a plain Register — must be cleared")
+	}
+	if !r.Has("star.mod") {
+		t.Fatal("builder must survive the spec clearing")
+	}
+}
