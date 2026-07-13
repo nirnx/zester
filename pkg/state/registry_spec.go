@@ -34,6 +34,30 @@ func (r *Registry) RegisterSpec(spec *modschema.Spec, b Builder) error {
 	return nil
 }
 
+// ReplaceSpec registers a documented module like RegisterSpec but OVERWRITES
+// any existing spec and builder under the same name. It exists solely for
+// dynamic, reloadable registration paths — the Starlark loader's hot-reload
+// and formula-overrides-global semantics — so Describe (and therefore sys.doc
+// and the offline docs) always reflects the latest loaded source. Built-in
+// module registration must use the strict RegisterSpec; a conformance test
+// pins that RegisterAll never calls ReplaceSpec.
+func (r *Registry) ReplaceSpec(spec *modschema.Spec, b Builder) error {
+	if spec == nil {
+		return fmt.Errorf("state: replace spec: nil spec")
+	}
+	if spec.Module == "" {
+		return fmt.Errorf("state: replace spec: empty module name")
+	}
+	if b == nil {
+		return fmt.Errorf("state: replace spec %q: nil builder", spec.Module)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.specs[spec.Module] = spec
+	r.builders[spec.Module] = b
+	return nil
+}
+
 // Describe returns the ModuleInfo for a spec-registered module. It reports
 // (zero, false) for a name that was registered only via Register (legacy or
 // Starlark, no spec) or is not registered at all.
