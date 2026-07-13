@@ -1,28 +1,65 @@
 ---
 title: "file.symlink"
-description: "Ensures a symbolic link exists at a given path pointing to a specified target."
+description: "Ensure a symbolic link exists at a path, pointing to a target."
 ---
+
+{/* zester-docgen:managed module="file.symlink" */}
+
+**Source**: `pkg/state/modules/file_symlink.go`
+
+---
+
+`file.symlink` ensures a symbolic link exists at the path (defaulting to the state ID) pointing to `target`. Without `force`, a pre-existing file or wrong-target symlink at the path is an error rather than being replaced.
 
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Path where the symlink should be created |
-| `target` | string | (required) | The destination the symlink should point to |
-| `force` | bool | `false` | Replace an existing file or wrong-target symlink at `name` |
-| `makedirs` | bool | `false` | Create parent directories if they do not exist |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path for the symbolic link (defaults to the state ID) |
+| `target` | `string` | No | *(none)* | destination the symlink should point to |
+| `force` | `bool` | No | *(none)* | replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | *(none)* | create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |
 
-## Example
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.
+
+### Apply
+
+Creates missing parent directories first when `makedirs` is set. If a symlink already points to `target`, Apply is a no-op. If something else exists at the path (a wrong-target symlink, or a non-symlink file/directory), it is only removed when `force` is set — otherwise Apply fails with an error naming what is in the way. Reports the created link and its target in its details.
+
+### Revert
+
+Removes the symlink unconditionally. It does not restore any file that `force` replaced, and a fresh instance's Revert still removes the symlink at the path (Revert is not gated on this instance having run Apply).
+
+
+---
+
+## Examples
+
+### Create a symlink using the state ID as the link path
+
+The state ID is the link path; target is the only parameter needed.
 
 ```yaml
-# Create a symlink using the state ID as the link path.
 /usr/local/bin/python:
   file.symlink:
     - target: /usr/bin/python3
+```
 
-# Create a symlink with makedirs and force.
+### Replace whatever exists, creating parent directories
+
+force replaces an existing mismatched file or symlink; makedirs creates missing parent directories.
+
+```yaml
 /opt/app/config:
   file.symlink:
     - target: /etc/app/config
@@ -32,16 +69,43 @@ description: "Ensures a symbolic link exists at a given path pointing to a speci
       - "file.directory:/opt/app"
 ```
 
-## Behavior
+### Create a symlink ad hoc
 
-| Phase | Action |
-|-|-|
-| Check | `Readlink` — returns `NeedsChange: true` if symlink is absent or points to the wrong target |
-| Apply | Remove existing (if `force: true`) then `Symlink`. Creates parent dirs if `makedirs: true`. |
-| Revert | `Remove` the symlink |
+The bare positional argument is the link path; target is a key=value arg.
+
+```bash
+zester 'web-01' file.symlink /usr/local/bin/python target=/usr/bin/python3
+```
+
+
+---
 
 ## Notes
 
-- If `force: false` (the default) and a file or symlink already exists at `name` with a different target, Apply returns an error.
-- `makedirs` creates the full parent directory path with mode `0755`. Use `file.directory` if you need a specific mode.
-- Revert removes the symlink but does not restore any file that was replaced when `force: true` was used.
+> **Without force, a mismatch is an error**
+>
+> If `force` is false (the default) and a file or symlink already exists at the path with a different target, Apply returns an error rather than replacing it.
+
+> **makedirs uses a fixed mode**
+>
+> makedirs creates the full parent directory path with mode 0755. Use file.directory first if you need a specific mode.
+
+> **Revert does not restore a replaced file**
+>
+> Revert removes the symlink but does not restore any file that was replaced when force: true was used.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [file.managed](/docs/guides/modules/file-managed)
+- [file.absent](/docs/guides/modules/file-absent)

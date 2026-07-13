@@ -14,6 +14,7 @@ import (
 	"github.com/nirnx/zester/pkg/starmod"
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/state/compiler"
+	"github.com/nirnx/zester/pkg/state/modules"
 	"github.com/nirnx/zester/pkg/template"
 	"gopkg.in/yaml.v3"
 )
@@ -63,7 +64,7 @@ func (a *Agent) resolveStatesDir() string {
 // an error or an empty directory.
 func resolveStatesDirWith(cacheDir, bakedDir string, attempts int, delay time.Duration,
 	readDir func(string) ([]os.DirEntry, error), sleep func(time.Duration)) (string, bool) {
-	for i := 0; i < attempts; i++ {
+	for i := range attempts {
 		if i > 0 {
 			sleep(delay)
 		}
@@ -153,30 +154,27 @@ func (a *Agent) resolveExecSettings(execCtx context.Context, module string, curr
 	return cs, nil
 }
 
-// readOnlyModule reports whether module belongs to the fixed read-only set
-// that executes outside execMu (finding 32): facts.* EXCEPT facts.set,
-// settings.*/pillar.*, test.ping, sys.list_functions, and grains.*. The
-// imperative-registry names (grains.*, sys.list_functions) additionally
-// mirror execModule's dispatch-order check, so unknown names and
-// state-module-shadowed names keep flowing through the serialized path and
-// produce the same errors as before.
+// readOnlyModule reports whether module belongs to the read-only set that
+// executes outside execMu (finding 32): facts.* EXCEPT facts.set,
+// settings.*/pillar.*, test.ping, sys.list_functions, sys.doc, and grains.*.
+//
+// The facts./settings./pillar. prefix set is DERIVED from the shared
+// modules.DispatchSpecials table (via IsReadOnlyDispatch), the same table that
+// drives execModule's dispatch — so the two sites can never disagree
+// (TestDispatchTableBound). facts.set stays mutating because its exact table
+// entry is marked ReadOnly=false (its custom-facts-file read-modify-write is
+// not atomic and relies on execMu, C7). The imperative-registry introspection
+// names (grains.*, sys.list_functions, sys.doc) additionally mirror
+// execModule's dispatch-order check, so state-module-shadowed names keep
+// flowing through the serialized path and produce the same errors as before.
 func (a *Agent) readOnlyModule(module string) bool {
 	switch {
 	case module == "test.ping":
 		return true
-	case module == "facts.set":
-		// facts.set mutates the custom-facts file via a non-atomic
-		// read-modify-write; it must stay on the execMu-serialized worker
-		// path or concurrent sets would clobber each other's keys (C7).
-		return false
-	case strings.HasPrefix(module, "facts."),
-		strings.HasPrefix(module, "settings."),
-		strings.HasPrefix(module, "pillar."):
-		return true
-	case module == "sys.list_functions" || strings.HasPrefix(module, "grains."):
+	case module == "sys.list_functions" || module == "sys.doc" || strings.HasPrefix(module, "grains."):
 		return a.execReg.Has(module) && !a.registry.Has(module)
 	}
-	return false
+	return modules.IsReadOnlyDispatch(module)
 }
 
 // execReadOnly executes one of the read-only modules WITHOUT taking execMu:
@@ -283,10 +281,20 @@ func (a *Agent) execModule(execCtx context.Context, req proto.ExecRequest) (prot
 		} else {
 			a.statesEng = eng2
 			a.effectiveStatesDir = d
+			// Purge the OLD tree's Starlark modules before swapping loaders:
+			// the replacement loader's empty ownership ledger would otherwise
+			// see the old registrations as non-Starlark and shadow-refuse
+			// every reload/override of those names until restart (round 5).
+			// The new tree's modules land via LoadGlobal below and per-compile
+			// LoadDir calls.
+			if a.starLoader != nil {
+				a.starLoader.UnloadAll(a.registry)
+			}
 			a.starLoader = starmod.NewLoader(starmod.LoaderConfig{
 				StatesDir:     d,
 				ModuleContext: a.mctx,
 				Logger:        logger,
+				DecodeOptions: a.decodeOpts,
 			})
 			if _, lErr := a.starLoader.LoadGlobal(a.registry); lErr != nil {
 				logger.Warn("starlark global module reload had errors", "error", lErr)
@@ -308,87 +316,28 @@ func (a *Agent) execModule(execCtx context.Context, req proto.ExecRequest) (prot
 		return proto.ExecResponse{PeelID: peelID, Error: statesEngineUnavailableMsg}, nil
 	}
 
-	var states []state.State
-
-	if module == "state.apply" {
-		stateName, _ := args["state"].(string)
-		if stateName == "" {
-			return proto.ExecResponse{PeelID: peelID, Error: "state.apply requires 'state' arg"}, nil
+	// Table-driven dispatch of the peel specials (state.apply/highstate,
+	// facts.*, settings.*/pillar.*, event.send). Structural precedence is
+	// resolved by modules.LookupDispatch (exact → longest prefix → table
+	// order); the matched entry's bound handler runs the SAME code the legacy
+	// if/else chain ran. execModule and readOnlyModule read the one shared
+	// table, so the two dispatch sites can never disagree (TestDispatchTableBound).
+	if sp, ok := modules.LookupDispatch(module); ok {
+		h := a.specialHandlers[sp.Name]
+		if h == nil {
+			// Unreachable while TestDispatchTableBound holds; guarded so a
+			// future unbound table entry degrades to an error, never a panic.
+			return proto.ExecResponse{PeelID: peelID, Error: "internal: no handler bound for dispatch special " + sp.Name}, nil
 		}
+		return h(execCtx, req, args)
+	}
 
-		currentFacts := a.mgr.GetFacts()
-		cs, csErr := a.resolveExecSettings(execCtx, module, currentFacts)
-		if csErr != nil {
-			return proto.ExecResponse{PeelID: peelID, Error: "settings resolution failed: " + csErr.Error()}, nil
-		}
-		a.mctx.Settings = cs
-
-		comp := compiler.NewCompiler(compiler.CompilerConfig{
-			StatesDir:  a.effectiveStatesDir,
-			Engine:     a.statesEng,
-			Registry:   a.registry,
-			Facts:      currentFacts,
-			Settings:   cs,
-			StarLoader: a.starLoader,
-			Guards:     a.guardRunner,
-			Logger:     logger,
-		})
-		result, err := comp.Compile(compiler.StateRef(stateName))
-		if err != nil {
-			return proto.ExecResponse{PeelID: peelID, Error: "compile state: " + err.Error()}, nil
-		}
-		states = result.States
-		logger.Info("state compiled", "state", stateName, "sources", result.Sources, "state_count", len(result.States))
-
-	} else if module == "state.highstate" {
-		currentFacts := a.mgr.GetFacts()
-		cs, csErr := a.resolveExecSettings(execCtx, module, currentFacts)
-		if csErr != nil {
-			return proto.ExecResponse{PeelID: peelID, Error: "settings resolution failed: " + csErr.Error()}, nil
-		}
-		a.mctx.Settings = cs
-
-		comp := compiler.NewCompiler(compiler.CompilerConfig{
-			StatesDir:  a.effectiveStatesDir,
-			Engine:     a.statesEng,
-			Registry:   a.registry,
-			Facts:      currentFacts,
-			Settings:   cs,
-			StarLoader: a.starLoader,
-			Guards:     a.guardRunner,
-			Logger:     logger,
-		})
-		result, err := comp.Highstate(peelID)
-		if err != nil {
-			return proto.ExecResponse{PeelID: peelID, Error: "highstate: " + err.Error()}, nil
-		}
-		if len(result.States) == 0 {
-			return proto.ExecResponse{PeelID: peelID, Error: "highstate: no states matched in top.zy"}, nil
-		}
-		states = result.States
-		logger.Info("highstate compiled", "peel", peelID, "sources", result.Sources, "state_count", len(result.States))
-
-	} else if strings.HasPrefix(module, "facts.") {
-		return a.execFactsModule(module, args), nil
-
-	} else if strings.HasPrefix(module, "settings.") || strings.HasPrefix(module, "pillar.") {
-		return a.execSettingsModule(module, args), nil
-
-	} else if module == "event.send" {
-		// Custom peel event (reactor amendment 20): needs the bus, so it is
-		// special-cased here — like the facts./settings. query modules and
-		// BEFORE the pkg/execmod fallback (execmod functions have no bus
-		// access). Deliberately on the mutating (execMu-serialized) worker
-		// path: publishing an event is a side effect, and serialization
-		// keeps per-peel event order deterministic.
-		return a.execEventSend(id, args, req.ReactorDepth), nil
-
-	} else if a.execReg.Has(module) && !a.registry.Has(module) {
-		// Imperative remote-execution function (Salt-style ad-hoc ops:
-		// pkg.version, service.restart, disk.usage, ...). Not a state —
-		// no Check/Apply lifecycle, just run and return output. A bare
-		// positional argument arrives as the request ID; expose it as the
-		// conventional "name" arg (e.g. `zester '*' pkg.version nginx`).
+	// Not a dispatch special: an imperative remote-execution function (Salt-style
+	// ad-hoc ops: pkg.version, service.restart, disk.usage, ...) — but ONLY when
+	// the name is not a registered state module, which takes precedence. A bare
+	// positional argument arrives as the request ID; expose it as the
+	// conventional "name" arg (e.g. `zester '*' pkg.version nginx`).
+	if a.execReg.Has(module) && !a.registry.Has(module) {
 		if id != "" {
 			if _, ok := args["name"]; !ok {
 				args["name"] = id
@@ -407,21 +356,128 @@ func (a *Agent) execModule(execCtx context.Context, req proto.ExecRequest) (prot
 				Details: map[string]string{"result": out},
 			}},
 		}, nil
-	} else {
-		s, err := a.registry.Build(module, id, args)
-		if err != nil {
-			return proto.ExecResponse{PeelID: peelID, Error: "build state: " + err.Error()}, nil
+	}
+
+	// Otherwise build and run a single ad-hoc state module.
+	s, err := a.registry.Build(module, id, args)
+	if err != nil {
+		return proto.ExecResponse{PeelID: peelID, Error: "build state: " + err.Error()}, nil
+	}
+	// Honor generic attributes (onlyif/unless/order/retry/...) on ad-hoc
+	// single-module runs too.
+	s = state.WrapAttributes(s, state.ParseStateAttributes(args), a.guardRunner)
+	return a.runExecStates(execCtx, []state.State{s}, args)
+}
+
+// specialHandler runs one dispatch special (state.apply/highstate, facts.*,
+// settings.*/pillar.*, event.send). args is the request's nil-normalized args
+// map (handlers may write into it, e.g. the positional-name default).
+type specialHandler func(execCtx context.Context, req proto.ExecRequest, args map[string]any) (proto.ExecResponse, error)
+
+// buildSpecialHandlers binds every modules.DispatchSpecials entry to its peel
+// handler, keyed by the table Name. Binding is family-driven from the table
+// itself, so an entry the table gains without a matching family here is left
+// UNBOUND — TestDispatchTableBound then fails loudly rather than the surface
+// silently falling through to the execmod/state-registry path. The four
+// families map to the exact handlers the legacy if/else chain used:
+//
+//	state.apply | state.highstate → dispatchStateModule (compile + run)
+//	facts.*  (incl. the facts. prefix)  → execFactsModule
+//	settings.* / pillar.* (+ prefixes)  → execSettingsModule
+//	event.send                          → execEventSend
+func (a *Agent) buildSpecialHandlers() map[string]specialHandler {
+	stateH := a.dispatchStateModule
+	factsH := func(_ context.Context, req proto.ExecRequest, args map[string]any) (proto.ExecResponse, error) {
+		return a.execFactsModule(req.Module, args), nil
+	}
+	settingsH := func(_ context.Context, req proto.ExecRequest, args map[string]any) (proto.ExecResponse, error) {
+		return a.execSettingsModule(req.Module, args), nil
+	}
+	eventH := func(_ context.Context, req proto.ExecRequest, args map[string]any) (proto.ExecResponse, error) {
+		return a.execEventSend(req.ID, args, req.ReactorDepth), nil
+	}
+
+	handlers := make(map[string]specialHandler, len(modules.DispatchSpecials))
+	for _, sp := range modules.DispatchSpecials {
+		var h specialHandler
+		switch {
+		case sp.Name == "state.apply" || sp.Name == "state.highstate":
+			h = stateH
+		case strings.HasPrefix(sp.Name, "facts."):
+			h = factsH
+		case strings.HasPrefix(sp.Name, "settings."), strings.HasPrefix(sp.Name, "pillar."):
+			h = settingsH
+		case sp.Name == "event.send":
+			h = eventH
 		}
-		// Honor generic attributes (onlyif/unless/order/retry/...) on
-		// ad-hoc single-module runs too.
-		s = state.WrapAttributes(s, state.ParseStateAttributes(args), a.guardRunner)
-		states = append(states, s)
+		if h != nil {
+			handlers[sp.Name] = h
+		}
+	}
+	return handlers
+}
+
+// dispatchStateModule handles the state.apply and state.highstate specials:
+// resolve settings, compile the requested state set, and run it. It is the
+// extracted, behavior-identical body of execModule's former state.apply /
+// state.highstate branches (including the two distinct empty-state error
+// messages and the state.apply pre-settings 'state' arg check).
+func (a *Agent) dispatchStateModule(execCtx context.Context, req proto.ExecRequest, args map[string]any) (proto.ExecResponse, error) {
+	peelID := a.peelID
+	logger := a.logger
+	module := req.Module
+
+	// state.apply's required 'state' arg is validated BEFORE resolving settings,
+	// so a malformed request has no settings side effects (legacy ordering).
+	var stateName string
+	if module == "state.apply" {
+		stateName, _ = args["state"].(string)
+		if stateName == "" {
+			return proto.ExecResponse{PeelID: peelID, Error: "state.apply requires 'state' arg"}, nil
+		}
+	}
+
+	currentFacts := a.mgr.GetFacts()
+	cs, csErr := a.resolveExecSettings(execCtx, module, currentFacts)
+	if csErr != nil {
+		return proto.ExecResponse{PeelID: peelID, Error: "settings resolution failed: " + csErr.Error()}, nil
+	}
+	a.mctx.Settings = cs
+
+	comp := compiler.NewCompiler(compiler.CompilerConfig{
+		StatesDir:  a.effectiveStatesDir,
+		Engine:     a.statesEng,
+		Registry:   a.registry,
+		Facts:      currentFacts,
+		Settings:   cs,
+		StarLoader: a.starLoader,
+		Guards:     a.guardRunner,
+		Logger:     logger,
+	})
+
+	var states []state.State
+	if module == "state.apply" {
+		result, err := comp.Compile(compiler.StateRef(stateName))
+		if err != nil {
+			return proto.ExecResponse{PeelID: peelID, Error: "compile state: " + err.Error()}, nil
+		}
+		states = result.States
+		logger.Info("state compiled", "state", stateName, "sources", result.Sources, "state_count", len(result.States))
+	} else { // state.highstate
+		result, err := comp.Highstate(peelID)
+		if err != nil {
+			return proto.ExecResponse{PeelID: peelID, Error: "highstate: " + err.Error()}, nil
+		}
+		if len(result.States) == 0 {
+			return proto.ExecResponse{PeelID: peelID, Error: "highstate: no states matched in top.zy"}, nil
+		}
+		states = result.States
+		logger.Info("highstate compiled", "peel", peelID, "sources", result.Sources, "state_count", len(result.States))
 	}
 
 	if len(states) == 0 {
 		return proto.ExecResponse{PeelID: peelID, Error: "no states built from request"}, nil
 	}
-
 	return a.runExecStates(execCtx, states, args)
 }
 

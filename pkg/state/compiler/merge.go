@@ -1,12 +1,23 @@
 package compiler
 
-// Requisite keys are appended during extend merging, not replaced
-var requisiteKeys = map[string]bool{
-	"require":   true,
-	"watch":     true,
-	"onchanges": true,
-	"onfail":    true,
-}
+import (
+	"maps"
+
+	"github.com/nirnx/zester/pkg/state"
+)
+
+// requisiteKeys are the same-state requisite declarations appended (not
+// replaced) during extend merging. It is DERIVED from state.RequisiteKeys()
+// — the single source of truth ParseRequisites itself is driven from (keystone
+// spec §6) — rather than re-declaring the key strings, so it cannot drift from
+// the requisite set the runtime actually consumes.
+var requisiteKeys = func() map[string]bool {
+	m := make(map[string]bool, 4)
+	for _, k := range state.RequisiteKeys() {
+		m[k] = true
+	}
+	return m
+}()
 
 // mergeArgsList merges two args lists according to Salt extend rules:
 // - Requisite lists are appended
@@ -63,9 +74,7 @@ func mergeArgsList(base, overlay []map[string]any) []map[string]any {
 func flattenArgsList(args []map[string]any) map[string]any {
 	result := make(map[string]any)
 	for _, item := range args {
-		for k, v := range item {
-			result[k] = v
-		}
+		maps.Copy(result, item)
 	}
 	return result
 }

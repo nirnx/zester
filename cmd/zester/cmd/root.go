@@ -70,8 +70,10 @@ func init() {
 }
 
 func persistentPreRun(cmd *cobra.Command, args []string) error {
-	// Skip config loading for commands that don't need it.
-	if cmd.Name() == "version" || cmd.Name() == "help" {
+	// Skip config loading for commands that don't need it. `doc` is fully
+	// offline (embedded module docs, no NATS), so a missing or broken config
+	// file must never keep it from running.
+	if cmd.Name() == "version" || cmd.Name() == "help" || cmd.Name() == "doc" {
 		return nil
 	}
 
@@ -125,10 +127,4 @@ func masterURLs() []string {
 		return cfg.Master.URLs
 	}
 	return []string{"nats://localhost:4222"}
-}
-
-// exitError prints an error and exits.
-func exitError(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
-	os.Exit(1)
 }

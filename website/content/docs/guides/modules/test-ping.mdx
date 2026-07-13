@@ -1,9 +1,15 @@
 ---
 title: "test.ping"
-description: "A simple liveness check that always succeeds. Returns {\"result\": \"true\"}. This is the Zester equivalent of Salt's test.ping."
+description: "A simple liveness check that always succeeds."
 ---
 
+{/* zester-docgen:managed module="test.ping" */}
+
 **Source**: `pkg/state/modules/test_ping.go`
+
+---
+
+`test.ping` is a no-op "are you alive?" check — the Zester equivalent of Salt's `test.ping`. It takes no parameters of its own and always succeeds, returning `{"result": "true"}` in its result details.
 
 ---
 
@@ -15,20 +21,44 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ---
 
-## Behavior
+## Effects
 
-- **Check**: Always reports changes needed (so the runner calls Apply).
-- **Apply**: Returns `Changed: false` with `Details: {"result": "true"}`.
-- **Revert**: No-op.
+### Check
+
+Always reports that a change is needed, so the runner proceeds to Apply and the result is returned.
+
+### Apply
+
+Performs no work: returns Changed: false with Details `{"result": "true"}`.
+
+### Revert
+
+No-op (Changed: false) — there is nothing to undo.
+
 
 ---
 
 ## Examples
 
-```bash
-# Ping all peels
-zester '*' test.ping
+### Ping all peels
 
-# Ping a specific peel
+The bare invocation checks liveness across every matched peel.
+
+```bash
+zester '*' test.ping
+```
+
+### Ping a specific peel
+
+Target a single peel by id.
+
+```bash
 zester 'web-01' test.ping
 ```
+
+
+---
+
+## See Also
+
+- [test.nop](/docs/guides/modules/test-helpers)

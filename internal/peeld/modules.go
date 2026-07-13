@@ -1,63 +1,69 @@
 package peeld
 
 import (
+	"fmt"
+	"log/slog"
+
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/state/modules"
 )
 
+// decodeOptions builds the peel's module-decode policy from the strict_params
+// knob, shared by BOTH the built-in state modules (registerStateModules →
+// modules.RegisterAll) and the Starlark loader (LoaderConfig.DecodeOptions), so
+// the two decode surfaces can never disagree on which keys are reserved or on
+// how an unknown key is treated.
+//
+// The strict flip (keystone spec §5 endgame): strict == true wires
+// PolicyError — a typo'd or unrecognized parameter on a migrated (Spec-carrying)
+// module FAILS the build with a typed modschema.UnknownKeyError (naming the
+// module, the key, and a did-you-mean suggestion). strict == false relaxes to
+// PolicyWarn — the historical behavior: a warning is logged through the peel's
+// slog logger and the state STILL builds.
+//
+// Known-not-parameter keys are never flagged under EITHER policy:
+//   - Reserved = state.ReservedKeySet(): the fleet-wide reserved keys —
+//     requisites (require/watch/onchanges/onfail), generic attributes
+//     (onlyif/unless/order/retry/failhard/prereq), and compiler directives
+//     (names/listen/*_in). A module never consumes these; the runner, compiler,
+//     and attribute wrapper do. They are STILL present in the config map at
+//     Build time on the compiled-highstate and ad-hoc paths, so under
+//     PolicyError they must be excused here or every real state would fail.
+//   - ExtraReserved = {"test", "name"}: "test" is the exec-layer dry-run flag.
+//     An ad-hoc run (`zester '*' pkg.removed foo test=True`) and a reactor
+//     dispatch pass the whole args map — including "test" — as the state
+//     config to the builder, and runExecStates reads args["test"] directly
+//     (isTestArg). "name" is the Salt universal state-identifier idiom (M1,
+//     keystone spec final fix pass): `test.nop: - name: anchor` is valid Salt
+//     even though test.nop declares no `name` parameter of its own — the state
+//     ID is meant to double as a label there. A module that DOES declare a
+//     `name` parameter (or an alias) still consumes it as that parameter FIRST
+//     (Decode's checkUnknownKeys only reaches Reserved/ExtraReserved for a key
+//     no parameter claimed — declared names win before the reserved check),
+//     so this entry only ever excuses "name" on a module with no `name`
+//     parameter/alias; it can never mask a genuine typo of a declared field.
+//     Both are known control keys, not module parameters, so neither may fail
+//     the build under strict.
+func decodeOptions(strict bool, logger *slog.Logger) modschema.DecodeOptions {
+	policy := modschema.PolicyError
+	if !strict {
+		policy = modschema.PolicyWarn
+	}
+	return modschema.DecodeOptions{
+		Unknown:       policy,
+		Reserved:      state.ReservedKeySet(),
+		ExtraReserved: []string{"test", "name"},
+		Warnf: func(format string, args ...any) {
+			logger.Warn(fmt.Sprintf(format, args...))
+		},
+	}
+}
+
 // registerStateModules registers every built-in state module with injected
-// execution providers. Adding a module means adding a line here (future work:
-// relocate this list to a RegisterAll in pkg/state/modules so it lives next
-// to the modules themselves).
-func registerStateModules(registry *state.Registry, mctx *exec.ModuleContext) {
-	registry.Register("file.managed", modules.NewFileManagedBuilder(mctx))
-	registry.Register("file.directory", modules.NewFileDirectoryBuilder(mctx))
-	registry.Register("file.absent", modules.NewFileAbsentBuilder(mctx))
-	registry.Register("file.append", modules.NewFileAppendBuilder(mctx))
-	registry.Register("cmd.run", modules.NewCmdRunBuilder(mctx))
-	registry.Register("pkg.installed", modules.NewPkgInstalledBuilder(mctx))
-	registry.Register("user.present", modules.NewUserPresentBuilder(mctx))
-	registry.Register("user.absent", modules.NewUserAbsentBuilder(mctx))
-	registry.Register("group.present", modules.NewGroupPresentBuilder(mctx))
-	registry.Register("group.absent", modules.NewGroupAbsentBuilder(mctx))
-	registry.Register("file.symlink", modules.NewFileSymlinkBuilder(mctx))
-	registry.Register("file.blockreplace", modules.NewFileBlockReplaceBuilder(mctx))
-	registry.Register("file.recurse", modules.NewFileRecurseBuilder(mctx))
-	registry.Register("pkg.removed", modules.NewPkgRemovedBuilder(mctx))
-	registry.Register("service.running", modules.NewSvcRunningBuilder(mctx))
-	registry.Register("service.dead", modules.NewSvcDeadBuilder(mctx))
-	registry.Register("service.enabled", modules.NewSvcEnabledBuilder(mctx))
-	registry.Register("cron.present", modules.NewCronPresentBuilder(mctx))
-	registry.Register("cron.absent", modules.NewCronAbsentBuilder(mctx))
-	registry.Register("mount.mounted", modules.NewMountMountedBuilder(mctx))
-	registry.Register("sysctl.present", modules.NewSysctlPresentBuilder(mctx))
-	registry.Register("locale.present", modules.NewLocalePresentBuilder(mctx))
-	registry.Register("timezone.system", modules.NewTimezoneSystemBuilder(mctx))
-	registry.Register("pip.installed", modules.NewPipInstalledBuilder(mctx))
-	registry.Register("git.cloned", modules.NewGitClonedBuilder(mctx))
-	registry.Register("git.latest", modules.NewGitLatestBuilder(mctx))
-	registry.Register("file.line", modules.NewFileLineBuilder(mctx))
-	registry.Register("file.replace", modules.NewFileReplaceBuilder(mctx))
-	registry.Register("file.comment", modules.NewFileCommentBuilder(mctx))
-	registry.Register("file.uncomment", modules.NewFileUncommentBuilder(mctx))
-	registry.Register("file.keyvalue", modules.NewFileKeyValueBuilder(mctx))
-	registry.Register("file.copy", modules.NewFileCopyBuilder(mctx))
-	registry.Register("file.touch", modules.NewFileTouchBuilder(mctx))
-	registry.Register("pkg.latest", modules.NewPkgLatestBuilder(mctx))
-	registry.Register("pkg.purged", modules.NewPkgPurgedBuilder(mctx))
-	registry.Register("pkgrepo.managed", modules.NewPkgrepoManagedBuilder(mctx))
-	registry.Register("archive.extracted", modules.NewArchiveExtractedBuilder(mctx))
-	registry.Register("host.present", modules.NewHostPresentBuilder(mctx))
-	registry.Register("host.absent", modules.NewHostAbsentBuilder(mctx))
-	registry.Register("ssh_auth.present", modules.NewSSHAuthPresentBuilder(mctx))
-	registry.Register("ssh_auth.absent", modules.NewSSHAuthAbsentBuilder(mctx))
-	registry.Register("test.ping", modules.NewTestPing)
-	registry.Register("test.nop", modules.NewTestNop)
-	registry.Register("test.fail_without_changes", modules.NewTestFailWithoutChanges)
-	registry.Register("test.succeed_with_changes", modules.NewTestSucceedWithChanges)
-	registry.Register("test.configurable_test_state", modules.NewTestConfigurableTestState)
-	// module.run captures the registry so it can invoke any other module by
-	// name; it must be registered after the targets it may dispatch to.
-	registry.Register("module.run", modules.NewModuleRunBuilder(registry))
+// execution providers and the peel's decode policy. The ordered registration
+// table lives next to the modules themselves (pkg/state/modules.RegisterAll).
+func registerStateModules(registry *state.Registry, mctx *exec.ModuleContext, opts modschema.DecodeOptions) {
+	modules.RegisterAll(registry, mctx, opts)
 }

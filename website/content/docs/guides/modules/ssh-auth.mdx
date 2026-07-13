@@ -1,99 +1,204 @@
 ---
-title: "ssh_auth.present / ssh_auth.absent"
-description: "Manages SSH public keys in a user's authorized_keys file. Matching is based on the key blob (the base64 body), so comments and options do not affect idempotency."
+title: "ssh_auth.absent / ssh_auth.present"
+description: "Ensure an SSH public key is absent from a user's authorized_keys. Ensure an SSH public key is present in a user's authorized_keys."
 ---
 
-**Source**: `pkg/state/modules/ssh_auth.go`
+{/* zester-docgen:managed module="ssh_auth.absent" */}
+{/* zester-docgen:managed module="ssh_auth.present" */}
+
+`ssh_auth.absent` and `ssh_auth.present` are documented together on this page; each has its own parameters.
 
 ---
 
-## ssh_auth.present
+## `ssh_auth.absent`
 
-Ensures a public key line is present, creating the `~/.ssh` directory (mode `0700`) and `authorized_keys` file (mode `0600`) as needed. An existing line with the same key blob is replaced with the desired line, and duplicate lines for the same blob are removed.
+**Source**: `pkg/state/modules/ssh_auth_absent.go`
+
+---
+
+`ssh_auth.absent` ensures an SSH public key line is NOT present in a user's `authorized_keys`. The key is given as `name` (defaulting to the state ID) and matched on its BLOB (the base64 body), so a bare blob or a full key line both identify the same authorized line. The managed file is resolved from `config` when set or the `user`'s home directory — one of `user` or `config` is required.
+
+---
 
 ### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | The public key — either just the base64 blob, or a full key line (`ssh-ed25519 AAAA... comment`). When a full line is given, it is written verbatim and `enc`/`comment` are ignored. |
-| `user` | `string` | *(1)* | `""` | Account whose `authorized_keys` is managed. The path is resolved from the user's home directory. |
-| `enc` | `string` | No | `ssh-rsa` | Key type prefix, used only when `name` is a bare blob. |
-| `comment` | `string` | No | `""` | Trailing comment on the key line, used only when `name` is a bare blob. |
-| `config` | `string` | *(1)* | `~user/.ssh/authorized_keys` | Absolute path override for the authorized_keys file. |
-
-*(1)* Either `user` or `config` is required; the builder fails when both are empty. When `config` is set, it takes precedence and `user` is not looked up.
-
----
-
-## ssh_auth.absent
-
-Ensures no line with the given key blob is present.
-
-### Parameters
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | `string` | No | State ID | The public key blob or full key line to remove. |
-| `user` | `string` | *(1)* | `""` | Account whose `authorized_keys` is managed. |
-| `config` | `string` | *(1)* | `~user/.ssh/authorized_keys` | Absolute path override. |
-
-A missing `authorized_keys` file is a no-op.
-
----
+| `name` | `string` | No | State ID | public key blob (or full key line) to remove; matched on the blob; defaults to the state ID |
+| `user` | `string` | No | *(none)* | account whose authorized_keys is managed; user or config is required |
+| `config` | `string` | No | *(none)* | explicit authorized_keys path; user or config is required (config takes precedence over the user's home) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+### Effects
 
-The desired file content is rendered in memory (comment and blank lines preserved) and compared with the current content; changes are reported only when they differ.
+#### Check
+
+Resolves the authorized_keys path (from `config`, or the `user`'s home) and reads it (a non-not-exist read error fails the phase). Reports no change when the file does not exist or no line carries the key blob; otherwise reports a change.
+
+#### Apply
+
+Reads authorized_keys and, when a line carries the key blob, memoizes the prior content for revert and rewrites the file with every matching line removed. A missing file or an already-absent key is a clean no-op. Reports the path and user in its details.
+
+#### Revert
+
+Restores the authorized_keys content this run's Apply captured before removing the key (with 0600 mode). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a user's authorized_keys it did not touch.
+
 
 ---
 
-## Revert Behavior
+### Examples
 
-- Restores the file content from the backup taken during Apply.
-- If `ssh_auth.present` created the file, Revert removes it.
+#### Revoke a key for a user
 
----
-
-## Examples
-
-### State File
-
-**Authorize a deploy key:**
+name is the key blob to remove; matched on the blob.
 
 ```yaml
-deploy-key:
+AAAAB3NzaC1yc2EAAAADAQABAAAB...:
+  ssh_auth.absent:
+    - user: deploy
+```
+
+#### Revoke a key ad hoc
+
+The bare positional argument is the key blob; user is a key=value.
+
+```bash
+zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
+```
+
+
+---
+
+### Notes
+
+> **Comment and blank lines are preserved**
+>
+> The `authorized_keys` file is rewritten in memory with existing comment (`#`) and blank lines kept verbatim; every line carrying the key blob is removed.
+
+> **Divergences from Salt**
+>
+> `config` is used as the LITERAL `authorized_keys` path (Salt's `config` is relative to the user's home directory). The `user` is resolved via the peel's OS user database. Salt's `options` and `source` parameters are not supported.
+
+
+---
+
+### Divergences
+
+- BD-6
+
+---
+
+### See Also
+
+- [ssh_auth.present](/docs/guides/modules/ssh-auth)
+
+---
+
+## `ssh_auth.present`
+
+**Source**: `pkg/state/modules/ssh_auth_present.go`
+
+---
+
+`ssh_auth.present` ensures an SSH public key line is present in a user's `authorized_keys`, creating `~/.ssh` (0700) and `authorized_keys` (0600) as needed. The key is given as `name` (defaulting to the state ID): a bare base64 blob is combined with `enc` (default `ssh-rsa`) and an optional `comment`, while a full `"ssh-… AAAA… comment"` line is used verbatim. Idempotency keys on the key BLOB, so re-running with a changed comment or encoding replaces the matching line rather than duplicating it. The managed file is the target user's `authorized_keys`, resolved from `config` when set or the account's home directory otherwise — one of `user` or `config` is required.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | public key blob (the base64 body) or a full key line; defaults to the state ID |
+| `user` | `string` | No | *(none)* | account whose authorized_keys is managed; user or config is required |
+| `enc` | `string` | No | `ssh-rsa` | key encoding/type (ssh-rsa, ssh-ed25519, …); defaults to ssh-rsa; ignored when name is a full key line |
+| `comment` | `string` | No | *(none)* | optional trailing comment on the key line |
+| `config` | `string` | No | *(none)* | explicit authorized_keys path; user or config is required (config takes precedence over the user's home) |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+### Effects
+
+#### Check
+
+Resolves the authorized_keys path (from `config`, or the `user`'s home) and reads it (a non-not-exist read error fails the phase). Reports a change when no line carries the desired key blob, or when the matching line differs from the desired line (a changed comment or encoding).
+
+#### Apply
+
+Ensures `~/.ssh` exists (0700), reads authorized_keys, memoizes its prior content (or that it did not exist) for revert, and rewrites it so a single line carries the key blob — replacing any existing line for the same blob and deduplicating, or writing the file (0600) when absent. An already-present identical line is a clean no-op. Reports the path and user in its details.
+
+#### Revert
+
+Restores what this run's Apply changed: an authorized_keys that pre-existed is rewritten with its captured prior content and 0600 mode; a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a user's authorized_keys it did not touch.
+
+
+---
+
+### Examples
+
+#### Authorize a key for a user
+
+name is the key blob; enc defaults to ssh-rsa; comment labels the line.
+
+```yaml
+AAAAB3NzaC1yc2EAAAADAQABAAAB...:
   ssh_auth.present:
     - user: deploy
-    - name: "AAAAC3NzaC1lZDI1NTE5AAAAIB6..."
-    - enc: ssh-ed25519
     - comment: deploy@ci
 ```
 
-**Full key line (written verbatim):**
+#### Authorize a full ed25519 key line
+
+A full "ssh-… AAAA… comment" line is used verbatim; enc/comment are ignored.
 
 ```yaml
-"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB6... admin@laptop":
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... alice@laptop:
   ssh_auth.present:
-    - user: root
+    - user: alice
 ```
 
-**Remove a revoked key:**
+#### Authorize a key ad hoc
 
-```yaml
-revoked-key:
-  ssh_auth.absent:
-    - user: deploy
-    - name: "AAAAB3NzaC1yc2EAAAADAQAB..."
+The bare positional argument is the key blob; user/enc/comment are key=values.
+
+```bash
+zester 'web*' ssh_auth.present AAAAB3Nza... user=deploy enc=ssh-rsa
 ```
+
 
 ---
 
-## Divergences from Salt
+### Notes
 
-- `config` must be an **absolute path**; Salt's `config` is relative to the user's home directory (default `.ssh/authorized_keys`).
-- Salt's `options` (key options like `no-pty`) and `source` (key file URL) parameters are not supported.
-- The user is resolved via the OS user database on the peel; the `.ssh` directory and file are written by the peel's file provider (ownership is not changed to the target user).
+> **Identity is the key blob**
+>
+> The managed line's identity is the key BLOB (its base64 body). Re-running with a different `comment` or `enc` replaces the matching line in place rather than adding a duplicate. Provide either a bare blob (combined with `enc`/`comment`) or a full key line (used verbatim).
+
+> **user or config selects the file**
+>
+> The managed file is resolved from `config` (an explicit authorized_keys path) when set, otherwise from the `user`'s home directory (`~user/.ssh/authorized_keys`). One of the two is required.
+
+> **Comment and blank lines are preserved**
+>
+> The `authorized_keys` file is rewritten in memory: existing comment (`#`) and blank lines are kept verbatim, and only the line carrying the key blob is added, replaced in place, or deduplicated.
+
+> **Divergences from Salt**
+>
+> `config` is used as the LITERAL `authorized_keys` path (so it must be absolute to be meaningful), whereas Salt's `config` is relative to the user's home directory (default `.ssh/authorized_keys`). Salt's `options` (key options such as `no-pty`) and `source` (key-file URL) parameters are not supported. The `user` is resolved via the peel's OS user database, and the `.ssh` directory and file are written by the peel's file provider — ownership is not changed to the target user.
+
+
+---
+
+### Divergences
+
+- BD-6
+
+---
+
+### See Also
+
+- [ssh_auth.absent](/docs/guides/modules/ssh-auth)

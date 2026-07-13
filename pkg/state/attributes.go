@@ -73,8 +73,13 @@ func (a StateAttributes) IsZero() bool {
 }
 
 // ParseStateAttributes extracts the generic state attributes from a config
-// map. Recognized keys: onlyif, unless, order, retry, failhard, prereq.
-// The keys are consumed (unknown to the module builders, which ignore them).
+// map. The consumed key set IS attributeKeys (see reserved.go): onlyif,
+// unless, order, retry, failhard, prereq. The keys are consumed (unknown to
+// the module builders, which ignore them). Because several keys need bespoke
+// coercion (order's first/last, retry's map form, failhard's truthiness), the
+// parser names them structurally rather than looping the slice; drift between
+// this parser and attributeKeys is caught by
+// TestParseStateAttributes_ConsumesAttributeKeys.
 func ParseStateAttributes(config map[string]any) StateAttributes {
 	var a StateAttributes
 	a.Onlyif = toStringList(config["onlyif"])

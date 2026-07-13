@@ -6,6 +6,7 @@
     "security",
     "ha",
     "reactor",
+    "self-documenting-modules",
     "enrollment",
     "enrollment-design",
     "enrollment-security",

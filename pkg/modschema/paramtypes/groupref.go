@@ -1,0 +1,91 @@
+package paramtypes
+
+import (
+	"fmt"
+	"reflect"
+	"strconv"
+)
+
+// GroupRef is the semantic value for a group parameter that may be given either
+// as a numeric GID or as a group name (for example file.managed's group /
+// user.present's primary group). It accepts:
+//
+//   - any integer kind, taken as a numeric GID (a NEGATIVE GID is rejected up
+//     front — BD-4 arm — where the legacy path forwarded it and failed later at
+//     the group provider), and
+//   - a string: an all-digit string is a numeric GID (BD-4 — "1000" resolves the
+//     same as the integer 1000, matching how the OS treats a numeric group), any
+//     other string is a group name. An empty string is undeclared (§3).
+type GroupRef struct {
+	declared bool
+	isGID    bool
+	gid      int
+	name     string
+}
+
+// NewGroupRefGID returns a declared, numeric GroupRef.
+func NewGroupRefGID(gid int) GroupRef { return GroupRef{declared: true, isGID: true, gid: gid} }
+
+// NewGroupRefName returns a declared, name-based GroupRef.
+func NewGroupRefName(name string) GroupRef { return GroupRef{declared: true, name: name} }
+
+// Declared reports whether a group was supplied.
+func (g GroupRef) Declared() bool { return g.declared }
+
+// IsGID reports whether the reference is a numeric GID (as opposed to a name).
+func (g GroupRef) IsGID() bool { return g.isGID }
+
+// GID returns the numeric GID; meaningful only when IsGID.
+func (g GroupRef) GID() int { return g.gid }
+
+// Name returns the group name; empty when the reference is a numeric GID.
+func (g GroupRef) Name() string { return g.name }
+
+// groupRefType is the sealed SemanticType descriptor for GroupRef.
+type groupRefType struct{}
+
+func (groupRefType) Name() string         { return "GroupRef" }
+func (groupRefType) GoType() reflect.Type { return reflect.TypeFor[GroupRef]() }
+func (groupRefType) Doc() string {
+	return "A group reference, given as a non-negative integer GID or a group " +
+		"name. An all-digit string is treated as a numeric GID, so \"1000\" and the " +
+		"integer 1000 resolve identically; a negative GID is rejected."
+}
+func (groupRefType) JSONSchema() map[string]any {
+	return map[string]any{
+		"oneOf": []any{
+			map[string]any{"type": "integer", "minimum": 0},
+			map[string]any{"type": "string", "minLength": 1},
+		},
+	}
+}
+func (groupRefType) sealed() {}
+
+func (groupRefType) Decode(in Input) (any, error) {
+	if s, ok := in.Raw.(string); ok {
+		if s == "" {
+			// EMPTY-STRING RULE (keystone spec §3): an empty group reference is
+			// undeclared and falls through to a lower-precedence source (e.g.
+			// primary_group), exactly as the legacy comma-ok extraction did. The
+			// framework intercepts "" before dispatch; this guard keeps the type
+			// self-consistent for any direct caller.
+			return GroupRef{}, nil
+		}
+		if isAllDigits(s) {
+			gid, err := strconv.Atoi(s)
+			if err != nil {
+				return GroupRef{}, fmt.Errorf("paramtypes: GroupRef: %q is not a valid GID: %w", s, err)
+			}
+			return GroupRef{declared: true, isGID: true, gid: gid}, nil
+		}
+		return GroupRef{declared: true, name: s}, nil
+	}
+	gid, ok := intFromReflect(in.Raw)
+	if !ok {
+		return GroupRef{}, fmt.Errorf("paramtypes: GroupRef: cannot interpret %T as a group", in.Raw)
+	}
+	if gid < 0 {
+		return GroupRef{}, fmt.Errorf("paramtypes: GroupRef: negative GID %d", gid)
+	}
+	return GroupRef{declared: true, isGID: true, gid: gid}, nil
+}

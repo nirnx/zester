@@ -7,6 +7,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 func testCronMctx(cron *exectest.FakeCronExec) *exec.ModuleContext {
@@ -22,7 +23,7 @@ func testCronMctx(cron *exectest.FakeCronExec) *exec.ModuleContext {
 
 func TestCronPresentName(t *testing.T) {
 	mctx := testCronMctx(exectest.NewFakeCronExec())
-	s, err := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, err := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
 	if err != nil {
@@ -35,7 +36,7 @@ func TestCronPresentName(t *testing.T) {
 
 func TestCronPresentDefaultUser(t *testing.T) {
 	mctx := testCronMctx(exectest.NewFakeCronExec())
-	s, err := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, err := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
 	if err != nil {
@@ -49,7 +50,7 @@ func TestCronPresentDefaultUser(t *testing.T) {
 
 func TestCronPresentCommandRequired(t *testing.T) {
 	mctx := testCronMctx(exectest.NewFakeCronExec())
-	_, err := NewCronPresentBuilder(mctx)("backup", map[string]any{})
+	_, err := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when command is missing")
 	}
@@ -58,7 +59,7 @@ func TestCronPresentCommandRequired(t *testing.T) {
 func TestCronPresentCheckNeedsChange(t *testing.T) {
 	fake := exectest.NewFakeCronExec()
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 		"minute":  "0",
 		"hour":    "2",
@@ -81,7 +82,7 @@ func TestCronPresentCheckNoChange(t *testing.T) {
 		Command: "/usr/bin/backup.sh", Comment: "backup",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 		"minute":  "0",
 		"hour":    "2",
@@ -104,7 +105,7 @@ func TestCronPresentCheckCommandEditedUnderSameLabel(t *testing.T) {
 		Command: "/usr/local/bin/backup.sh", Comment: "backup-job",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup-job", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup-job", map[string]any{
 		"command": "/usr/local/bin/backup.sh --v2",
 		"minute":  "0",
 		"hour":    "2",
@@ -127,7 +128,7 @@ func TestCronPresentApplyCommandEditReplacesNotOrphans(t *testing.T) {
 		Command: "/usr/local/bin/backup.sh", Comment: "backup-job",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup-job", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup-job", map[string]any{
 		"command": "/usr/local/bin/backup.sh --v2",
 		"minute":  "0",
 		"hour":    "2",
@@ -160,7 +161,7 @@ func TestCronPresentAdoptsUnlabeledEntry(t *testing.T) {
 		Command: "/usr/bin/backup.sh",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 		"minute":  "0",
 		"hour":    "2",
@@ -193,7 +194,7 @@ func TestCronPresentDistinctLabelsSameCommandCoexist(t *testing.T) {
 		Command: "/usr/bin/backup.sh", Comment: "other-job",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 		"minute":  "30",
 		"hour":    "4",
@@ -217,7 +218,7 @@ func TestCronPresentDistinctLabelsSameCommandCoexist(t *testing.T) {
 func TestCronPresentApply(t *testing.T) {
 	fake := exectest.NewFakeCronExec()
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 		"minute":  "0",
 		"hour":    "3",
@@ -240,7 +241,7 @@ func TestCronPresentRevertCreatedEntry(t *testing.T) {
 	// entry is removed.
 	fake := exectest.NewFakeCronExec()
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
 	if _, err := s.Apply(context.Background()); err != nil {
@@ -265,7 +266,7 @@ func TestCronPresentRevertFreshInstanceNoOp(t *testing.T) {
 	fake := exectest.NewFakeCronExec()
 	fake.PreAdd("root", exec.CronEntry{Command: "/usr/bin/backup.sh"})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
 	ar, err := s.Revert(context.Background())
@@ -292,7 +293,7 @@ func TestCronPresentRevertAfterConvergedApplyNoOp(t *testing.T) {
 		Command: "/usr/bin/backup.sh", Comment: "backup",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 		"minute":  "0",
 		"hour":    "2",
@@ -326,7 +327,7 @@ func TestCronPresentRevertPreservesOtherLabelsSameCommand(t *testing.T) {
 		Command: "/usr/bin/sync.sh", Comment: "sync-daily",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("sync-hourly", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("sync-hourly", map[string]any{
 		"command": "/usr/bin/sync.sh",
 		"minute":  "30",
 	})
@@ -362,7 +363,7 @@ func TestCronPresentRevertRestoresAdoptedLine(t *testing.T) {
 		Command: "/usr/bin/backup.sh",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 		"minute":  "0",
 		"hour":    "2",
@@ -396,7 +397,7 @@ func TestCronPresentRevertRestoresSameLabelOriginal(t *testing.T) {
 		Command: "/usr/local/bin/backup.sh", Comment: "backup-job",
 	})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup-job", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup-job", map[string]any{
 		"command": "/usr/local/bin/backup.sh --v2",
 		"minute":  "0",
 		"hour":    "2",
@@ -430,7 +431,7 @@ func TestCronPresentApplyConvergedNoOp(t *testing.T) {
 	})
 	fake.SetErr = errors.New("Set must not be called when converged")
 	mctx := testCronMctx(fake)
-	s, _ := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 		"minute":  "0",
 		"hour":    "2",
@@ -450,7 +451,7 @@ func TestCronPresentApplyConvergedNoOp(t *testing.T) {
 func cronConvergenceWalk(t *testing.T, fake *exectest.FakeCronExec, config map[string]any) {
 	t.Helper()
 	mctx := testCronMctx(fake)
-	s, err := NewCronPresentBuilder(mctx)("backup", config)
+	s, err := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +510,7 @@ func TestCronPresentConvergenceCommandEdit(t *testing.T) {
 
 func TestCronPresentNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Cron: nil}}
-	_, err := NewCronPresentBuilder(mctx)("backup", map[string]any{"command": "/bin/x"})
+	_, err := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{"command": "/bin/x"})
 	if err == nil {
 		t.Fatal("expected error when cron provider is nil")
 	}
@@ -517,7 +518,7 @@ func TestCronPresentNoProvider(t *testing.T) {
 
 func TestCronPresentRequisites(t *testing.T) {
 	mctx := testCronMctx(exectest.NewFakeCronExec())
-	s, err := NewCronPresentBuilder(mctx)("backup", map[string]any{
+	s, err := NewCronPresentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/bin/x",
 		"require": []any{"pkg.installed:cron"},
 	})
@@ -534,7 +535,7 @@ func TestCronPresentRequisites(t *testing.T) {
 
 func TestCronAbsentName(t *testing.T) {
 	mctx := testCronMctx(exectest.NewFakeCronExec())
-	s, err := NewCronAbsentBuilder(mctx)("backup", map[string]any{
+	s, err := NewCronAbsentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
 	if err != nil {
@@ -549,7 +550,7 @@ func TestCronAbsentCheckNeedsChange(t *testing.T) {
 	fake := exectest.NewFakeCronExec()
 	fake.PreAdd("root", exec.CronEntry{Command: "/usr/bin/backup.sh"})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronAbsentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronAbsentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
 	cr, err := s.Check(context.Background())
@@ -564,7 +565,7 @@ func TestCronAbsentCheckNeedsChange(t *testing.T) {
 func TestCronAbsentCheckNoChange(t *testing.T) {
 	fake := exectest.NewFakeCronExec()
 	mctx := testCronMctx(fake)
-	s, _ := NewCronAbsentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronAbsentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
 	cr, _ := s.Check(context.Background())
@@ -577,7 +578,7 @@ func TestCronAbsentApply(t *testing.T) {
 	fake := exectest.NewFakeCronExec()
 	fake.PreAdd("root", exec.CronEntry{Command: "/usr/bin/backup.sh"})
 	mctx := testCronMctx(fake)
-	s, _ := NewCronAbsentBuilder(mctx)("backup", map[string]any{
+	s, _ := NewCronAbsentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{
 		"command": "/usr/bin/backup.sh",
 	})
 	ar, err := s.Apply(context.Background())
@@ -594,7 +595,7 @@ func TestCronAbsentApply(t *testing.T) {
 
 func TestCronAbsentNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Cron: nil}}
-	_, err := NewCronAbsentBuilder(mctx)("backup", map[string]any{"command": "/bin/x"})
+	_, err := NewCronAbsentBuilder(mctx, modschema.DecodeOptions{})("backup", map[string]any{"command": "/bin/x"})
 	if err == nil {
 		t.Fatal("expected error when cron provider is nil")
 	}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -14,12 +15,17 @@ import (
 // (apt-get purge on Debian; dnf/yum remove on RedHat). The purge itself is
 // performed via CommandExec so it works regardless of what PackageExec.Remove
 // does under the hood.
+//
+// PkgPurged is also its own schema proto: the tagged exported Package field IS
+// the module's parameter declaration (one schema declaration per module) — a
+// primitive, no semantic type needed. The unexported runtime fields (family,
+// mgr, pkg, cmd) are untagged, so the schema compiler skips them.
 type PkgPurged struct {
 	id   string
 	reqs state.Requisites
 
 	// Package is the name of the package to purge.
-	Package string
+	Package string `zester:"name,primary" usage:"package to purge, including its configuration files (defaults to the state ID)"`
 
 	// family is the detected OS family ("debian", "redhat", "darwin", "").
 	family string
@@ -37,36 +43,118 @@ type PkgPurged struct {
 	cmd exec.CommandExec
 }
 
+// pkgPurgedSpec is the compiled schema + documentation for pkg.purged. It is
+// compiled once at package init and executed by every decode path (the
+// builder below, and Registry.Parse). The prose is verified against the live
+// Check/Apply/Revert behavior and the detectPkgSystem logic (pkg_latest.go).
+var pkgPurgedSpec = mustSpec("pkg.purged", modschema.KindState, PkgPurged{}, modschema.Doc{
+	Summary: "Ensure a package is removed along with its configuration files.",
+	Description: "`pkg.purged` ensures the named package is fully gone — not just removed, but " +
+		"purged of residual package-manager state. On Debian, `apt-get purge` clears the conffiles a " +
+		"plain remove leaves behind in dpkg's 'rc' status; RedHat's rpm has no separate purge " +
+		"concept, so purge is identical to remove there. The package name defaults to the state ID. " +
+		"Purging shells out to the package-manager CLI directly (via `CommandExec`), independent of " +
+		"whatever the injected `PackageExec` provider's `Remove` does — so it works even when " +
+		"`pkg.installed`'s and `pkg.removed`'s presence probe would already call the package \"not " +
+		"installed\".",
+	Effects: modschema.Effects{
+		Check: "Reports converged only when NO package-manager record exists at all. On Debian the " +
+			"probe is `dpkg-query -W -f='${db:Status-Status}' <pkg>` (one status line per installed " +
+			"instance, so multi-arch packages are handled correctly): any live status — `installed`, " +
+			"the residual `config-files` ('rc') state, `half-installed`, or similar — needs a purge; " +
+			"only `not-installed` or no dpkg record at all is converged. On the RedHat family the " +
+			"probe is `rpm -q <pkg>` (rpm has no 'rc' equivalent, so a query hit alone means " +
+			"installed). On an unknown OS family, Check falls back to the injected `PackageExec`'s " +
+			"installed probe (no residual-config concept there either, e.g. brew); without a " +
+			"provider, Check errors rather than silently reporting converged. A probe that never " +
+			"runs at all (spawn failure, context death) is also a real error, never reported as " +
+			"converged — that would silently skip the purge on a broken host.",
+		Apply: "Purges the package via the manager-specific CLI command: `apt-get purge -y <pkg>` on " +
+			"Debian, `<mgr> remove -y <pkg>` on the RedHat family (dnf or yum — identical to a plain " +
+			"remove there). On an unknown OS family it falls back to the injected `PackageExec`'s " +
+			"`Remove`; without either a command provider or a package provider, Apply errors. Reports " +
+			"Changed with the package name and manager in its details.",
+		Revert: "Explicit no-op (same contract as `pkg.removed`): the purged version and the purged " +
+			"configuration files are never recorded and cannot be reconstructed, so a reinstall here " +
+			"would only guess at whatever the repo's current latest candidate is — not the inverse of " +
+			"Apply. Reinstall explicitly with `pkg.installed`.",
+	},
+	Examples: []modschema.Example{
+		{
+			Title:       "Purge a package ad hoc",
+			Kind:        "cli",
+			Explanation: "The bare positional argument is the package name.",
+			Code:        "zester 'web-01' pkg.purged apache2",
+		},
+		{
+			Title:       "Purge a package",
+			Kind:        "state",
+			Explanation: "The package name defaults to the state ID.",
+			Code:        "apache2:\n  pkg.purged: []\n",
+		},
+		{
+			Title:       "Purge before installing a replacement",
+			Kind:        "state",
+			Explanation: "require_in orders this purge ahead of a replacement's install: apache2's package and configuration are fully gone before nginx's pkg.installed runs.",
+			Code: "remove-old-webserver:\n  pkg.purged:\n    - name: apache2\n    - require_in:\n" +
+				"      - \"pkg.installed:nginx\"\n",
+		},
+	},
+	Notes: []modschema.Note{
+		{
+			Level: "info",
+			Title: "Purge's value over pkg.removed",
+			Body: "pkg.removed's and pkg.installed's installed-probe deliberately reports a dpkg " +
+				"'rc'-state package as NOT installed (so a fresh install/removal doesn't churn on " +
+				"leftover conffiles). pkg.purged's whole purpose is clearing that residual state, so " +
+				"its own Check probe deliberately does NOT go through the shared " +
+				"`PackageExec.IsInstalled` — it queries dpkg/rpm status directly.",
+		},
+		{
+			Level: "info",
+			Title: "RedHat purge equals remove",
+			Body: "rpm tracks no separate purge state, so on the RedHat family `pkg.purged` and " +
+				"`pkg.removed` run the identical remove command.",
+		},
+		{
+			Level: "info",
+			Title: "Multiple packages",
+			Body: "Salt's `pkgs` (multi-package) parameter is not supported; use the generic " +
+				"`names` attribute to expand one state per package.",
+		},
+	},
+	Divergences: []string{"BD-6"},
+	SeeAlso:     []string{"pkg.installed", "pkg.latest", "pkg.removed"},
+})
+
 // NewPkgPurgedBuilder returns a state.Builder that creates PkgPurged states
-// using the given ModuleContext's command and package providers.
-func NewPkgPurgedBuilder(mctx *exec.ModuleContext) state.Builder {
+// using the given ModuleContext's command and package providers. Decode
+// policy (unknown-key handling, reserved keys) is threaded via opts.
+func NewPkgPurgedBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions) state.Builder {
 	return func(id string, config map[string]any) (state.State, error) {
 		if mctx.Command == nil {
 			return nil, fmt.Errorf("pkg.purged: no command provider available")
 		}
-		return newPkgPurged(id, config, mctx.Command, mctx.Package, mctx.Facts)
+		// Decode the typed parameters first. Decode is transactional and commits
+		// by replacing the whole struct, so the injected providers, id, and
+		// requisites MUST be assigned AFTER it.
+		p := &PkgPurged{}
+		if _, err := pkgPurgedSpec.Decode(id, config, p, opts); err != nil {
+			return nil, fmt.Errorf("pkg.purged: %w", err)
+		}
+		p.id = id
+		p.cmd = mctx.Command
+		p.pkg = mctx.Package
+
+		providerName := ""
+		if mctx.Package != nil {
+			providerName = mctx.Package.Name()
+		}
+		p.family, p.mgr = detectPkgSystem(mctx.Facts, providerName)
+
+		p.reqs = state.ParseRequisites(config)
+		return p, nil
 	}
-}
-
-func newPkgPurged(id string, config map[string]any, cmd exec.CommandExec,
-	pkg exec.PackageExec, facts map[string]any) (state.State, error) {
-
-	p := &PkgPurged{id: id, cmd: cmd, pkg: pkg}
-
-	p.Package, _ = config["name"].(string)
-	if p.Package == "" {
-		p.Package = id
-	}
-
-	providerName := ""
-	if pkg != nil {
-		providerName = pkg.Name()
-	}
-	p.family, p.mgr = detectPkgSystem(facts, providerName)
-
-	p.reqs = state.ParseRequisites(config)
-
-	return p, nil
 }
 
 func (p *PkgPurged) Name() string           { return "pkg.purged:" + p.id }
@@ -117,7 +205,7 @@ func (p *PkgPurged) needsPurge(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, nil // ran, non-zero exit: no dpkg record at all
 		}
-		for _, line := range strings.Split(res.Stdout, "\n") {
+		for line := range strings.SplitSeq(res.Stdout, "\n") {
 			s := strings.TrimSpace(line)
 			// Any live status — installed, config-files ('rc'), half-*,
 			// unpacked — leaves state behind that purge clears.

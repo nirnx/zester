@@ -1,0 +1,131 @@
+module: service.enabled
+# Permanent differential contract for the service.enabled migration (the FINAL
+# gate-close wave). These cases were approved by the legacy-vs-new equivalence
+# comparison while the legacy constructor still existed (see the migration
+# changelog); after its deletion RunContract replays them as the permanent
+# regression guard. service.enabled has a SINGLE parameter — `name` (the primary,
+# defaulting to the state ID), projected as the exported field `Service`.
+# Accepting cases pin the decoded Service value; rejecting cases pin the error
+# kind. BD-tagged cases pin the flagged behavioral difference:
+#   BD-6 (APPROVED) — a wrong-typed `name` is coerced (numeric scalar → its
+#   string form) or rejected (composite → typed error) instead of silently
+#   falling back to the state ID, where the legacy `.(string)` assertion zeroed
+#   it (falling to the ID). Pinned across yaml (native int) and msgpack (sized
+#   int) for both arms; the CLI already delivers a numeric token as a string, so
+#   the CLI numeric case is parity.
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: enable-nginx
+    input:
+      name: nginx
+    want:
+      Service: nginx
+  - label: string-name-msgpack
+    universe: msgpack
+    id: enable-nginx
+    input:
+      name: nginx
+    want:
+      Service: nginx
+  - label: string-name-cli
+    universe: cli
+    id: enable-nginx
+    input:
+      name: nginx
+    want:
+      Service: nginx
+
+  # --- parity: no name key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: sshd
+    input: {}
+    want:
+      Service: sshd
+  - label: primary-fallback-cli
+    universe: cli
+    id: sshd
+    input: {}
+    want:
+      Service: sshd
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: sshd
+    input:
+      name: ""
+    want:
+      Service: sshd
+  - label: empty-name-falls-back-to-id-cli
+    universe: cli
+    id: sshd
+    input:
+      name: ""
+    want:
+      Service: sshd
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent, falls back to
+  # the state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: sshd
+    input:
+      name:
+    want:
+      Service: sshd
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: sshd
+    input:
+      name:
+    want:
+      Service: sshd
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: sshd
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Service: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: sshd
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Service: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: sshd
+    input:
+      name: 123
+    want:
+      Service: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: sshd
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: sshd
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type

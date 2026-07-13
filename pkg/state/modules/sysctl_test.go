@@ -8,6 +8,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 // testSysctlMctx wires the sysctl fake plus a file fake the module verifies
@@ -30,7 +31,7 @@ func seedSysctlConf(file *exectest.FakeFileExec, content string) {
 
 func TestSysctlPresentName(t *testing.T) {
 	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
-	s, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	if err != nil {
@@ -43,7 +44,7 @@ func TestSysctlPresentName(t *testing.T) {
 
 func TestSysctlPresentDefaultKey(t *testing.T) {
 	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
-	s, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	if err != nil {
@@ -57,9 +58,44 @@ func TestSysctlPresentDefaultKey(t *testing.T) {
 
 func TestSysctlPresentValueRequired(t *testing.T) {
 	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
-	_, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{})
+	_, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when value is missing")
+	}
+}
+
+func TestSysctlPresentDecodeCoercions(t *testing.T) {
+	// Module-level BD activation through the builder (the decoder contract pins
+	// the same across all three universes). A numeric value coerces to its
+	// string form (BD-6, an ERROR->ACCEPT flip on the required param) and an
+	// integer persist is 0=false (BD-7).
+	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
+	s, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("vm.swappiness", map[string]any{
+		"value":   10,
+		"persist": 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := s.(*SysctlPresent)
+	if sp.Value != "10" {
+		t.Errorf("Value = %q, want \"10\" (BD-6 numeric coercion on the required param)", sp.Value)
+	}
+	if sp.Persist {
+		t.Error("Persist = true, want false (BD-7 integer 0 = false)")
+	}
+}
+
+func TestSysctlPresentPersistInvalidInt(t *testing.T) {
+	// BD-7 rejection arm at the module level: an integer persist other than 0/1
+	// is a typed value error, not a silent drop.
+	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
+	_, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("vm.swappiness", map[string]any{
+		"value":   "10",
+		"persist": 2,
+	})
+	if err == nil {
+		t.Fatal("expected an error for persist=2 (BD-7 only 0/1 are booleans)")
 	}
 }
 
@@ -67,7 +103,7 @@ func TestSysctlPresentCheckNeedsChange(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "0")
 	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	cr, err := s.Check(context.Background())
@@ -87,7 +123,7 @@ func TestSysctlPresentCheckNoChange(t *testing.T) {
 	file := exectest.NewFakeFileExec()
 	seedSysctlConf(file, "net.ipv4.ip_forward = 1\n")
 	mctx := testSysctlMctx(fake, file)
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	cr, _ := s.Check(context.Background())
@@ -103,7 +139,7 @@ func TestSysctlPresentCheckPersistMissing(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "1")
 	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec()) // no conf file
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	cr, err := s.Check(context.Background())
@@ -121,7 +157,7 @@ func TestSysctlPresentCheckPersistValueDrift(t *testing.T) {
 	file := exectest.NewFakeFileExec()
 	seedSysctlConf(file, "net.ipv4.ip_forward = 0\n")
 	mctx := testSysctlMctx(fake, file)
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	cr, err := s.Check(context.Background())
@@ -137,7 +173,7 @@ func TestSysctlPresentCheckNoPersistIgnoresFile(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "1")
 	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value":   "1",
 		"persist": false,
 	})
@@ -158,7 +194,7 @@ func TestSysctlPresentCheckPersistReadErrorFails(t *testing.T) {
 	file := exectest.NewFakeFileExec()
 	file.SetReadError(exec.SysctlConfPath, errors.New("permission denied"))
 	mctx := testSysctlMctx(fake, file)
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	if _, err := s.Check(context.Background()); err == nil {
@@ -173,7 +209,7 @@ func TestSysctlPresentApply(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "0")
 	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value":   "1",
 		"persist": true,
 	})
@@ -196,7 +232,7 @@ func TestSysctlPresentApplyNoPersist(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "0")
 	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value":   "1",
 		"persist": false,
 	})
@@ -215,7 +251,7 @@ func TestSysctlPresentApplyPersistsRuntimeMatch(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "1")
 	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	ar, err := s.Apply(context.Background())
@@ -237,7 +273,7 @@ func TestSysctlPresentApplyConvergedNoOp(t *testing.T) {
 	file := exectest.NewFakeFileExec()
 	seedSysctlConf(file, "net.ipv4.ip_forward = 1\n")
 	mctx := testSysctlMctx(fake, file)
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	ar, err := s.Apply(context.Background())
@@ -253,7 +289,7 @@ func TestSysctlPresentRevert(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "0")
 	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	_, _ = s.Apply(context.Background())
@@ -273,7 +309,7 @@ func TestSysctlPresentRevertFreshInstanceNoOp(t *testing.T) {
 	fake := exectest.NewFakeSysctlExec()
 	fake.PreSet("net.ipv4.ip_forward", "1")
 	mctx := testSysctlMctx(fake, exectest.NewFakeFileExec())
-	s, _ := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, _ := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value": "1",
 	})
 	ar, err := s.Revert(context.Background())
@@ -329,7 +365,7 @@ func TestSysctlPresentRevertRemovesAddedPersistEntry(t *testing.T) {
 	cmd.SetResult("sysctl", &exec.CommandResult{Stdout: "10\n"}, nil) // runtime already 10
 	file := exectest.NewFakeFileExec()
 	mctx := testSysctlProcfsMctx(cmd, file)
-	s, err := NewSysctlPresentBuilder(mctx)("vm.swappiness", map[string]any{
+	s, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("vm.swappiness", map[string]any{
 		"value": "10",
 	})
 	if err != nil {
@@ -371,7 +407,7 @@ func TestSysctlPresentRevertRestoresPriorPersistEntry(t *testing.T) {
 	file := exectest.NewFakeFileExec()
 	file.PreCreate(exec.SysctlConfPath, []byte("vm.swappiness = 60\n"), 0644)
 	mctx := testSysctlProcfsMctx(cmd, file)
-	s, err := NewSysctlPresentBuilder(mctx)("vm.swappiness", map[string]any{
+	s, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("vm.swappiness", map[string]any{
 		"value": "10",
 	})
 	if err != nil {
@@ -410,7 +446,7 @@ func TestSysctlPresentConvergencePersistFacet(t *testing.T) {
 	cmd.SetResult("sysctl", &exec.CommandResult{Stdout: "10\n"}, nil) // runtime already 10
 	file := exectest.NewFakeFileExec()
 	mctx := testSysctlProcfsMctx(cmd, file)
-	s, err := NewSysctlPresentBuilder(mctx)("vm.swappiness", map[string]any{
+	s, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("vm.swappiness", map[string]any{
 		"value": "10",
 	})
 	if err != nil {
@@ -437,7 +473,7 @@ func TestSysctlPresentConvergencePersistFacet(t *testing.T) {
 
 func TestSysctlPresentNoProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Sysctl: nil}}
-	_, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{"value": "1"})
+	_, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{"value": "1"})
 	if err == nil {
 		t.Fatal("expected error when sysctl provider is nil")
 	}
@@ -445,12 +481,12 @@ func TestSysctlPresentNoProvider(t *testing.T) {
 
 func TestSysctlPresentPersistRequiresFileProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Sysctl: exectest.NewFakeSysctlExec()}}
-	_, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{"value": "1"})
+	_, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{"value": "1"})
 	if err == nil {
 		t.Fatal("expected error when persist is enabled but no file provider is available")
 	}
 	// persist:false does not need the file provider.
-	if _, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	if _, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value":   "1",
 		"persist": false,
 	}); err != nil {
@@ -460,7 +496,7 @@ func TestSysctlPresentPersistRequiresFileProvider(t *testing.T) {
 
 func TestSysctlPresentRequisites(t *testing.T) {
 	mctx := testSysctlMctx(exectest.NewFakeSysctlExec(), exectest.NewFakeFileExec())
-	s, err := NewSysctlPresentBuilder(mctx)("net.ipv4.ip_forward", map[string]any{
+	s, err := NewSysctlPresentBuilder(mctx, modschema.DecodeOptions{})("net.ipv4.ip_forward", map[string]any{
 		"value":   "1",
 		"require": []any{"pkg.installed:procps"},
 	})

@@ -1,0 +1,313 @@
+module: test.configurable_test_state
+# Permanent differential contract for the test.configurable_test_state migration.
+# Parameters: `result` and `changes` are eager `default=true` bools; `comment` is
+# a plain string with no default. These cases were approved by the legacy-vs-new
+# equivalence comparison while the legacy constructor still existed (see the
+# migration changelog); after its deletion RunContract replays them as the
+# permanent regression guard. Accept cases pin the decoded exported-field
+# projection; reject cases pin the error kind. Pinned per-PARAM (NOT "same
+# pattern") per the §11 standard — EVERY boolean gets its own int-one/int-zero/
+# invalid-int arms across yaml+msgpack, and its truthy/falsy-string arm:
+#   BD-2 — a truthy/falsy STRING result/changes is honored (the legacy
+#          config[...].(bool) assertion silently kept the default true);
+#   BD-6 — a numeric comment coerces to its string form; a composite comment,
+#          and a composite or float result/changes, are rejected (a float is not
+#          a boolean) instead of being silently dropped;
+#   BD-7 — an integer result/changes is 1=true / 0=false; any other integer a
+#          typed value_invalid error;
+#   PARITY (not a BD) — an absent or empty-string result/changes eager-defaults
+#          to true; an absent or empty-string comment stays "".
+cases:
+  # ============================ result (bool default=true) ============================
+  - label: result-true-yaml
+    universe: yaml
+    id: cfg
+    input:
+      result: true
+    want:
+      Result: true
+  - label: result-false-yaml
+    universe: yaml
+    id: cfg
+    input:
+      result: false
+    want:
+      Result: false
+  - label: result-default-true-yaml
+    universe: yaml
+    id: cfg
+    input: {}
+    want:
+      Result: true
+  - label: result-empty-defaults-true-yaml
+    universe: yaml
+    id: cfg
+    input:
+      result: ""
+    want:
+      Result: true
+  # BD-2: a CLI result=false (the string "false") is honored (was dropped to default true).
+  - label: result-falsy-string-cli
+    universe: cli
+    id: cfg
+    bd: BD-2
+    input:
+      result: false
+    want:
+      Result: false
+  # BD-2 is ORIGIN-INDEPENDENT: a YAML-quoted "no" is honored too.
+  - label: result-falsy-string-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-2
+    input:
+      result: "no"
+    want:
+      Result: false
+  - label: result-truthy-string-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-2
+    input:
+      result: "on"
+    want:
+      Result: true
+  # BD-7: an integer result is 1=true / 0=false across yaml+msgpack.
+  - label: result-int-one-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-7
+    input:
+      result: 1
+    want:
+      Result: true
+  - label: result-int-one-msgpack
+    universe: msgpack
+    id: cfg
+    bd: BD-7
+    input:
+      result: 1
+    want:
+      Result: true
+  - label: result-int-zero-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-7
+    input:
+      result: 0
+    want:
+      Result: false
+  - label: result-int-zero-msgpack
+    universe: msgpack
+    id: cfg
+    bd: BD-7
+    input:
+      result: 0
+    want:
+      Result: false
+  - label: result-invalid-int-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-7
+    input:
+      result: 2
+    want_error: value_invalid
+  - label: result-invalid-int-msgpack
+    universe: msgpack
+    id: cfg
+    bd: BD-7
+    input:
+      result: 2
+    want_error: value_invalid
+  # BD-6: a float is not a boolean (rejected), and a composite is rejected.
+  - label: result-float-rejected-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-6
+    input:
+      result: 1.5
+    want_error: wrong_type
+  - label: result-composite-rejected-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-6
+    input:
+      result:
+        - a
+    want_error: wrong_type
+
+  # ============================ changes (bool default=true) ============================
+  # changes is the same plain-bool type as result, pinned per-param (not "same pattern").
+  - label: changes-true-yaml
+    universe: yaml
+    id: cfg
+    input:
+      changes: true
+    want:
+      Changes: true
+  - label: changes-false-yaml
+    universe: yaml
+    id: cfg
+    input:
+      changes: false
+    want:
+      Changes: false
+  - label: changes-default-true-yaml
+    universe: yaml
+    id: cfg
+    input: {}
+    want:
+      Changes: true
+  - label: changes-empty-defaults-true-yaml
+    universe: yaml
+    id: cfg
+    input:
+      changes: ""
+    want:
+      Changes: true
+  - label: changes-falsy-string-cli
+    universe: cli
+    id: cfg
+    bd: BD-2
+    input:
+      changes: false
+    want:
+      Changes: false
+  - label: changes-falsy-string-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-2
+    input:
+      changes: "off"
+    want:
+      Changes: false
+  # A truthy STRING is exercised too, mirroring result's "on" arm — the full
+  # truthy/falsy set is pinned per-param (not "same pattern as result").
+  - label: changes-truthy-string-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-2
+    input:
+      changes: "yes"
+    want:
+      Changes: true
+  - label: changes-int-one-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-7
+    input:
+      changes: 1
+    want:
+      Changes: true
+  - label: changes-int-one-msgpack
+    universe: msgpack
+    id: cfg
+    bd: BD-7
+    input:
+      changes: 1
+    want:
+      Changes: true
+  - label: changes-int-zero-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-7
+    input:
+      changes: 0
+    want:
+      Changes: false
+  - label: changes-int-zero-msgpack
+    universe: msgpack
+    id: cfg
+    bd: BD-7
+    input:
+      changes: 0
+    want:
+      Changes: false
+  - label: changes-invalid-int-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-7
+    input:
+      changes: 5
+    want_error: value_invalid
+  - label: changes-invalid-int-msgpack
+    universe: msgpack
+    id: cfg
+    bd: BD-7
+    input:
+      changes: 5
+    want_error: value_invalid
+  - label: changes-float-rejected-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-6
+    input:
+      changes: 0.0
+    want_error: wrong_type
+  - label: changes-composite-rejected-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-6
+    input:
+      changes:
+        k: v
+    want_error: wrong_type
+
+  # ============================ comment (string, no default) ============================
+  - label: comment-string-yaml
+    universe: yaml
+    id: cfg
+    input:
+      comment: healthy
+    want:
+      Comment: healthy
+  - label: comment-absent-yaml
+    universe: yaml
+    id: cfg
+    input: {}
+    want:
+      Comment: ""
+  - label: comment-empty-string-yaml
+    universe: yaml
+    id: cfg
+    input:
+      comment: ""
+    want:
+      Comment: ""
+  # BD-6: a numeric comment coerces to its string form (was dropped to "").
+  - label: comment-numeric-coerced-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-6
+    input:
+      comment: 42
+    want:
+      Comment: "42"
+  - label: comment-numeric-coerced-msgpack
+    universe: msgpack
+    id: cfg
+    bd: BD-6
+    input:
+      comment: 42
+    want:
+      Comment: "42"
+  - label: comment-composite-rejected-yaml
+    universe: yaml
+    id: cfg
+    bd: BD-6
+    input:
+      comment:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== misc ==============================
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: cfg
+    input:
+      result: true
+      require:
+        - test.nop:anchor
+    want:
+      Result: true

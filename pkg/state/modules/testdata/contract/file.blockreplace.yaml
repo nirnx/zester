@@ -1,0 +1,370 @@
+module: file.blockreplace
+# Permanent differential contract for the file.blockreplace migration. These
+# cases were approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accepting cases pin
+# the decoded Path/Content/MarkerStart/MarkerEnd/AppendIfNotFound/AppendNewline
+# projection; rejecting cases pin the error kind. Unlike the fsxResolvePath-based
+# file modules, `name` has NO `path` alias (the legacy constructor read `name`
+# only) — the path-is-not-an-alias case pins that. `marker_start`/`marker_end`
+# carry eager defaults (# START/END managed zone). BD-tagged cases pin the
+# flagged behavioral differences:
+#   BD-2 (APPROVED) — a CLI bool-string append_if_not_found/append_newline is
+#   honored (legacy .(bool) dropped it).
+#   BD-6 (APPROVED) — a wrong-typed `name` is coerced (scalar) or rejected
+#   (composite) instead of silently falling back to the state ID; and the
+#   non-primary string params (content/marker_start/marker_end) now sprint a
+#   numeric scalar to their string form, where the legacy `.(string)` assertion
+#   silently zeroed them (the pkg.installed `version` precedent).
+#   BD-7 (APPROVED) — append_if_not_found/append_newline accept the INTEGERS 1
+#   and 0 (1 -> true, 0 -> false) and reject any other integer with a typed
+#   error, where the legacy .(bool) assertion dropped an int entirely.
+cases:
+  # --- parity: full config across all three universes ---
+  - label: full-config-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/conf
+      content: body
+      marker_start: "# S"
+      marker_end: "# E"
+    want:
+      Path: /etc/conf
+      Content: body
+      MarkerStart: "# S"
+      MarkerEnd: "# E"
+  - label: full-config-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/conf
+      content: body
+      marker_start: "# S"
+      marker_end: "# E"
+    want:
+      Path: /etc/conf
+      MarkerStart: "# S"
+      MarkerEnd: "# E"
+  - label: full-config-cli
+    universe: cli
+    id: web
+    input:
+      name: /etc/conf
+      content: body
+      marker_start: "# S"
+    want:
+      Path: /etc/conf
+      Content: body
+      MarkerStart: "# S"
+
+  # --- parity: markers default when absent ---
+  - label: marker-defaults-yaml
+    universe: yaml
+    id: /etc/conf
+    input:
+      content: body
+    want:
+      MarkerStart: "# START managed zone"
+      MarkerEnd: "# END managed zone"
+  - label: marker-defaults-msgpack
+    universe: msgpack
+    id: /etc/conf
+    input:
+      content: body
+    want:
+      MarkerStart: "# START managed zone"
+      MarkerEnd: "# END managed zone"
+
+  # --- parity: primary fallback / empty-name / nil-name ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /etc/conf
+    input:
+      content: body
+    want:
+      Path: /etc/conf
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/conf
+    input:
+      name: ""
+      content: body
+    want:
+      Path: /etc/conf
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /etc/conf
+    input:
+      name:
+      content: body
+    want:
+      Path: /etc/conf
+
+  # --- parity: `path` is NOT an alias here — it is an inert key, so the primary
+  # falls back to the state ID (contrast the fsxResolvePath modules) ---
+  - label: path-is-not-an-alias-yaml
+    universe: yaml
+    id: /the/id
+    input:
+      path: /etc/conf
+      content: body
+    want:
+      Path: /the/id
+
+  # --- parity: append/newline as native bools ---
+  - label: append-true-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/conf
+      content: body
+      append_if_not_found: true
+      append_newline: true
+    want:
+      AppendIfNotFound: true
+      AppendNewline: true
+
+  # --- BD-2: a CLI bool-string append_if_not_found is now honored ---
+  - label: append-cli-truthy-string
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: /etc/conf
+      content: body
+      append_if_not_found: true
+    want:
+      AppendIfNotFound: true
+
+  # --- BD-2: a CLI bool-string append_newline is now honored. Every boolean
+  # parameter's CLI arm is pinned per-param (§11), not by a representative. ---
+  - label: newline-cli-truthy-string
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: /etc/conf
+      content: body
+      append_newline: true
+    want:
+      AppendNewline: true
+
+  # --- BD-7: append_if_not_found accepts the INTEGERS 1 and 0 and rejects any
+  # other integer with a typed error. Pinned across yaml (native int) and
+  # msgpack (sized int). append_newline's arm is pinned explicitly below
+  # (every boolean parameter is pinned per-param, not by a representative). ---
+  - label: append-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_if_not_found: 1
+    want:
+      AppendIfNotFound: true
+  - label: append-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_if_not_found: 1
+    want:
+      AppendIfNotFound: true
+  - label: append-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_if_not_found: 0
+    want:
+      AppendIfNotFound: false
+  - label: append-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_if_not_found: 0
+    want:
+      AppendIfNotFound: false
+  - label: append-int-invalid-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_if_not_found: 2
+    want_error: value_invalid
+  - label: append-int-invalid-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_if_not_found: 2
+    want_error: value_invalid
+
+  # --- BD-7: append_newline's integer arm is pinned explicitly (every boolean
+  # parameter's arm is declared, not just a representative). ---
+  - label: newline-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_newline: 1
+    want:
+      AppendNewline: true
+  - label: newline-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_newline: 1
+    want:
+      AppendNewline: true
+  - label: newline-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_newline: 0
+    want:
+      AppendNewline: false
+  - label: newline-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_newline: 0
+    want:
+      AppendNewline: false
+  - label: newline-int-invalid-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_newline: 2
+    want_error: value_invalid
+  - label: newline-int-invalid-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: /etc/conf
+      content: body
+      append_newline: 2
+    want_error: value_invalid
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      content: body
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      content: body
+    want:
+      Path: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      content: body
+    want_error: wrong_type
+
+  # --- BD-6: non-primary string params sprint a numeric scalar to their string
+  # form, where the legacy `.(string)` assertion silently zeroed them (markers
+  # then fell to their defaults). Pinned per-param across yaml (native int) and
+  # msgpack (sized int). ---
+  - label: numeric-content-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/conf
+      content: 5
+    want:
+      Content: "5"
+  - label: numeric-content-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/conf
+      content: 5
+    want:
+      Content: "5"
+  - label: numeric-marker-start-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/conf
+      content: body
+      marker_start: 5
+    want:
+      MarkerStart: "5"
+  - label: numeric-marker-start-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/conf
+      content: body
+      marker_start: 5
+    want:
+      MarkerStart: "5"
+  - label: numeric-marker-end-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/conf
+      content: body
+      marker_end: 5
+    want:
+      MarkerEnd: "5"
+  - label: numeric-marker-end-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/conf
+      content: body
+      marker_end: 5
+    want:
+      MarkerEnd: "5"

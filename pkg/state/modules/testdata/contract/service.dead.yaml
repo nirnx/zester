@@ -1,0 +1,211 @@
+module: service.dead
+# Permanent differential contract for the service.dead migration (semantic-type
+# pilot, tranche 0E). service.dead INVERTS service.running's enable default: its
+# observable facet is DisableOnApply = Enable.Declared() && !Enable.Value(), so an
+# unset OR true enable leaves boot enablement alone and only enable:false also
+# disables the unit. Accept cases pin Service (primary string), the derived
+# DisableOnApply bool, and (where relevant) the Enable TriState; reject cases pin
+# the error kind. BD-2: a CLI enable=false string now disables (was silently
+# dropped). BD-6: a non-string name is coerced or rejected, not silently replaced
+# by the state ID.
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+    want:
+      Service: nginx
+      DisableOnApply: false
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: nginx
+    want:
+      Service: nginx
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: nginx
+    want:
+      Service: nginx
+
+  # --- parity: no name key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: mysql
+    input: {}
+    want:
+      Service: mysql
+      DisableOnApply: false
+
+  # --- parity: the inverted default — an unset enable does NOT disable ---
+  - label: enable-unset-does-not-disable-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+    want:
+      DisableOnApply: false
+      Enable: {declared: false}
+
+  # --- parity: enable:true does NOT disable (leave boot state alone) ---
+  - label: enable-true-does-not-disable-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+      enable: true
+    want:
+      DisableOnApply: false
+      Enable: true
+  - label: enable-true-does-not-disable-cli
+    universe: cli
+    id: web
+    input:
+      name: nginx
+      enable: true
+    want:
+      DisableOnApply: false
+
+  # --- parity: enable:false DISABLES (the inversion) in the bool universes ---
+  - label: enable-false-disables-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+      enable: false
+    want:
+      DisableOnApply: true
+      Enable: false
+  - label: enable-false-disables-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: nginx
+      enable: false
+    want:
+      DisableOnApply: true
+
+  # --- BD-2: CLI enable=false (the string "false") now disables the unit; legacy
+  # .(bool) dropped the string and left it enabled (DisableOnApply=false) ---
+  - label: enable-false-disables-cli
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: nginx
+      enable: false
+    want:
+      DisableOnApply: true
+
+  # --- BD-7: an integer enable:0 is declared-false, so DisableOnApply is true —
+  # identical to enable:false (service.dead's inversion). 1 would be declared-true
+  # (leave boot state alone), and any other integer is a typed value error. yaml
+  # and msgpack deliver a real int (the msgpack leg decodes to a sized int8); the
+  # CLI delivers "0" as a string that the falsy set maps to the same result, so all
+  # three universes agree. ---
+  - label: enable-int-zero-disables-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 0
+    want:
+      DisableOnApply: true
+      Enable: false
+  - label: enable-int-zero-disables-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 0
+    want:
+      DisableOnApply: true
+  - label: enable-int-zero-disables-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 0
+    want:
+      DisableOnApply: true
+
+  # --- BD-6: a numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Service: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Service: "123"
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      Service: "123"
+
+  # --- BD-6: a composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # --- BD-7 (rejection arm): any integer other than 0/1 is rejected with a typed
+  # error, where legacy silently ignored it. Pinned across all three universes
+  # (yaml/msgpack: real int 2; cli: string "2" outside the truthy/falsy set). ---
+  - label: enable-invalid-int-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 2
+    want_error: value_invalid
+  - label: enable-invalid-int-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 2
+    want_error: value_invalid
+  - label: enable-invalid-int-rejected-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 2
+    want_error: value_invalid

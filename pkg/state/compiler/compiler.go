@@ -3,8 +3,11 @@ package compiler
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/template"
@@ -170,10 +173,29 @@ func (c *Compiler) CompileMultiple(refs []StateRef) (*CompileResult, error) {
 			cfg := flattenArgsList(args)
 
 			if names, ok := expandNames(cfg); ok {
+				// SCHEMA-AWARE injection (M1/M2, keystone spec final fix pass): the
+				// expanded name goes into the module's PRIMARY parameter's canonical
+				// key when it has one (file.managed → name, cmd.run → command), or
+				// the historical literal "name" otherwise (module.run, legacy/
+				// Starlark, and a no-primary spec-carrying module like test.* — all
+				// reserved-tolerant of "name" now per M1's ExtraReserved fix). See
+				// namesInjectKey. Injection is UNCONDITIONAL — Salt semantics: the
+				// per-instance names entry wins over an explicit value at the inject
+				// key (Salt's compiler sets each expanded chunk's name from the
+				// names list; legacy zester likewise injected name unconditionally).
+				// For cmd.run this rides BD-8's Salt-parity acceptance: names +
+				// explicit command now runs each instance's own name, as Salt does.
+				injectKey, injectAliases := c.namesInjectKey(module)
 				for _, name := range names {
 					inst := cloneConfig(cfg)
-					delete(inst, "names")
-					inst["name"] = name
+					delete(inst, namesKey)
+					// Salt semantics: names wins — drop any explicit value at the
+					// inject key or its aliases, then set the per-instance name.
+					delete(inst, injectKey)
+					for _, a := range injectAliases {
+						delete(inst, a)
+					}
+					inst[injectKey] = name
 					s, err := c.buildOne(module, name, inst)
 					if err != nil {
 						return nil, fmt.Errorf("compiler: build state %q (%s, name=%s): %w", stateID, module, name, err)
@@ -208,9 +230,67 @@ func (c *Compiler) buildOne(module, id string, cfg map[string]any) (state.State,
 	return state.WrapAttributes(s, attrs, c.config.Guards), nil
 }
 
+// namesInjectKey decides, for a `names:` expansion, which config key each
+// expanded name is written into, and that key's declared aliases (so the
+// caller — Compile's expansion loop — can clear any explicit value at the key
+// OR an alias before injecting; injection is UNCONDITIONAL, Salt semantics —
+// each expanded instance runs its own names entry, see the loop's comment;
+// the earlier M2 skip-injection behavior was superseded by BD-8). The
+// compiler holds the Registry, so it consults the module's registered schema
+// (Describe):
+//
+//   - spec-carrying module WITH a primary parameter → (primary.Name,
+//     primary.Aliases): inject into that canonical key. file.managed's primary
+//     is `name` (so this is byte-identical to the historical literal "name"
+//     injection); cmd.run's primary is `command` (aliases `name`, `cmd`), so
+//     the expansion clears all three before writing each per-instance name
+//     into `command`.
+//   - every other case — OpenParams passthrough (module.run), no registered
+//     schema at all (legacy / Starlark without a PARAMS declaration), AND a
+//     spec-carrying module with NO primary (the test.* family) — → ("name",
+//     nil): the historical literal-"name" injection, restored in full (M2:
+//     "full parity") now that ANY module tolerates an injected "name" it does
+//     not itself declare (M1 added "name" to internal/peeld's ExtraReserved
+//     alongside the exec-layer "test"). module.run resolves its target from
+//     config["name"] and skips unknown-key validation regardless; a no-schema
+//     builder reads config["name"] directly; a no-primary spec-carrying module
+//     (test.ping, test.nop, …) simply carries the per-instance state ID as
+//     before and ignores the extra key, which strict now excuses rather than
+//     rejects.
+func (c *Compiler) namesInjectKey(module string) (key string, aliases []string) {
+	info, ok := c.config.Registry.Describe(module)
+	if ok && !info.OpenParams {
+		for _, f := range info.Params {
+			if f.Primary {
+				return f.Name, f.Aliases
+			}
+		}
+	}
+	return "name", nil
+}
+
+// namesKey is the `names:` expansion directive. It is DERIVED from
+// state.CompilerKeys() — the sole compiler directive that is neither an "_in"
+// inverse form nor a same-state alias source — so the key string lives only in
+// pkg/state/reserved.go. Pinned to "names" by TestCompilerConsumedKeysAreReserved.
+var namesKey = deriveNamesKey()
+
+func deriveNamesKey() string {
+	for _, k := range state.CompilerKeys() {
+		if strings.HasSuffix(k, inSuffix) {
+			continue
+		}
+		if _, isAlias := sameStateAlias[k]; isAlias {
+			continue
+		}
+		return k
+	}
+	return ""
+}
+
 // expandNames returns the `names:` list from a config map, if present.
 func expandNames(cfg map[string]any) ([]string, bool) {
-	v, ok := cfg["names"]
+	v, ok := cfg[namesKey]
 	if !ok {
 		return nil, false
 	}
@@ -225,20 +305,16 @@ func expandNames(cfg map[string]any) ([]string, bool) {
 // not mutate the shared map.
 func cloneConfig(cfg map[string]any) map[string]any {
 	out := make(map[string]any, len(cfg))
-	for k, v := range cfg {
-		out[k] = v
-	}
+	maps.Copy(out, cfg)
 	return out
 }
 
 // loadRecursive loads a state file and all its includes recursively
 func (c *Compiler) loadRecursive(ref StateRef, loaded map[StateRef]*parsedFile, loadStack []StateRef, sources *[]string) error {
 	// Check for cycles (must happen before "already loaded" check)
-	for _, stackRef := range loadStack {
-		if stackRef == ref {
-			chain := append(loadStack, ref)
-			return fmt.Errorf("compiler: include cycle detected: %v", chain)
-		}
+	if slices.Contains(loadStack, ref) {
+		chain := append(loadStack, ref)
+		return fmt.Errorf("compiler: include cycle detected: %v", chain)
 	}
 
 	// Check if already loaded

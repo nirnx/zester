@@ -1,49 +1,26 @@
 ---
 title: "pkgrepo.managed"
+description: "Manage an apt or yum/dnf package repository definition."
 ---
 
-Manages an apt or yum/dnf package repository definition. On Debian it writes `/etc/apt/sources.list.d/<name>.list` (optionally importing a signing key and refreshing the cache); on the RedHat family it writes `/etc/yum.repos.d/<name>.repo`. PPAs are handled via `add-apt-repository`.
+{/* zester-docgen:managed module="pkgrepo.managed" */}
 
-**Source**: `pkg/state/modules/pkgrepo.go`
-
----
-
-## Parameters
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | `string` | No | State ID | Repository identifier — used for the default filename and the yum section header. |
-| `humanname` | `string` | No | `name` | Descriptive display name (yum `name=` field / apt comment line). |
-| `baseurl` | `string` | No | `""` | **On apt: the full `deb ...` source line. On yum: the `baseurl=` value.** |
-| `ppa` | `string` | No | `""` | An apt PPA reference (e.g. `ppa:user/name`). When set and `baseurl` is empty, the repo is added via `add-apt-repository -y`. Setting `ppa` also forces the Debian code path when the OS family cannot be detected. |
-| `file` | `string` | No | *(family default)* | Override the repository definition file path. |
-| `key_url` | `string` | No | `""` | Signing-key URL. On apt the key is fetched with `curl` to `/etc/apt/keyrings/zester-<name>.gpg` and imported via `apt-key add`; on yum it becomes the `gpgkey=` field. |
-| `enabled` | `bool` | No | `true` | The yum `enabled=` field (`1`/`0`). Ignored on apt. |
-| `gpgcheck` | `bool` | No | `true` | The yum `gpgcheck=` field (`1`/`0`). Ignored on apt. |
-| `refresh` | `bool` | No | `true` | Refresh the package cache after writing the repo (`apt-get update` / `<mgr> makecache`). |
-
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+**Source**: `pkg/state/modules/pkgrepo_managed.go`
 
 ---
 
-## Check Behavior
+`pkgrepo.managed` manages an apt or yum/dnf package repository definition file. On the Debian family it writes `/etc/apt/sources.list.d/<name>.list` (optionally fetching a signing key and refreshing the cache); on the RedHat family it writes `/etc/yum.repos.d/<name>.repo`. A PPA (`ppa:user/name`) is handled via `add-apt-repository`. The repository identifier defaults to the state ID and is used for both the default filename and the yum section header; `humanname` defaults to it. `enabled`, `gpgcheck`, and `refresh` default to `true`. Setting `ppa` also forces the Debian code path when the OS family cannot otherwise be detected.
 
-- If the OS family cannot be determined, Check errors.
-- **PPA repos** always report changes needed — a PPA cannot be verified from a single file, so `add-apt-repository` (which is idempotent) is always re-run on Apply.
-- Otherwise the desired file content is rendered and compared byte-for-byte with the current repo file; a missing or differing file means changes are needed. A read failure other than "file does not exist" fails the check (it is never treated as a missing file).
-- **On Debian with `key_url` declared**, Check also verifies the imported keyring file `/etc/apt/keyrings/zester-<name>.gpg` exists — the key URL appears nowhere in the compared `.list` bytes, so a matching repo file with a never-imported (or deleted) signing key still reports changes needed. Presence only: a key rotated in place at the same URL is not detected (delete the keyring file to force a re-import). RedHat needs no keyring probe — `gpgkey=` is part of the compared content and dnf fetches it at transaction time.
+The rendered repository file body is:
 
-### Rendered file content
-
-<Tabs items={["Debian (.list)", "RedHat (.repo)"]}>
-<Tab value="Debian (.list)">
+Debian (`.list`):
 
 ```
 # Managed by Zester: <humanname>
 <baseurl>
 ```
-</Tab>
-<Tab value="RedHat (.repo)">
+
+RedHat (`.repo`):
 
 ```ini
 [<name>]
@@ -53,31 +30,49 @@ enabled=1
 gpgcheck=1
 gpgkey=<key_url>          # only when key_url is set
 ```
-</Tab>
-</Tabs>
 
 ---
 
-## Apply Behavior
+## Parameters
 
-**Debian:** imports the signing key when `key_url` is set (`curl` to the persistent keyring file `/etc/apt/keyrings/zester-<name>.gpg`, then `apt-key add`), then either runs `add-apt-repository -y <ppa>` or writes the `.list` file (creating the parent directory), then runs `apt-get update` when `refresh` is true.
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | repository identifier, used for the default filename and the yum section header; defaults to the state ID |
+| `humanname` | `string` | No | *(none)* | descriptive display name (yum name= field / apt comment line); defaults to the repository name |
+| `baseurl` | `string` | No | *(none)* | the repository line — on apt the full "deb ..." source line, on yum the baseurl= value |
+| `ppa` | `string` | No | *(none)* | apt PPA reference (e.g. "ppa:user/name"); when set and baseurl is empty the repo is added via add-apt-repository, and it forces the Debian code path when the OS family cannot be detected |
+| `file` | `string` | No | *(none)* | override the default repository definition file path |
+| `key_url` | `string` | No | *(none)* | signing-key URL; on apt it is fetched to /etc/apt/keyrings/zester-&lt;name&gt;.gpg and imported via apt-key add, on yum it becomes the gpgkey= field |
+| `enabled` | `bool` | No | `true` | the yum enabled= field (1/0), ignored on apt; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `gpgcheck` | `bool` | No | `true` | the yum gpgcheck= field (1/0), ignored on apt; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `refresh` | `bool` | No | `true` | refresh the package cache after writing the repo (apt-get update / &lt;mgr&gt; makecache); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
-**RedHat:** writes the `.repo` file, then runs `<mgr> makecache` when `refresh` is true.
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Revert Behavior
+## Effects
 
-- PPA repos are removed via `add-apt-repository -r -y <ppa>`.
-- File-based repos: the repo definition file is deleted; on Debian with `key_url` declared, the keyring file `/etc/apt/keyrings/zester-<name>.gpg` is deleted too (already-absent is fine).
+### Check
+
+Errors when the OS family cannot be determined. A **PPA** repo always reports a change — a PPA cannot be verified from a single file, so the idempotent `add-apt-repository` is re-run on every Apply. Otherwise it renders the desired file content and compares it byte-for-byte with the current repo file; a missing or differing file needs a change, and a read failure other than "file does not exist" fails the check (it is never treated as a missing file, so an unreadable file is never blindly overwritten). On Debian with `key_url` declared it ALSO verifies the imported keyring file `/etc/apt/keyrings/zester-<name>.gpg` exists — the key URL appears nowhere in the compared `.list` bytes, so a matching repo file with a never-imported (or deleted) signing key still reports a change. This is presence-only: a key rotated in place at the same URL is not detected. RedHat needs no keyring probe — `gpgkey=` is part of the compared content and dnf fetches it at transaction time.
+
+### Apply
+
+On **Debian**: imports the signing key when `key_url` is set (`curl` writing DIRECTLY to the persistent keyring file `/etc/apt/keyrings/zester-<name>.gpg`, then `apt-key add`), then either runs `add-apt-repository -y <ppa>` or writes the `.list` file (creating the parent directory), then runs `apt-get update` when `refresh` is true. On **RedHat**: writes the `.repo` file, then runs `<mgr> makecache` when `refresh` is true. Reports the repo name, file, and family in its details.
+
+### Revert
+
+A PPA repo is removed via `add-apt-repository -r -y <ppa>`. A file-based repo has its definition file deleted; on Debian with `key_url` declared the keyring file `/etc/apt/keyrings/zester-<name>.gpg` is removed too (an already-absent keyring is fine). Revert removes the whole repo file rather than restoring any prior content.
+
 
 ---
 
 ## Examples
 
-### State File
+### Apt repository
 
-**Apt repository (note: `baseurl` is the full deb line):**
+On apt, baseurl holds the full deb line; key_url is fetched and imported.
 
 ```yaml
 docker:
@@ -87,7 +82,9 @@ docker:
     - key_url: https://download.docker.com/linux/ubuntu/gpg
 ```
 
-**Yum repository:**
+### Yum repository
+
+On yum, baseurl is the baseurl= value; enabled/gpgcheck default to true.
 
 ```yaml
 epel:
@@ -97,7 +94,9 @@ epel:
     - gpgcheck: false
 ```
 
-**PPA:**
+### PPA
+
+A PPA is added via add-apt-repository; setting ppa forces the Debian path.
 
 ```yaml
 deadsnakes:
@@ -105,11 +104,50 @@ deadsnakes:
     - ppa: "ppa:deadsnakes/ppa"
 ```
 
+### Add an apt repository ad hoc
+
+The bare positional argument is the repository name; baseurl is a key=value.
+
+```bash
+zester 'web*' pkgrepo.managed docker baseurl='deb https://download.docker.com/linux/ubuntu jammy stable'
+```
+
+
 ---
 
-## Divergences from Salt
+## Notes
 
-- **On apt, `baseurl` holds the entire `deb ...` source line.** In Salt the deb line goes in `name:`; Zester keeps `name` as the repo identifier and reuses `baseurl` for both families.
-- Apt keys are imported with the deprecated `apt-key add` (Salt supports `signed-by`/keyring files).
-- Salt's `disabled`, `mirrorlist`, `gpgautoimport`, `comps`, and `architectures` parameters are not supported.
-- Reverting removes the whole repo file rather than restoring prior content.
+> **On apt, baseurl holds the full deb line**
+>
+> On apt, `baseurl` holds the ENTIRE `deb ...` source line. In Salt the deb line goes in `name:`; Zester keeps `name` as the repo identifier and reuses `baseurl` for both families.
+
+> **Signing-key convergence is presence-only**
+>
+> On Debian a declared `key_url` is fetched to `/etc/apt/keyrings/zester-<name>.gpg` and imported; Check verifies that keyring file EXISTS (the key URL is invisible in the compared `.list` bytes, so a matching repo file with a never-imported key still needs a change). Detection is presence-only: a key rotated in place at the SAME URL is not re-detected — delete the keyring file to force a re-import. RedHat needs no keyring probe: `gpgkey=` is part of the compared `.repo` content and dnf fetches it at transaction time.
+
+> **Apt keys use the deprecated apt-key add**
+>
+> Apt keys are imported with the deprecated `apt-key add`; Salt supports `signed-by` / keyring-file placement. The key bytes are written direct-to-disk with `curl -o` (never routed through captured stdout, which would corrupt a binary non-armored `.gpg` key).
+
+> **Unsupported Salt parameters**
+>
+> Salt's `disabled`, `mirrorlist`, `gpgautoimport`, `comps`, and `architectures` parameters are not supported. Reverting removes the whole repo file rather than restoring prior content.
+
+> **enabled/gpgcheck/refresh default to true; integer values honored**
+>
+> `enabled`, `gpgcheck`, and `refresh` default to `true`; set one `false` to override. Under the uniform decoder an integer (`1`/`0`) or a truthy/falsy string is honored for each of them, where the legacy `.(bool)` assertion silently dropped a non-bool value to the default.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [pkg.installed](/docs/guides/modules/pkg-installed)

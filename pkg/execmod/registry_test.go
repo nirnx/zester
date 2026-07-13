@@ -91,7 +91,7 @@ func TestDefaultRegistryHasStarterSet(t *testing.T) {
 		"test.echo", "test.version", "test.true", "test.false",
 		"pkg.version", "pkg.list_pkgs",
 		"service.status", "service.start", "service.stop", "service.restart",
-		"disk.usage", "cmd.run", "sys.list_functions",
+		"disk.usage", "cmd.run", "sys.list_functions", "sys.doc",
 		"grains.item", "grains.items",
 	}
 	for _, name := range want {

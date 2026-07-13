@@ -1,0 +1,150 @@
+module: locale.present
+# Permanent differential contract for the locale.present migration. `name` is
+# the ONLY parameter, a primitive string primary — no bool, no int, no eager
+# default, so there is no BD-1/2/3/4/5/7 surface here. These cases were
+# approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accept cases pin
+# the decoded Locale projection; reject cases pin the error kind.
+#   BD-6 (APPROVED) — a wrong-typed name is coerced (scalar) or rejected
+#                     (composite) instead of silently falling back to the
+#                     state ID;
+#   §2.1/§3 empty-string (PARITY, not a BD) — an empty-string or nil name
+#                     falls back to the state ID.
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: en_US.UTF-8
+    want:
+      Locale: en_US.UTF-8
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: en_US.UTF-8
+    want:
+      Locale: en_US.UTF-8
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: en_US.UTF-8
+    want:
+      Locale: en_US.UTF-8
+
+  # --- parity: no name key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: en_US.UTF-8
+    input: {}
+    want:
+      Locale: en_US.UTF-8
+  - label: primary-fallback-cli
+    universe: cli
+    id: en_US.UTF-8
+    input: {}
+    want:
+      Locale: en_US.UTF-8
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1 amendment,
+  # matching the legacy `if x == "" { x = id }` idiom — NOT a BD divergence) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: en_US.UTF-8
+    input:
+      name: ""
+    want:
+      Locale: en_US.UTF-8
+  - label: empty-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: en_US.UTF-8
+    input:
+      name: ""
+    want:
+      Locale: en_US.UTF-8
+  - label: empty-name-falls-back-to-id-cli
+    universe: cli
+    id: en_US.UTF-8
+    input:
+      name: ""
+    want:
+      Locale: en_US.UTF-8
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent for the param
+  # and falls back to the state ID (§2.1 amendment — NOT a BD divergence). Nil has
+  # no faithful CLI spelling, so only the yaml/msgpack legs are pinned. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: en_US.UTF-8
+    input:
+      name:
+    want:
+      Locale: en_US.UTF-8
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: en_US.UTF-8
+    input:
+      name:
+    want:
+      Locale: en_US.UTF-8
+
+  # --- parity: an ignored reserved/unknown key does not break the decode ---
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: web
+    input:
+      name: en_US.UTF-8
+      require:
+        - pkg.installed:locales
+    want:
+      Locale: en_US.UTF-8
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Locale: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Locale: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy; it pins
+  # the CLI behavior alongside the divergent YAML/msgpack legs.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      Locale: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type

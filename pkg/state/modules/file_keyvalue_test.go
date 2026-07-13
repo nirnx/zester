@@ -3,12 +3,17 @@ package modules
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/paramtypes"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -17,7 +22,7 @@ func testFileKVMctx() *exec.ModuleContext {
 }
 
 func TestFileKeyValueName(t *testing.T) {
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())("/etc/os-release", map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})("/etc/os-release", map[string]any{
 		"key": "NAME", "value": "Zester",
 	})
 	if err != nil {
@@ -29,7 +34,7 @@ func TestFileKeyValueName(t *testing.T) {
 }
 
 func TestFileKeyValueNoEntries(t *testing.T) {
-	_, err := NewFileKeyValueBuilder(testFileKVMctx())("x", map[string]any{})
+	_, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})("x", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when no entries provided")
 	}
@@ -38,7 +43,7 @@ func TestFileKeyValueNoEntries(t *testing.T) {
 func TestFileKeyValueUpdateExisting(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "sysctl.conf", "net.ipv4.ip_forward=0\nother=1\n")
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"key": "net.ipv4.ip_forward", "value": 1,
 	})
 	if err != nil {
@@ -68,7 +73,7 @@ func TestFileKeyValueUpdateExisting(t *testing.T) {
 func TestFileKeyValueAppendNew(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "env", "EXISTING=1\n")
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"entries": map[string]any{"NEWKEY": "val"},
 	})
 	if err != nil {
@@ -87,7 +92,7 @@ func TestFileKeyValueCustomSeparatorTolerant(t *testing.T) {
 	ctx := context.Background()
 	// Existing line uses spaced separator; matcher tolerates surrounding spaces.
 	path := writeTempFile(t, "sysctl", "kernel.pid_max = 4096\n")
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"key": "kernel.pid_max", "value": "4096", "separator": " = ",
 	})
 	if err != nil {
@@ -105,7 +110,7 @@ func TestFileKeyValueCustomSeparatorTolerant(t *testing.T) {
 func TestFileKeyValueCreatesMissingFile(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"entries": map[string]any{"A": "1", "B": "2"},
 	})
 	if err != nil {
@@ -124,7 +129,7 @@ func TestFileKeyValueRevert(t *testing.T) {
 	ctx := context.Background()
 	original := "K=old\n"
 	path := writeTempFile(t, "kv", original)
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"key": "K", "value": "new",
 	})
 	if err != nil {
@@ -146,7 +151,7 @@ func TestFileKeyValueFreshInstanceRevertIsNoOp(t *testing.T) {
 	ctx := context.Background()
 	original := "K=old\n"
 	path := writeTempFile(t, "sysctl.conf", original)
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"key": "K", "value": "new",
 	})
 	if err != nil {
@@ -174,7 +179,7 @@ func TestFileKeyValueFreshInstanceRevertIsNoOp(t *testing.T) {
 func TestFileKeyValueRevertRemovesCreatedFile(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"key": "K", "value": "v",
 	})
 	if err != nil {
@@ -198,7 +203,7 @@ func TestFileKeyValueRevertRemovesCreatedFile(t *testing.T) {
 func TestFileKeyValueRevertCreatedToleratesMissing(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileKeyValueBuilder(testFileKVMctx())(path, map[string]any{
+	s, err := NewFileKeyValueBuilder(testFileKVMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"key": "K", "value": "v",
 	})
 	if err != nil {
@@ -225,7 +230,7 @@ func TestFileKeyValueReadErrorFailsCheckAndApply(t *testing.T) {
 	fake.PreCreate("/etc/sysctl.conf", []byte(original), 0644)
 	fake.SetReadError("/etc/sysctl.conf", errors.New("input/output error"))
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
-	s, err := NewFileKeyValueBuilder(mctx)("/etc/sysctl.conf", map[string]any{
+	s, err := NewFileKeyValueBuilder(mctx, modschema.DecodeOptions{})("/etc/sysctl.conf", map[string]any{
 		"key": "K", "value": "new",
 	})
 	if err != nil {
@@ -244,3 +249,36 @@ func TestFileKeyValueReadErrorFailsCheckAndApply(t *testing.T) {
 }
 
 var _ state.State = (*FileKeyValue)(nil)
+
+// TestFileKeyValueContract replays the permanent differential contract fixtures
+// against the migrated fileKeyValueSpec decoder. The decode wrapper reproduces
+// the builder's module-local merge — key_values ∪ entries (entries winning a
+// per-key collision), then the single key/value injection — so the union,
+// entries-wins-collision, key-requires-value, and no-entries cases are pinned,
+// mirroring service.dead's DisableOnApply and user.present's resolveGroupFacets
+// projections. It pins the key_values/entries/Entries StringMap decode (via the
+// schematest StringMap matcher), and the flagged BD-5 (a composite key_values
+// value is rejected) and BD-6 (wrong-typed name) divergences.
+func TestFileKeyValueContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileKeyValue
+		if _, err := fileKeyValueSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		f.Entries = paramtypes.StringMap{}
+		maps.Copy(f.Entries, f.KeyValues)
+		maps.Copy(f.Entries, f.EntriesInput)
+		if f.Key != "" {
+			v, present := config["value"]
+			if !present || v == nil {
+				return nil, fmt.Errorf("file.keyvalue: key %q requires a value", f.Key)
+			}
+			f.Entries[f.Key] = f.Value
+		}
+		if len(f.Entries) == 0 {
+			return nil, fmt.Errorf("file.keyvalue: no entries")
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.keyvalue.yaml")
+}

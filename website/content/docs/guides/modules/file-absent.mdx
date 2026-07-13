@@ -1,9 +1,15 @@
 ---
 title: "file.absent"
-description: "Ensures a file or directory does not exist at the specified path."
+description: "Ensure a file or directory does not exist."
 ---
 
+{/* zester-docgen:managed module="file.absent" */}
+
 **Source**: `pkg/state/modules/file_absent.go`
+
+---
+
+`file.absent` ensures nothing exists at the given path, removing a file or an entire directory tree. The path defaults to the state ID, so a bare `file.absent` under an `/opt/old-app:` key removes `/opt/old-app`.
 
 ---
 
@@ -11,54 +17,43 @@ description: "Ensures a file or directory does not exist at the specified path."
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Absolute path to the file or directory to remove. If omitted, the state ID is used as the path. |
+| `name` | `string` | No | State ID | absolute path to the file or directory to remove (defaults to the state ID) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-1. **Path existence** — stats the path.
-2. If the path does not exist (stat returns an error), the state reports no changes needed.
-3. If the path exists (file or directory), the state needs changes.
+### Check
 
----
+Stats the path. A stat error (the common case: the path does not exist) means no change is needed; any successful stat — file or directory — needs a change.
 
-## Apply Behavior
+### Apply
 
-1. Removes the file or directory (and all contents if a directory) via `RemoveAll`.
+Removes the path via `RemoveAll`, which recursively deletes a directory tree. Reports the removed path in its details.
 
----
+### Revert
 
-## Revert Behavior
+Cannot restore the removed content: nothing is captured before removal, so Revert is an explicit no-op rather than a guessed re-creation.
 
-No-op. File or directory removal cannot be reverted because the original content is not preserved.
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Remove a file by state ID
 
-```bash
-# Remove a file
-zester 'web-01' file.absent /tmp/old-config.txt
-
-# Remove a directory from all peels
-zester '*' file.absent /opt/deprecated-app
-```
-
-### State File
-
-**Remove a configuration file:**
+The state ID is the path to remove; no parameters are needed.
 
 ```yaml
 /etc/nginx/sites-enabled/default:
   file.absent: []
 ```
 
-**Clean up after decommissioning:**
+### Remove a named path after stopping a dependent
+
+name overrides the path; require ensures the dependent service is stopped first.
 
 ```yaml
 remove_old_app:
@@ -68,12 +63,37 @@ remove_old_app:
       - "cmd.run:stop_old_app"
 ```
 
-**Remove multiple obsolete files:**
+### Remove a path ad hoc
 
-```yaml
-/tmp/deploy-key:
-  file.absent: []
+The bare positional argument is the path.
 
-/var/log/old-app.log:
-  file.absent: []
+```bash
+zester 'web-01' file.absent /tmp/old-config.txt
 ```
+
+
+---
+
+## Notes
+
+> **Revert does not restore removed content**
+>
+> Because nothing is captured before removal, Revert cannot be Apply's inverse. It is an honest no-op.
+
+> **Removes directories recursively**
+>
+> A path that is a directory is removed with all of its contents, equivalent to `rm -rf`.
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [file.managed](/docs/guides/modules/file-managed)
+- [file.touch](/docs/guides/modules/file-touch)

@@ -1,85 +1,196 @@
 ---
-title: "host.present / host.absent"
-description: "Manages hostname entries in /etc/hosts. host.present ensures a hostname maps to a given IP; host.absent ensures a hostname does not appear at all."
+title: "host.absent / host.present"
+description: "Ensure a hostname is absent from the hosts file. Ensure a hostname maps to an IP address in the hosts file."
 ---
 
-**Source**: `pkg/state/modules/host.go`
+{/* zester-docgen:managed module="host.absent" */}
+{/* zester-docgen:managed module="host.present" */}
+
+`host.absent` and `host.present` are documented together on this page; each has its own parameters.
 
 ---
 
-## host.present
+## `host.absent`
 
-Ensures a hostname is mapped to a given IP address: the hostname is added to an existing line for that IP (or a new `ip<TAB>hostname` line is appended), and the hostname is **removed from lines that map it to a different IP**. Comment and blank lines are preserved.
+**Source**: `pkg/state/modules/host_absent.go`
+
+---
+
+`host.absent` ensures a hostname (`name`, defaulting to the state ID) does not appear in the hosts file (`/etc/hosts` by default; override with `config` or its `path` alias). The hostname is removed from every line it appears on; a line left with no remaining names is dropped.
+
+---
 
 ### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | The hostname to manage. |
-| `ip` | `string` | **Yes** | — | The IP address the hostname should map to. |
-| `config` | `string` | No | `/etc/hosts` | Hosts file path override (primarily for testing). `path` is accepted as an alias. |
-
-### Check / Apply
-
-The desired hosts file is rendered in memory and compared with the current content; changes are reported/applied only when they differ. If removing the hostname leaves a line with no names, the whole line is dropped. A missing hosts file is created.
-
----
-
-## host.absent
-
-Ensures a hostname is not present on any line. Lines left without any names are removed entirely.
-
-### Parameters
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | `string` | No | State ID | The hostname to remove. |
-| `config` | `string` | No | `/etc/hosts` | Hosts file path override. `path` is accepted as an alias. |
-
-A missing hosts file is a no-op.
-
----
+| `name` | `string` | No | State ID | host name to remove from the hosts file; defaults to the state ID |
+| `config` | `string` | No | `/etc/hosts` | hosts file path; the path alias is also accepted; defaults to /etc/hosts |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Revert Behavior
+### Effects
 
-- Restores the hosts file content from the backup taken during Apply.
-- If the file did not exist before Apply (host.present created it), it is removed.
+#### Check
+
+Reads the hosts file (a non-not-exist read error fails the phase). Reports no change when the file does not exist or the hostname is already absent; otherwise reports a change.
+
+#### Apply
+
+Reads the hosts file and, when the hostname is present, memoizes the prior content for revert and rewrites the file with the hostname removed from every line (dropping any line left with no names). A missing file or an already-absent hostname is a clean no-op. Reports the hostname and path in its details.
+
+#### Revert
+
+Restores the hosts file to the content this run's Apply captured before removing the hostname. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites a hosts file it did not touch.
+
 
 ---
 
-## Examples
+### Examples
 
-### Direct Execution
+#### Remove a hostname
 
-```bash
-zester 'web-01' host.present db-master ip=192.168.1.10
-zester 'web-01' host.absent old-hostname
-```
-
-### State File
-
-**Pin a database host:**
+The hostname defaults to the state ID.
 
 ```yaml
-db-master:
-  host.present:
-    - ip: 192.168.1.10
-```
-
-**Remove a stale entry:**
-
-```yaml
-decommissioned-host:
+old-host:
   host.absent: []
 ```
 
+#### Remove a host mapping ad hoc
+
+The bare positional argument is the hostname.
+
+```bash
+zester '*' host.absent old-host
+```
+
+
 ---
 
-## Divergences from Salt
+### Notes
 
-- `host.present` enforces exactly **one** IP per hostname: any mapping of the hostname to a different IP is removed. Salt's `host.present` accepts a list of IPs and only cleans up others with `clean: True`.
-- Salt's per-entry `comment` parameter is not supported.
+> **Comment and blank lines are preserved**
+>
+> The hosts file is rewritten in memory with existing comment (`#`) and blank lines kept verbatim; the hostname is removed from every line it appears on and a line left with no remaining names is dropped. A missing hosts file is a clean no-op.
+
+
+---
+
+### Divergences
+
+- BD-6
+
+---
+
+### See Also
+
+- [host.present](/docs/guides/modules/host)
+
+---
+
+## `host.present`
+
+**Source**: `pkg/state/modules/host_present.go`
+
+---
+
+`host.present` ensures a hostname (`name`, defaulting to the state ID) is mapped to `ip` in the hosts file (`/etc/hosts` by default; override with `config` or its `path` alias). It adds the hostname to an existing line for that IP or appends a new line, and REMOVES the hostname from any line that maps it to a different IP — so a host is never listed under two addresses. `ip` is required.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | host name to manage; defaults to the state ID |
+| `ip` | `string` | Yes | *(none)* | IP address the hostname should map to; required |
+| `config` | `string` | No | `/etc/hosts` | hosts file path; the path alias is also accepted; defaults to /etc/hosts |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+### Effects
+
+#### Check
+
+Reads the hosts file (a non-not-exist read error fails the phase rather than risking a blind overwrite) and computes the desired content. Reports a change when the desired mapping is not already present — the hostname is absent, mapped to a different IP, or on a line that would be rewritten.
+
+#### Apply
+
+Reads the hosts file, memoizes its prior content (or that it did not exist) for revert, and rewrites it so the hostname maps to `ip`: the hostname is added to the existing line for that IP or a new line is appended, and it is dropped from any line for a different IP (a line left with no names is removed). An already-correct mapping is a clean no-op. Reports the hostname, IP, and path in its details.
+
+#### Revert
+
+Restores what this run's Apply changed: a hosts file that pre-existed is rewritten with its captured prior content; a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never rewrites or deletes a hosts file it did not touch.
+
+
+---
+
+### Examples
+
+#### Map a hostname to an IP
+
+The hostname defaults to the state ID; ip is required.
+
+```yaml
+web1:
+  host.present:
+    - ip: 10.0.0.5
+```
+
+#### Manage an alternate hosts file
+
+config (or its path alias) overrides the default /etc/hosts.
+
+```yaml
+db-primary:
+  host.present:
+    - ip: 10.0.0.9
+    - config: /etc/hosts
+```
+
+#### Add a host mapping ad hoc
+
+The bare positional argument is the hostname; ip is a key=value.
+
+```bash
+zester '*' host.present web1 ip=10.0.0.5
+```
+
+
+---
+
+### Notes
+
+> **A hostname is moved, not duplicated**
+>
+> If the hostname already appears on a line for a DIFFERENT IP, host.present removes it there and maps it to the declared IP, so a name is never resolvable to two addresses at once. A line left with no remaining names is dropped.
+
+> **The hosts-file path: config, path, or the default**
+>
+> The managed file defaults to `/etc/hosts`. Override it with `config`; the legacy `path` alias is also accepted. `config` takes precedence over `path`, and either takes precedence over the `/etc/hosts` default.
+
+> **Comment and blank lines are preserved**
+>
+> The hosts file is rewritten in memory: existing comment (`#`) and blank lines are kept verbatim. The hostname is added to the existing line for its IP or appended as a new tab-separated line for that IP, and a missing hosts file is created.
+
+> **Divergences from Salt**
+>
+> `host.present` enforces exactly ONE IP per hostname — any line mapping the hostname to a different IP has the name removed — whereas Salt's `host.present` accepts a LIST of IPs and only cleans up other mappings under `clean: True`. Salt's per-entry `comment` parameter is not supported.
+
+
+---
+
+### Divergences
+
+- BD-6
+
+---
+
+### See Also
+
+- [host.absent](/docs/guides/modules/host)

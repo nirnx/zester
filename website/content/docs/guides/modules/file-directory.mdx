@@ -1,9 +1,15 @@
 ---
 title: "file.directory"
-description: "Ensures a directory exists with the specified permissions and ownership."
+description: "Ensure a directory exists with the desired permissions and ownership."
 ---
 
+{/* zester-docgen:managed module="file.directory" */}
+
 **Source**: `pkg/state/modules/file_directory.go`
+
+---
+
+`file.directory` ensures a directory exists at its path with the desired permission mode and ownership. The path defaults to the state ID. The `mode` parameter sets the directory's permission bits and defaults to `0755`; `dir_mode` is accepted as an alias — a fallback source for the same mode, with `mode` winning when both are given. It honors an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0700` applies 0700. `user`/`group` converge ownership only when declared. The `makedirs` parameter is accepted for Salt compatibility but has no effect — the parent chain is always created.
 
 ---
 
@@ -11,60 +17,47 @@ description: "Ensures a directory exists with the specified permissions and owne
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Absolute path to the target directory. If omitted, the state ID is used as the path. |
-| `mode` | `string` | No | `"0755"` | Directory permission mode in octal notation (e.g., `"0755"`, `"0700"`). |
-| `dir_mode` | `string` | No | `"0755"` | Alternative parameter for directory mode. Used as fallback if `mode` is not set. |
-| `user` | `string` | No | *(unchanged)* | Directory owner username. Requires the user to exist on the target system. |
-| `group` | `string` | No | *(unchanged)* | Directory group name. Requires the group to exist on the target system. |
-| `makedirs` | `bool` | No | `false` | Parsed but has no effect. The implementation always calls `MkdirAll`, so parent directories are created unconditionally regardless of this flag's value. |
+| `name` | `string` | No | State ID | absolute path to the target directory (defaults to the state ID) |
+| `mode` | `FileMode` | No | `0755` (lazy) | directory permission mode in octal ("0755", "0700"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755 |
+| `user` | `string` | No | *(none)* | directory owner username; ownership is left unchanged when unset |
+| `group` | `string` | No | *(none)* | directory group name; ownership is left unchanged when unset |
+| `makedirs` | `bool` | No | *(none)* | accepted for Salt compatibility but has NO effect — parent directories are always created via MkdirAll regardless; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Parameter Types
 
-The check phase performs these comparisons in order:
+### FileMode
 
-1. **Path existence** — if the path does not exist, the state needs changes.
-2. **Is directory** — if the path exists but is not a directory (e.g., it is a regular file), the state needs changes.
-3. **Permission mode** — compares the directory's current permission bits against the desired mode. If they differ, the state needs changes.
+A Unix file-permission mode. Accepts an octal string ("0644", "755", "4755") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.
 
-If all checks pass, the state reports no changes needed.
 
 ---
 
-## Apply Behavior
+## Effects
 
-1. Checks if the directory already exists (to track creation for revert).
-2. Creates the directory and any missing parent directories via `MkdirAll` with the desired mode.
-3. Sets the permission mode via `Chmod`.
-4. If `user` or `group` is set, changes directory ownership via `Chown` (looks up user/group by name to resolve numeric UID/GID).
+### Check
 
----
+Compares, in order: path existence (a genuine not-exist means the directory must be created, while any other stat error fails the check rather than reporting phantom drift); that the path is a directory (an existing non-directory needs a change); the permission mode (the managed facets — permission bits plus setuid/setgid/sticky) against the desired mode, defaulting to 0755; and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.
 
-## Revert Behavior
+### Apply
 
-- If the directory was created by Apply, removes the directory and its contents via `RemoveAll`.
-- If the directory already existed (only mode/ownership changed), no-op.
+Probes existence for the revert memo — a non-not-exist stat error fails the apply rather than poisoning the memo, since a pre-existing tree must never be recorded as created (a same-instance Revert would RemoveAll it). Creates the directory and any missing parents with MkdirAll (unconditionally — `makedirs` is inert), records the created memo only when the directory did not pre-exist, sets the mode via Chmod, and — when `user`/`group` is declared — converges ownership via Chown. Reports the applied mode.
+
+### Revert
+
+Removes a directory this run's Apply created (RemoveAll). A directory that pre-existed (only its mode or ownership changed) is left untouched, and a fresh instance (a standalone revert) recorded nothing and is a no-op — it never removes a directory it did not create.
+
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Create a directory with ownership
 
-```bash
-# Create a directory with default permissions
-zester 'web-01' file.directory /opt/myapp
-
-# Create a directory with specific ownership
-zester 'web*' file.directory /var/log/myapp mode=0750 user=appuser group=appuser
-```
-
-### State File
-
-**Basic directory creation:**
+The state ID is the target path; mode and ownership are set inline.
 
 ```yaml
 /opt/myapp:
@@ -74,7 +67,9 @@ zester 'web*' file.directory /var/log/myapp mode=0750 user=appuser group=appuser
     - group: root
 ```
 
-**Application data directory with ownership:**
+### Private application data directory
+
+A restrictive 0700 mode with a service account owner; the require pulls in the user first.
 
 ```yaml
 /var/lib/prometheus/data:
@@ -86,18 +81,45 @@ zester 'web*' file.directory /var/log/myapp mode=0750 user=appuser group=appuser
       - "user.present:prometheus"
 ```
 
-**Multiple directories for an application:**
+### Create a directory ad hoc
 
-```yaml
-/opt/myapp/config:
-  file.directory:
-    - mode: "0750"
-    - user: myapp
-    - group: myapp
+The bare positional argument is the path; mode and ownership are key=value args.
 
-/opt/myapp/logs:
-  file.directory:
-    - mode: "0755"
-    - user: myapp
-    - group: myapp
+```bash
+zester 'web*' file.directory /var/log/myapp mode=0750 user=appuser group=appuser
 ```
+
+
+---
+
+## Notes
+
+> **makedirs has no effect**
+>
+> The makedirs parameter is accepted for Salt compatibility but is inert: file.directory always creates the full parent chain via MkdirAll, whether or not makedirs is set.
+
+> **Mode defaults to 0755 and honors integer modes**
+>
+> An omitted mode applies 0755. The dir_mode alias supplies the same mode as a fallback (mode wins if both are given). A mode given as an octal integer (for example `mode: 0700`) is honored across every delivery path, including a reactor dispatch where msgpack encodes it as a sized integer; setuid/setgid/sticky bits are preserved.
+
+> **Ownership requires privilege**
+>
+> `user` and `group` are resolved via `os/user.Lookup` and `os/user.LookupGroup`; the peel must run with sufficient privileges to set ownership.
+
+
+---
+
+## Divergences
+
+- BD-1
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [file.managed](/docs/guides/modules/file-managed)
+- [file.recurse](/docs/guides/modules/file-recurse)
+- [file.absent](/docs/guides/modules/file-absent)

@@ -1,0 +1,267 @@
+module: pkg.latest
+# Permanent differential contract for the pkg.latest migration (all-primitives
+# pkg-family wave). These cases were approved by the legacy-vs-new equivalence
+# comparison while the legacy constructor still existed; after its deletion
+# RunContract replays them as the permanent regression guard. Accepting cases pin
+# the decoded Package/Refresh projection; rejecting cases pin the error kind.
+# BD-tagged cases pin the flagged behavioral differences (§11): BD-6 (a non-string
+# name is now coerced, or rejected for composites), BD-2 (a CLI refresh
+# truthy/falsy string is now honored instead of silently leaving the eager `true`
+# default in place — the legacy `config["refresh"].(bool)` assertion always fails
+# against a CLI string, so `refresh=false` over the CLI never worked before), and
+# BD-7 (an integer refresh — a plain bool, not TriState; scope amended
+# 2026-07-12 to cover every boolean-typed parameter under the maintainer's
+# TriState 1/0 approval — is now coerced explicitly: 1/0 to true/false
+# overriding the eager `true` default, any other integer a typed error,
+# instead of being silently ignored).
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+    want:
+      Package: nginx
+      Refresh: true
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: nginx
+    want:
+      Package: nginx
+      Refresh: true
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: nginx
+    want:
+      Package: nginx
+      Refresh: true
+
+  # --- parity: no name key -> primary falls back to the state ID; refresh's
+  # eager default=true materializes when absent ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: nginx
+    input: {}
+    want:
+      Package: nginx
+      Refresh: true
+  - label: primary-fallback-cli
+    universe: cli
+    id: nginx
+    input: {}
+    want:
+      Package: nginx
+      Refresh: true
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1 amendment
+  # — NOT a BD divergence) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: nginx
+    input:
+      name: ""
+    want:
+      Package: nginx
+  - label: empty-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: nginx
+    input:
+      name: ""
+    want:
+      Package: nginx
+
+  # --- parity: a NIL name (YAML null / trailing-colon) falls back to the state
+  # ID (§2.1 amendment — NOT a BD divergence) ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: nginx
+    input:
+      name:
+    want:
+      Package: nginx
+
+  # --- parity: a native YAML/msgpack bool refresh always worked ---
+  - label: refresh-false-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+      refresh: false
+    want:
+      Refresh: false
+  - label: refresh-false-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: nginx
+      refresh: false
+    want:
+      Refresh: false
+  - label: refresh-true-explicit-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+      refresh: true
+    want:
+      Refresh: true
+
+  # --- BD-2: a CLI refresh=false is now honored (was silently ignored: the
+  # legacy config["refresh"].(bool) assertion always fails against the CLI's
+  # string "false", so Refresh stayed at its eager true default regardless of
+  # operator intent — the exact field bug refresh's default=true exists to
+  # avoid on the YAML side, still present on the CLI side pre-migration) ---
+  - label: cli-refresh-false-honored
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: nginx
+      refresh: false
+    want:
+      Refresh: false
+  - label: cli-refresh-falsy-string-honored
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: nginx
+      refresh: "0"
+    want:
+      Refresh: false
+  - label: cli-refresh-true-honored
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: nginx
+      refresh: "yes"
+    want:
+      Refresh: true
+
+  # --- BD-7 (scope amended 2026-07-12 to cover every boolean-typed
+  # parameter, not only TriState): an integer refresh is coerced narrowly —
+  # 1 is true and 0 is false (across every int kind; the msgpack leg here
+  # decodes to a sized int8). refresh-int-zero is the meaningful case here,
+  # since it OVERRIDES refresh's eager `true` default; refresh-int-one still
+  # pins that the explicit coercion runs (not just the default landing). Any
+  # OTHER integer is a typed value_invalid error, pinned by
+  # refresh-invalid-int-rejected below. Legacy's config["refresh"].(bool)
+  # assertion always failed against a bare int, so refresh silently stayed
+  # at its eager true default regardless of operator intent. The CLI leg is
+  # already covered by the cli-refresh-* BD-2 cases above (the CLI never
+  # delivers a raw int — parseKeyValues hands the decoder a string). ---
+  - label: refresh-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      refresh: 1
+    want:
+      Refresh: true
+  - label: refresh-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      refresh: 1
+    want:
+      Refresh: true
+  - label: refresh-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      refresh: 0
+    want:
+      Refresh: false
+  - label: refresh-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      refresh: 0
+    want:
+      Refresh: false
+  - label: refresh-invalid-int-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      refresh: 2
+    want_error: value_invalid
+  - label: refresh-invalid-int-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      refresh: 2
+    want_error: value_invalid
+
+  # --- parity: an ignored reserved/unknown key does not break the decode ---
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+      watch:
+        - file.managed:/etc/apt/sources.list
+    want:
+      Package: nginx
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Package: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Package: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      Package: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type

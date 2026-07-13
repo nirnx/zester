@@ -1,0 +1,562 @@
+module: cmd.run
+# Permanent differential contract for the cmd.run migration (the FINAL gate-close
+# wave). These cases were approved by the legacy-vs-new equivalence comparison
+# while the legacy constructor still existed (see the migration changelog); after
+# its deletion RunContract replays them as the permanent regression guard.
+# Accepting cases pin the decoded Command/Args/Cwd/Env/Creates projection — Args
+# (paramtypes.StringList) is compared element-by-element in string form and Env
+# (paramtypes.StringMap) value-by-value in string form; rejecting cases pin the
+# error kind. `command` is the PRIMARY parameter (defaults to the state ID) and
+# accepts the `name` alias (BD-8; see below). BD-tagged cases pin the flagged
+# behavioral differences:
+#   BD-5 (approved under the standing grant) — an `args` scalar element is
+#   rendered to a string (legacy's element-wise `.(string)` assertion silently
+#   DROPPED any non-string element); a nested `args` element is rejected with a
+#   typed error (legacy dropped it too); a BARE-STRING `args` value now decodes
+#   as a single-element list (legacy's `config["args"].([]any)` assertion failed
+#   entirely on a non-list value, so `args: build` managed NO arguments and left
+#   the command on the shell path); and a COMPOSITE `env` value is rejected with
+#   a typed error where the legacy `fmt.Sprintf("%v", v)` sprint'd it into Go
+#   syntax. A SCALAR env value is parity (both render it to its string form).
+#   BD-6 (APPROVED) — a wrong-typed `command`/`cwd`/`creates` is coerced (numeric
+#   scalar → its string form) or rejected (composite → typed error) instead of
+#   silently zeroing (for the primary `command`, falling back to the state ID),
+#   where the legacy `.(string)` assertion dropped it. Pinned across yaml (native
+#   int) and msgpack (sized int); the CLI already delivers a numeric token as a
+#   string, so a CLI numeric case is parity.
+#   BD-8 (Salt-parity ruling, standing grant) — the primary `command` gains the
+#   `name` alias, so the Salt idiom `cmd.run: - name: <command>` now RUNS the
+#   named command. Legacy read ONLY `command` (else the state ID), so `name:`
+#   was silently ignored and the STATE ID was executed instead — quietly wrong.
+#   Precedence is command-beats-name (declared name wins over the alias); an
+#   empty-string `command` falls through to `name` (§2.1 source resolution). The
+#   name-alias case is expressible in all three universes; precedence and
+#   empty-command-fallthrough are pinned across yaml + msgpack.
+cases:
+  # --- parity: explicit command across all three universes ---
+  - label: string-command-yaml
+    universe: yaml
+    id: run-it
+    input:
+      command: echo hi
+    want:
+      Command: echo hi
+  - label: string-command-msgpack
+    universe: msgpack
+    id: run-it
+    input:
+      command: echo hi
+    want:
+      Command: echo hi
+  - label: string-command-cli
+    universe: cli
+    id: run-it
+    input:
+      command: echo
+    want:
+      Command: echo
+
+  # --- parity: no command key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: echo hi
+    input: {}
+    want:
+      Command: echo hi
+  - label: primary-fallback-cli
+    universe: cli
+    id: uptime
+    input: {}
+    want:
+      Command: uptime
+
+  # --- parity: an EMPTY-STRING command falls back to the state ID (§2.1) ---
+  - label: empty-command-falls-back-to-id-yaml
+    universe: yaml
+    id: uptime
+    input:
+      command: ""
+    want:
+      Command: uptime
+
+  # --- parity: a NIL command (YAML null / trailing-colon) is absent, falls back
+  # to the state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-command-falls-back-to-id-msgpack
+    universe: msgpack
+    id: uptime
+    input:
+      command:
+    want:
+      Command: uptime
+
+  # --- parity: an args list of strings decodes unchanged ---
+  - label: args-list-yaml
+    universe: yaml
+    id: run-it
+    input:
+      command: make
+      args:
+        - build
+        - "-j4"
+    want:
+      Command: make
+      Args:
+        - build
+        - "-j4"
+  - label: args-list-msgpack
+    universe: msgpack
+    id: run-it
+    input:
+      command: make
+      args:
+        - build
+        - "-j4"
+    want:
+      Args:
+        - build
+        - "-j4"
+
+  # --- parity: an omitted args is an empty/undeclared list ---
+  - label: args-absent-yaml
+    universe: yaml
+    id: run-it
+    input:
+      command: uptime
+    want:
+      Args: []
+
+  # --- parity: cwd/creates strings decode unchanged (all three universes) ---
+  - label: cwd-creates-yaml
+    universe: yaml
+    id: run-it
+    input:
+      command: make
+      cwd: /opt/src
+      creates: /opt/.built
+    want:
+      Cwd: /opt/src
+      Creates: /opt/.built
+  - label: cwd-creates-cli
+    universe: cli
+    id: run-it
+    input:
+      command: make
+      cwd: /opt/src
+      creates: /opt/.built
+    want:
+      Cwd: /opt/src
+      Creates: /opt/.built
+
+  # --- parity: env map with scalar values (yaml/msgpack; no CLI spelling for a
+  # map). A numeric value is rendered to its string form by BOTH legacy
+  # (fmt.Sprintf) and the StringMap decoder. ---
+  - label: env-map-yaml
+    universe: yaml
+    id: run-it
+    input:
+      command: env
+      env:
+        FOO: bar
+        RETRIES: 3
+    want:
+      Env:
+        FOO: bar
+        RETRIES: "3"
+  - label: env-map-msgpack
+    universe: msgpack
+    id: run-it
+    input:
+      command: env
+      env:
+        FOO: bar
+        RETRIES: 3
+    want:
+      Env:
+        FOO: bar
+        RETRIES: "3"
+
+  # --- BD-5: a scalar args element is rendered to a string (legacy silently
+  # dropped any non-string element). No CLI spelling for a mixed list. ---
+  - label: args-scalar-sprint-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-5
+    input:
+      command: make
+      args:
+        - build
+        - 4
+    want:
+      Args:
+        - build
+        - "4"
+  - label: args-scalar-sprint-msgpack
+    universe: msgpack
+    id: run-it
+    bd: BD-5
+    input:
+      command: make
+      args:
+        - build
+        - 4
+    want:
+      Args:
+        - build
+        - "4"
+
+  # --- BD-5: a nested args element is rejected with a typed error (legacy
+  # silently dropped it). No CLI spelling for a nested list. ---
+  - label: args-nested-rejected-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-5
+    input:
+      command: make
+      args:
+        - build
+        - - nested
+    want_error: value_invalid
+  - label: args-nested-rejected-msgpack
+    universe: msgpack
+    id: run-it
+    bd: BD-5
+    input:
+      command: make
+      args:
+        - build
+        - - nested
+    want_error: value_invalid
+
+  # --- BD-5 (third arm): a BARE-STRING args value decodes as a single-element
+  # list (legacy's `.([]any)` assertion failed entirely on a non-list value, so
+  # `args: build` managed NO arguments — and, downstream, left the command on the
+  # shell path). Pinned across all three universes; the CLI scalar `args=build`
+  # is the same single-element case. ---
+  - label: args-bare-string-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-5
+    input:
+      command: make
+      args: build
+    want:
+      Args:
+        - build
+  - label: args-bare-string-msgpack
+    universe: msgpack
+    id: run-it
+    bd: BD-5
+    input:
+      command: make
+      args: build
+    want:
+      Args:
+        - build
+  - label: args-bare-string-cli
+    universe: cli
+    id: run-it
+    bd: BD-5
+    input:
+      command: make
+      args: build
+    want:
+      Args:
+        - build
+
+  # --- BD-5: a COMPOSITE env value is rejected with a typed error, where legacy
+  # sprint'd it (fmt.Sprintf) into Go syntax. A scalar env value is parity
+  # (pinned above). No CLI spelling for a nested map. ---
+  - label: env-composite-value-rejected-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-5
+    input:
+      command: env
+      env:
+        BAD:
+          nested: v
+    want_error: value_invalid
+  - label: env-composite-value-rejected-msgpack
+    universe: msgpack
+    id: run-it
+    bd: BD-5
+    input:
+      command: env
+      env:
+        BAD:
+          nested: v
+    want_error: value_invalid
+
+  # --- BD-6: numeric command is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-command-coerced-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-6
+    input:
+      command: 123
+    want:
+      Command: "123"
+  - label: numeric-command-coerced-msgpack
+    universe: msgpack
+    id: run-it
+    bd: BD-6
+    input:
+      command: 123
+    want:
+      Command: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-command-cli
+    universe: cli
+    id: run-it
+    input:
+      command: 123
+    want:
+      Command: "123"
+
+  # --- BD-6: composite command is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-command-rejected-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-6
+    input:
+      command:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-command-rejected-msgpack
+    universe: msgpack
+    id: run-it
+    bd: BD-6
+    input:
+      command:
+        - a
+        - b
+    want_error: wrong_type
+
+  # --- BD-6: numeric cwd/creates coerce to their string form, where the legacy
+  # `.(string)` assertion silently zeroed them. Pinned across yaml (native int)
+  # and msgpack (sized int). ---
+  - label: numeric-cwd-coerced-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-6
+    input:
+      command: make
+      cwd: 5
+    want:
+      Cwd: "5"
+  - label: numeric-cwd-coerced-msgpack
+    universe: msgpack
+    id: run-it
+    bd: BD-6
+    input:
+      command: make
+      cwd: 5
+    want:
+      Cwd: "5"
+  - label: numeric-creates-coerced-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-6
+    input:
+      command: make
+      creates: 7
+    want:
+      Creates: "7"
+  - label: numeric-creates-coerced-msgpack
+    universe: msgpack
+    id: run-it
+    bd: BD-6
+    input:
+      command: make
+      creates: 7
+    want:
+      Creates: "7"
+
+  # --- BD-6: a composite cwd/creates is rejected with a typed error (was silently
+  # zeroed). No CLI spelling for a nested value. ---
+  - label: composite-cwd-rejected-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-6
+    input:
+      command: make
+      cwd:
+        - a
+    want_error: wrong_type
+  - label: composite-creates-rejected-yaml
+    universe: yaml
+    id: run-it
+    bd: BD-6
+    input:
+      command: make
+      creates:
+        nested: v
+    want_error: wrong_type
+
+  # --- BD-8: the `name` alias RUNS the named command (the Salt idiom). With no
+  # `command` key, `name` supplies the command — legacy ignored `name` and ran
+  # the STATE ID instead. Expressible in all three universes. ---
+  - label: name-alias-runs-command-yaml
+    universe: yaml
+    id: state-label
+    bd: BD-8
+    input:
+      name: apt-get update
+    want:
+      Command: apt-get update
+  - label: name-alias-runs-command-msgpack
+    universe: msgpack
+    id: state-label
+    bd: BD-8
+    input:
+      name: apt-get update
+    want:
+      Command: apt-get update
+  - label: name-alias-runs-command-cli
+    universe: cli
+    id: state-label
+    bd: BD-8
+    input:
+      name: uptime
+    want:
+      Command: uptime
+
+  # --- BD-8: precedence is command-beats-name — a declared `command` wins over
+  # the `name` alias (source resolution consults the canonical name first). ---
+  - label: command-beats-name-yaml
+    universe: yaml
+    id: state-label
+    bd: BD-8
+    input:
+      command: echo real
+      name: echo alias
+    want:
+      Command: echo real
+  - label: command-beats-name-msgpack
+    universe: msgpack
+    id: state-label
+    bd: BD-8
+    input:
+      command: echo real
+      name: echo alias
+    want:
+      Command: echo real
+
+  # --- BD-8: an EMPTY-STRING `command` falls THROUGH to the `name` alias (§2.1
+  # source resolution: an empty value at one source is absence for the next),
+  # rather than to the state ID. ---
+  - label: empty-command-falls-through-to-name-yaml
+    universe: yaml
+    id: state-label
+    bd: BD-8
+    input:
+      command: ""
+      name: systemctl daemon-reload
+    want:
+      Command: systemctl daemon-reload
+  - label: empty-command-falls-through-to-name-msgpack
+    universe: msgpack
+    id: state-label
+    bd: BD-8
+    input:
+      command: ""
+      name: systemctl daemon-reload
+    want:
+      Command: systemctl daemon-reload
+
+  # --- Review round 5: the `cmd` alias (the execution-module spelling) also
+  # supplies the command, so `zester '<target>' cmd.run cmd=uptime` works on
+  # the state-dispatch path the CLI actually takes (previously the CLI parsed
+  # cmd= but strict decode rejected it as an unknown parameter). Resolution
+  # order: command > name > cmd. ---
+  - label: cmd-alias-runs-command-yaml
+    universe: yaml
+    id: state-label
+    input:
+      cmd: uptime
+    want:
+      Command: uptime
+  - label: cmd-alias-runs-command-msgpack
+    universe: msgpack
+    id: state-label
+    input:
+      cmd: uptime
+    want:
+      Command: uptime
+  - label: cmd-alias-runs-command-cli
+    universe: cli
+    id: state-label
+    input:
+      cmd: uptime
+    want:
+      Command: uptime
+
+  - label: command-beats-cmd-yaml
+    universe: yaml
+    id: state-label
+    input:
+      command: echo real
+      cmd: echo execalias
+    want:
+      Command: echo real
+
+  - label: name-beats-cmd-yaml
+    universe: yaml
+    id: state-label
+    input:
+      name: echo saltalias
+      cmd: echo execalias
+    want:
+      Command: echo saltalias
+
+  - label: empty-name-falls-through-to-cmd-yaml
+    universe: yaml
+    id: state-label
+    input:
+      name: ""
+      cmd: uptime
+    want:
+      Command: uptime
+
+  # --- Review round 5 (same class as the cmd alias): `dir` is the
+  # execution-module spelling of the working directory; the state schema
+  # accepts it as an alias of `cwd` (cwd > dir, empty falls through). ---
+  - label: dir-alias-sets-cwd-yaml
+    universe: yaml
+    id: state-label
+    input:
+      command: make
+      dir: /opt/src
+    want:
+      Command: make
+      Cwd: /opt/src
+  - label: dir-alias-sets-cwd-msgpack
+    universe: msgpack
+    id: state-label
+    input:
+      command: make
+      dir: /opt/src
+    want:
+      Command: make
+      Cwd: /opt/src
+  - label: dir-alias-sets-cwd-cli
+    universe: cli
+    id: state-label
+    input:
+      command: make
+      dir: /opt/src
+    want:
+      Command: make
+      Cwd: /opt/src
+
+  - label: cwd-beats-dir-yaml
+    universe: yaml
+    id: state-label
+    input:
+      command: make
+      cwd: /real
+      dir: /alias
+    want:
+      Command: make
+      Cwd: /real

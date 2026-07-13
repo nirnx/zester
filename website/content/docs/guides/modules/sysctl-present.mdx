@@ -1,32 +1,92 @@
 ---
 title: "sysctl.present"
-description: "Ensures a kernel parameter is set to the desired value at runtime and optionally persisted across reboots."
+description: "Ensure a kernel parameter is set to a value at runtime and, by default, persisted."
+---
+
+{/* zester-docgen:managed module="sysctl.present" */}
+
+**Source**: `pkg/state/modules/sysctl_present.go`
+
+---
+
+`sysctl.present` ensures a kernel parameter (`name`, defaulting to the state ID) is set to the desired `value` at runtime and, with `persist` (the default), that the same value is recorded in the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) so it survives a reboot. `value` is required. With `persist` enabled a runtime-only match — for example a manual `sysctl -w` — counts as drift, because the value would not survive a reboot.
+
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Sysctl key (e.g. `net.ipv4.ip_forward`) |
-| `value` | string | — | **Required.** Desired value |
-| `persist` | bool | `true` | Write to `/etc/sysctl.d/99-zester.conf` |
-| `require` | list | — | Requisite states |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | kernel parameter name (e.g. net.ipv4.ip_forward); defaults to the state ID |
+| `value` | `string` | Yes | *(none)* | desired parameter value; required |
+| `persist` | `bool` | No | `true` | persist the value in a sysctl drop-in so it survives a reboot; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
-## Example
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Effects
+
+### Check
+
+Reads the current runtime value (via `sysctl -n`) and reports a change when it differs from `value`. With `persist` (the default) it ALSO reads the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) and reports a change when the key is absent from it or persisted with a different value — so a runtime-only match is drift. A non-not-exist read error on the drop-in fails the phase rather than being treated as "no entry".
+
+### Apply
+
+Re-reads the runtime value and, with `persist`, the drop-in (a self-contained flow: a watch-forced Apply bypasses Check). It sets the runtime value (via `sysctl -w key=value`) only when it differs and writes the drop-in entry (`/etc/sysctl.d/99-zester.conf`) only when it is missing or wrong — each facet is memoized for revert independently. A fully converged key is a clean no-op. Reports the key, value, previous runtime value, and persist flag in its details.
+
+### Revert
+
+Undoes only the facets this run's Apply actually changed. A runtime value Apply set is restored to its pre-Apply value; a drop-in entry Apply changed is restored to its prior value (or removed outright when Apply introduced it) — never re-persisting the old RUNTIME value. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op; it never writes the zero value or invents a persist entry.
+
+
+---
+
+## Examples
+
+### Enable IP forwarding persistently
+
+The parameter name defaults to the state ID; persist (default true) writes the drop-in entry.
 
 ```yaml
 net.ipv4.ip_forward:
   sysctl.present:
     - value: "1"
-    - persist: true
+```
 
+### Tune swappiness at runtime only
+
+persist: false sets the runtime value without recording a drop-in entry.
+
+```yaml
 vm.swappiness:
   sysctl.present:
     - value: "10"
+    - persist: false
 ```
 
-## Behaviour
+### Set a kernel parameter ad hoc
 
-- Check: compares current runtime value via `sysctl -n <key>`.
-- Apply: sets via `sysctl -w key=value`; if `persist=true`, writes to `/etc/sysctl.d/99-zester.conf` (existing key replaced).
-- Revert: restores the original value captured before Apply.
+The bare positional argument is the parameter name; value is a key=value.
+
+```bash
+zester '*' sysctl.present net.ipv4.ip_forward value=1
+```
+
+
+---
+
+## Notes
+
+> **persist defaults to true and verifies the drop-in**
+>
+> `persist` defaults to true: the value is written to the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) AND that entry is verified during Check, so a runtime-only change (a manual `sysctl -w`) reads as drift because it would not survive a reboot. Set `persist: false` to manage only the runtime value. Under the uniform decoder an integer or truthy-string `persist` (`1`, `"true"`) is honored where the legacy `.(bool)` assertion dropped it.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7

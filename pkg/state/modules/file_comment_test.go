@@ -8,6 +8,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -16,14 +18,14 @@ func testFileCommentMctx() *exec.ModuleContext {
 }
 
 func TestFileCommentNames(t *testing.T) {
-	c, err := NewFileCommentBuilder(testFileCommentMctx())("/etc/a", map[string]any{"regex": "^x"})
+	c, err := NewFileCommentBuilder(testFileCommentMctx(), modschema.DecodeOptions{})("/etc/a", map[string]any{"regex": "^x"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Name() != "file.comment:/etc/a" {
 		t.Errorf("comment Name: got %q", c.Name())
 	}
-	u, err := NewFileUncommentBuilder(testFileCommentMctx())("/etc/a", map[string]any{"regex": "^x"})
+	u, err := NewFileUncommentBuilder(testFileCommentMctx(), modschema.DecodeOptions{})("/etc/a", map[string]any{"regex": "^x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +35,7 @@ func TestFileCommentNames(t *testing.T) {
 }
 
 func TestFileCommentMissingRegex(t *testing.T) {
-	_, err := NewFileCommentBuilder(testFileCommentMctx())("x", map[string]any{})
+	_, err := NewFileCommentBuilder(testFileCommentMctx(), modschema.DecodeOptions{})("x", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for missing regex")
 	}
@@ -42,7 +44,7 @@ func TestFileCommentMissingRegex(t *testing.T) {
 func TestFileComment(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "sshd_config", "PermitRootLogin yes\nPort 22\n")
-	s, err := NewFileCommentBuilder(testFileCommentMctx())(path, map[string]any{
+	s, err := NewFileCommentBuilder(testFileCommentMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"regex": "^PermitRootLogin",
 	})
 	if err != nil {
@@ -77,7 +79,7 @@ func TestFileComment(t *testing.T) {
 func TestFileUncomment(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "conf", "# net.ipv4.ip_forward=1\nother\n")
-	s, err := NewFileUncommentBuilder(testFileCommentMctx())(path, map[string]any{
+	s, err := NewFileUncommentBuilder(testFileCommentMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"regex": "net.ipv4.ip_forward",
 	})
 	if err != nil {
@@ -104,7 +106,7 @@ func TestFileUncomment(t *testing.T) {
 func TestFileCommentCustomChar(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "ini", "debug = true\n")
-	s, err := NewFileCommentBuilder(testFileCommentMctx())(path, map[string]any{
+	s, err := NewFileCommentBuilder(testFileCommentMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"regex": "^debug", "char": ";",
 	})
 	if err != nil {
@@ -123,7 +125,7 @@ func TestFileCommentRevert(t *testing.T) {
 	ctx := context.Background()
 	original := "PermitRootLogin yes\n"
 	path := writeTempFile(t, "sshd", original)
-	s, err := NewFileCommentBuilder(testFileCommentMctx())(path, map[string]any{
+	s, err := NewFileCommentBuilder(testFileCommentMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"regex": "^PermitRootLogin",
 	})
 	if err != nil {
@@ -145,7 +147,7 @@ func TestFileCommentFreshInstanceRevertIsNoOp(t *testing.T) {
 	ctx := context.Background()
 	original := "PermitRootLogin yes\n"
 	path := writeTempFile(t, "sshd_config", original)
-	s, err := NewFileCommentBuilder(testFileCommentMctx())(path, map[string]any{
+	s, err := NewFileCommentBuilder(testFileCommentMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"regex": "^PermitRootLogin",
 	})
 	if err != nil {
@@ -174,7 +176,7 @@ func TestFileCommentMissingFileIsCleanNoChange(t *testing.T) {
 	ctx := context.Background()
 	fake := exectest.NewFakeFileExec()
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
-	s, err := NewFileCommentBuilder(mctx)("/etc/nope.conf", map[string]any{"regex": "^x"})
+	s, err := NewFileCommentBuilder(mctx, modschema.DecodeOptions{})("/etc/nope.conf", map[string]any{"regex": "^x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +203,7 @@ func TestFileCommentReadErrorFailsCheckAndApply(t *testing.T) {
 	fake.PreCreate("/etc/sshd_config", []byte(original), 0644)
 	fake.SetReadError("/etc/sshd_config", errors.New("input/output error"))
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
-	s, err := NewFileCommentBuilder(mctx)("/etc/sshd_config", map[string]any{
+	s, err := NewFileCommentBuilder(mctx, modschema.DecodeOptions{})("/etc/sshd_config", map[string]any{
 		"regex": "^PermitRootLogin",
 	})
 	if err != nil {
@@ -219,3 +221,29 @@ func TestFileCommentReadErrorFailsCheckAndApply(t *testing.T) {
 }
 
 var _ state.State = (*FileComment)(nil)
+
+// TestFileCommentContract / TestFileUncommentContract replay the permanent
+// differential contract fixtures against the two Specs that share the FileComment
+// proto (the N:1 exemplar). Each pins the decoded Path/Char/Regex projection, the
+// regex-required parity, and the BD-6 (wrong-typed name) divergence.
+func TestFileCommentContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileComment
+		if _, err := fileCommentSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.comment.yaml")
+}
+
+func TestFileUncommentContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileComment
+		if _, err := fileUncommentSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.uncomment.yaml")
+}

@@ -1,9 +1,15 @@
 ---
 title: "service.running"
-description: "Ensures a service is started on the target system. When triggered via a watch requisite (e.g., a config file changed), it restarts the service rather than starting it."
+description: "Ensure a service is running, optionally managing its boot enablement."
 ---
 
-**Source**: `pkg/state/modules/service.go`
+{/* zester-docgen:managed module="service.running" */}
+
+**Source**: `pkg/state/modules/service_running.go`
+
+---
+
+`service.running` ensures the named service is started, and — when a watch requisite force-applies it — restarts it instead. The service name defaults to the state ID. The `enable` parameter is three-valued: omit it to leave the unit's boot enablement untouched, set `enable: true` to also enable it at boot, or `enable: false` to actively disable it. Converging an enable-only drift on an already-running service does NOT restart it.
 
 ---
 
@@ -11,89 +17,104 @@ description: "Ensures a service is started on the target system. When triggered 
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | The service name. If omitted, the state ID is used. |
-| `enable` | `bool` | No | `false` | Also enable the service at boot when applying. |
+| `name` | `string` | No | State ID | service unit name (defaults to the state ID) |
+| `enable` | `TriState` | No | *(none)* | boot-enablement intent: unset leaves it alone, true enables, false disables |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies). Note that a `watch` requisite force-applies this state, triggering a service restart.
-
----
-
-## Check Behavior
-
-- Calls `systemctl is-active --quiet <service>` (via the injected ServiceExec).
-- Reports no changes needed if the service is already running.
-- Reports `NeedsChange: true` if the service is not running.
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Apply Behavior
+## Parameter Types
 
-1. Checks whether the service is currently running.
-2. If the service is **not running**: calls `Start` and records that it started (for Revert).
-3. If the service is **already running** (e.g., triggered by watch): calls `Restart`.
-4. If `enable: true` and the service is not yet enabled: calls `Enable` and records that it enabled (for Revert).
-5. Returns `Changed: true` in all cases where action was taken.
+### TriState
 
----
+A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell "not specified" apart from an explicit false.
 
-## Revert Behavior
-
-- If Apply enabled the service: calls `Disable`.
-- If Apply started the service: calls `Stop`.
-- If Apply only restarted the service (was already running): returns `Changed: false` (no revert possible).
 
 ---
 
-## Details Returned
+## Effects
 
-| Key | Description |
-|---|---|
-| `service` | The service name |
-| `action` | `"started"` or `"restarted"` |
-| `manager` | The service manager name (e.g., `"systemd"`) |
+### Check
+
+Reports a change when the service is not running. When `enable` is declared, it also compares boot enablement and reports drift (not-enabled under `enable: true`, or still-enabled under `enable: false`); an undeclared `enable` is never compared, so a running service never churns over boot state it does not manage.
+
+### Apply
+
+Converges the declared `enable` facet first (enabling or disabling at boot as declared). Then, if the service is not running, it starts it; if it is already running and only the enable facet drifted, it enables/disables WITHOUT restarting; otherwise (a watch-forced apply on a healthy service) it restarts. Reports the action taken and the service manager in its details.
+
+### Revert
+
+Undoes only the actions this run's Apply recorded: it re-disables a service it enabled, re-enables one it disabled, and stops one it started. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never stops a service it did not start.
+
 
 ---
 
 ## Examples
 
-### Ensure nginx is running
+### Ensure a service is running
+
+The service name defaults to the state ID.
 
 ```yaml
 nginx:
-  service.running:
-    - require:
-      - pkg.installed:nginx
+  service.running: []
 ```
 
-### Restart nginx when config changes
+### Run and enable at boot
+
+enable: true also enables the unit at boot; an enable-only drift converges without restarting.
+
+```yaml
+sshd:
+  service.running:
+    - enable: true
+```
+
+### Restart on config change
+
+A watch requisite force-applies the state, which restarts (rather than starts) the running service.
 
 ```yaml
 nginx:
   service.running:
     - watch:
-      - file.managed:/etc/nginx/nginx.conf
-      - file.managed:/etc/nginx/sites-enabled/default
+      - "file.managed:/etc/nginx/nginx.conf"
 ```
 
-### Ensure running and enabled at boot
+### Ensure running ad hoc
 
-```yaml
-nginx:
-  service.running:
-    - enable: true
-    - require:
-      - pkg.installed:nginx
+The bare positional argument is the service name.
+
+```bash
+zester '*' service.running nginx
 ```
 
-### Full example with explicit name
 
-```yaml
-webserver-running:
-  service.running:
-    - name: nginx
-    - enable: true
-    - require:
-      - pkg.installed:nginx
-    - watch:
-      - file.managed:/etc/nginx/nginx.conf
-```
+---
+
+## Notes
+
+> **Enable-only drift does not restart**
+>
+> When a running service's only drift is boot enablement, Apply enables or disables it in place — it never restarts a healthy service just to fix boot state.
+
+> **enable is three-valued**
+>
+> Omitting enable leaves the unit's boot enablement untouched; enable: false actively disables it. This is the tri-state semantic — "not specified" is distinct from an explicit false.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [service.dead](/docs/guides/modules/service-dead)
+- [service.enabled](/docs/guides/modules/service-enabled)

@@ -1,0 +1,243 @@
+module: timezone.system
+# Permanent differential contract for the timezone.system migration. `name` is
+# the primary string (defaulting to the state ID); `utc` is a primitive bool.
+# These cases were approved by the legacy-vs-new equivalence comparison while
+# the legacy constructor still existed (see the migration changelog); after
+# its deletion RunContract replays them as the permanent regression guard.
+# Accept cases pin the decoded exported-field projection; reject cases pin the
+# error kind. BD-tagged cases pin the flagged behavioral differences, per the
+# §11 per-PARAM pinning standard:
+#   BD-2 — an ORIGIN-INDEPENDENT truthy/falsy-string utc (in EITHER the CLI or
+#          a YAML-quoted value) is honored (was silently dropped);
+#   BD-6 — a wrong-typed name is coerced (scalar) or rejected (composite)
+#          instead of silently falling back to the state ID;
+#   BD-7 — an integer utc is 1=true / 0=false, any other integer a typed
+#          error (was silently dropped);
+#   §2.1/§3 empty-string (PARITY, not a BD) — an empty-string/nil name falls
+#          back to the state ID.
+cases:
+  # ============================ name (primary) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: America/New_York
+    want:
+      Timezone: America/New_York
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: America/New_York
+    want:
+      Timezone: America/New_York
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: America/New_York
+    want:
+      Timezone: America/New_York
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: UTC
+    input: {}
+    want:
+      Timezone: UTC
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: UTC
+    input:
+      name: ""
+    want:
+      Timezone: UTC
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: UTC
+    input:
+      name:
+    want:
+      Timezone: UTC
+  # BD-6: a numeric name is coerced to its string form (was fallback-to-id).
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Timezone: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Timezone: "123"
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== utc (bool) ==============================
+  # Parity: a native YAML/msgpack bool decodes unchanged.
+  - label: utc-true-yaml
+    universe: yaml
+    id: UTC
+    input:
+      utc: true
+    want:
+      UTC: true
+  - label: utc-true-msgpack
+    universe: msgpack
+    id: UTC
+    input:
+      utc: true
+    want:
+      UTC: true
+  - label: utc-false-yaml
+    universe: yaml
+    id: UTC
+    input:
+      utc: false
+    want:
+      UTC: false
+  - label: utc-absent-defaults-false-yaml
+    universe: yaml
+    id: UTC
+    input: {}
+    want:
+      UTC: false
+  # BD-2: a CLI utc=true (the string "true") is honored (was dropped to false).
+  - label: utc-truthy-string-cli
+    universe: cli
+    id: UTC
+    bd: BD-2
+    input:
+      utc: true
+    want:
+      UTC: true
+  # BD-2 is ORIGIN-INDEPENDENT: a YAML-quoted "yes" is honored too.
+  - label: utc-truthy-string-yaml
+    universe: yaml
+    id: UTC
+    bd: BD-2
+    input:
+      utc: "yes"
+    want:
+      UTC: true
+  # BD-2: a falsy string (CLI and YAML-quoted) is honored.
+  - label: utc-falsy-string-cli
+    universe: cli
+    id: UTC
+    bd: BD-2
+    input:
+      utc: false
+    want:
+      UTC: false
+  - label: utc-falsy-string-yaml
+    universe: yaml
+    id: UTC
+    bd: BD-2
+    input:
+      utc: "no"
+    want:
+      UTC: false
+  # BD-7: an integer utc is 1=true / 0=false across every int kind (msgpack
+  # sizes small ints as int8); the CLI delivers "1"/"0" which the truthy/falsy
+  # set maps to the same result, so all three agree.
+  - label: utc-int-one-yaml
+    universe: yaml
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 1
+    want:
+      UTC: true
+  - label: utc-int-one-msgpack
+    universe: msgpack
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 1
+    want:
+      UTC: true
+  - label: utc-int-one-cli
+    universe: cli
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 1
+    want:
+      UTC: true
+  - label: utc-int-zero-yaml
+    universe: yaml
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 0
+    want:
+      UTC: false
+  - label: utc-int-zero-msgpack
+    universe: msgpack
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 0
+    want:
+      UTC: false
+  - label: utc-int-zero-cli
+    universe: cli
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 0
+    want:
+      UTC: false
+  # BD-7 (rejection arm): any integer other than 0/1 is a typed value error.
+  - label: utc-invalid-int-yaml
+    universe: yaml
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 2
+    want_error: value_invalid
+  - label: utc-invalid-int-msgpack
+    universe: msgpack
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 2
+    want_error: value_invalid
+  - label: utc-invalid-int-cli
+    universe: cli
+    id: UTC
+    bd: BD-7
+    input:
+      utc: 2
+    want_error: value_invalid
+
+  # ============================== misc ==============================
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: UTC
+    input:
+      require:
+        - pkg.installed:tzdata
+    want:
+      Timezone: UTC

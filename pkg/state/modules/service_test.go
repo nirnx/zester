@@ -7,6 +7,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state/modules"
 )
 
@@ -27,7 +28,7 @@ func testSvcMctx(fakeSvc *exectest.FakeServiceExec) *exec.ModuleContext {
 func TestSvcRunning_Name(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	mctx := testSvcMctx(fake)
-	s, err := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	s, err := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func TestSvcRunning_Name(t *testing.T) {
 func TestSvcRunning_PrimaryParamDefault(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	mctx := testSvcMctx(fake)
-	s, err := modules.NewSvcRunningBuilder(mctx)("myservice", map[string]any{})
+	s, err := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("myservice", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestSvcRunning_PrimaryParamDefault(t *testing.T) {
 func TestSvcRunning_Requisites(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	mctx := testSvcMctx(fake)
-	s, err := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{
+	s, err := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{
 		"require":   []any{"pkg.installed:nginx"},
 		"watch":     []any{"file.managed:/etc/nginx/nginx.conf"},
 		"onchanges": []any{"cmd.run:build"},
@@ -80,7 +81,7 @@ func TestSvcRunning_CheckNeedsChange(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +95,7 @@ func TestSvcRunning_CheckNoChange(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +109,7 @@ func TestSvcRunning_ApplyStart(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +126,7 @@ func TestSvcRunning_ApplyRestart(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +143,7 @@ func TestSvcRunning_ApplyEnable(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": true})
 	_, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -156,8 +157,10 @@ func TestSvcRunning_Revert(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
-	s.Apply(context.Background())
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +180,7 @@ func TestSvcRunning_CheckEnableDrift(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": true})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +195,7 @@ func TestSvcRunning_CheckEnableUndeclaredNoChurn(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +209,7 @@ func TestSvcRunning_CheckEnableFalseDrift(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": false})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": false})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +223,7 @@ func TestSvcRunning_CheckEnableSatisfiedNoChange(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": true})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +239,7 @@ func TestSvcRunning_ApplyEnableOnlyDoesNotRestart(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": true})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +259,7 @@ func TestSvcRunning_ApplyDisableWhenEnableFalse(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": false})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": false})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +281,7 @@ func TestSvcRunning_RevertFreshInstanceNoOp(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": true})
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +303,7 @@ func TestSvcRunning_RevertEnableOnlyReportsChanged(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{"enable": true})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": true})
 	if _, err := s.Apply(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +321,7 @@ func TestSvcRunning_RevertEnableOnlyReportsChanged(t *testing.T) {
 
 func TestSvcRunning_NilProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Service: nil}}
-	_, err := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	_, err := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	if err == nil {
 		t.Error("expected error when Service provider is nil")
 	}
@@ -329,7 +332,7 @@ func TestSvcRunning_ApplyError(t *testing.T) {
 	fake.PreAdd("nginx", false, false)
 	fake.StartErr = errors.New("systemctl failed")
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcRunningBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcRunningBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	_, err := s.Apply(context.Background())
 	if err == nil {
 		t.Error("expected error from Apply when Start fails")
@@ -341,7 +344,7 @@ func TestSvcRunning_ApplyError(t *testing.T) {
 func TestSvcEnabled_Name(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	mctx := testSvcMctx(fake)
-	s, err := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	s, err := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +356,7 @@ func TestSvcEnabled_Name(t *testing.T) {
 func TestSvcEnabled_PrimaryParamDefault(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	mctx := testSvcMctx(fake)
-	s, err := modules.NewSvcEnabledBuilder(mctx)("sshd", map[string]any{})
+	s, err := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("sshd", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +370,7 @@ func TestSvcEnabled_CheckNeedsChange(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +384,7 @@ func TestSvcEnabled_CheckNoChange(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -395,7 +398,7 @@ func TestSvcEnabled_Apply(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -412,8 +415,10 @@ func TestSvcEnabled_Revert(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
-	s.Apply(context.Background())
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -433,7 +438,7 @@ func TestSvcEnabled_ApplyAlreadyEnabledNoOp(t *testing.T) {
 	fake.PreAdd("nginx", true, true)
 	fake.EnableErr = errors.New("Enable must not be called when already enabled")
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -450,7 +455,7 @@ func TestSvcEnabled_RevertFreshInstanceNoOp(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("sshd", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("sshd", map[string]any{})
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("sshd", map[string]any{})
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -472,7 +477,7 @@ func TestSvcEnabled_RevertAfterNoOpApplyNoOp(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	ar, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -497,7 +502,7 @@ func TestSvcEnabled_Convergence(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	cr, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -519,7 +524,7 @@ func TestSvcEnabled_Convergence(t *testing.T) {
 
 func TestSvcEnabled_NilProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Service: nil}}
-	_, err := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	_, err := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	if err == nil {
 		t.Error("expected error when Service provider is nil")
 	}
@@ -529,7 +534,7 @@ func TestSvcEnabled_ApplyError(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.EnableErr = errors.New("dbus error")
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcEnabledBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcEnabledBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	_, err := s.Apply(context.Background())
 	if err == nil {
 		t.Error("expected error from Apply when Enable fails")
@@ -541,7 +546,7 @@ func TestSvcEnabled_ApplyError(t *testing.T) {
 func TestSvcDead_Name(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	mctx := testSvcMctx(fake)
-	s, err := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	s, err := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +558,7 @@ func TestSvcDead_Name(t *testing.T) {
 func TestSvcDead_PrimaryParamDefault(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	mctx := testSvcMctx(fake)
-	s, err := modules.NewSvcDeadBuilder(mctx)("mysql", map[string]any{})
+	s, err := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("mysql", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,7 +572,7 @@ func TestSvcDead_CheckNeedsChange(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -581,7 +586,7 @@ func TestSvcDead_CheckNoChange(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -595,7 +600,7 @@ func TestSvcDead_ApplyStop(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -616,7 +621,7 @@ func TestSvcDead_ApplyDisable(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": false})
 	_, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -630,8 +635,10 @@ func TestSvcDead_Revert(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
-	s.Apply(context.Background())
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -650,7 +657,7 @@ func TestSvcDead_CheckDisableDrift(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": false})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -664,7 +671,7 @@ func TestSvcDead_CheckStoppedEnableUndeclaredNoChurn(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	result, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -678,7 +685,7 @@ func TestSvcDead_ApplyAlreadyStoppedDisables(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": false})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -696,7 +703,7 @@ func TestSvcDead_ApplyConvergedNoOp(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": false})
 	result, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -713,7 +720,7 @@ func TestSvcDead_RevertFreshInstanceNoOp(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("telemetry-agent", false, false) // stopped weeks ago, not by this run
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("telemetry-agent", map[string]any{})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("telemetry-agent", map[string]any{})
 	result, err := s.Revert(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -735,7 +742,7 @@ func TestSvcDead_RevertAfterNoOpApplyNoOp(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, false)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	ar, err := s.Apply(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -761,7 +768,7 @@ func TestSvcDead_RevertRestoresOnlyAppliedActs(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", false, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": false})
 	if _, err := s.Apply(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -785,7 +792,7 @@ func TestSvcDead_Convergence(t *testing.T) {
 	fake := exectest.NewFakeServiceExec("systemd")
 	fake.PreAdd("nginx", true, true)
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{"enable": false})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{"enable": false})
 	cr, err := s.Check(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -807,7 +814,7 @@ func TestSvcDead_Convergence(t *testing.T) {
 
 func TestSvcDead_NilProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Service: nil}}
-	_, err := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	_, err := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	if err == nil {
 		t.Error("expected error when Service provider is nil")
 	}
@@ -818,7 +825,7 @@ func TestSvcDead_ApplyError(t *testing.T) {
 	fake.PreAdd("nginx", true, false)
 	fake.StopErr = errors.New("cannot stop")
 	mctx := testSvcMctx(fake)
-	s, _ := modules.NewSvcDeadBuilder(mctx)("nginx", map[string]any{})
+	s, _ := modules.NewSvcDeadBuilder(mctx, modschema.DecodeOptions{})("nginx", map[string]any{})
 	_, err := s.Apply(context.Background())
 	if err == nil {
 		t.Error("expected error from Apply when Stop fails")

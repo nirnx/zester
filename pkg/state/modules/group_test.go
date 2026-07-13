@@ -7,6 +7,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 func testGroupMctx(fakeGroup *exectest.FakeGroupExec) *exec.ModuleContext {
@@ -25,7 +26,7 @@ func testGroupMctx(fakeGroup *exectest.FakeGroupExec) *exec.ModuleContext {
 
 func TestGroupPresentName(t *testing.T) {
 	mctx := testGroupMctx(exectest.NewFakeGroupExec())
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("docker", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +38,7 @@ func TestGroupPresentName(t *testing.T) {
 
 func TestGroupPresentNameFromConfig(t *testing.T) {
 	mctx := testGroupMctx(exectest.NewFakeGroupExec())
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("container-group", map[string]any{
 		"name": "docker",
 	})
@@ -52,7 +53,7 @@ func TestGroupPresentNameFromConfig(t *testing.T) {
 
 func TestGroupPresentRequisites(t *testing.T) {
 	mctx := testGroupMctx(exectest.NewFakeGroupExec())
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"pkg.installed:docker"},
 		"watch":     []any{"file.managed:/etc/group"},
@@ -80,7 +81,7 @@ func TestGroupPresentRequisites(t *testing.T) {
 func TestGroupPresentCheckDoesNotExist(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{})
 	if err != nil {
@@ -103,7 +104,7 @@ func TestGroupPresentCheckExistsNoChange(t *testing.T) {
 		GID:  999,
 	})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{
 		"gid": 999,
@@ -128,7 +129,7 @@ func TestGroupPresentCheckGIDDiffers(t *testing.T) {
 		GID:  998,
 	})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{
 		"gid": 999,
@@ -149,7 +150,7 @@ func TestGroupPresentCheckGIDDiffers(t *testing.T) {
 func TestGroupPresentApplyCreate(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{
 		"gid":    999,
@@ -186,7 +187,7 @@ func TestGroupPresentApplyModify(t *testing.T) {
 		GID:  998,
 	})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{
 		"gid": 999,
@@ -216,7 +217,7 @@ func TestGroupPresentApplyError(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	fakeGroup.CreateErr = fmt.Errorf("permission denied")
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{})
 	if err != nil {
@@ -232,7 +233,7 @@ func TestGroupPresentApplyError(t *testing.T) {
 func TestGroupPresentRevertCreated(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{})
 	if err != nil {
@@ -265,7 +266,7 @@ func TestGroupPresentRevertModified(t *testing.T) {
 		GID:  998,
 	})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{
 		"gid": 999,
@@ -299,7 +300,7 @@ func TestGroupPresentRevertFreshInstanceNoOp(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 998})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{"gid": 999})
 	if err != nil {
@@ -329,7 +330,7 @@ func TestGroupPresentRevertRestoresMembership(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999, Members: []string{"alice"}})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{
 		"addusers": []any{"bob"},
@@ -368,7 +369,7 @@ func TestGroupPresentRevertNoDriftReportsNoChange(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "docker", GID: 999})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("docker", map[string]any{"gid": 999})
 	if err != nil {
@@ -402,7 +403,7 @@ func TestGroupPresentNoProvider(t *testing.T) {
 			Command: exectest.NewFakeCommandExec(),
 		},
 	}
-	builder := NewGroupPresentBuilder(mctx)
+	builder := NewGroupPresentBuilder(mctx, modschema.DecodeOptions{})
 
 	_, err := builder("docker", map[string]any{})
 	if err == nil {
@@ -414,7 +415,7 @@ func TestGroupPresentNoProvider(t *testing.T) {
 
 func TestGroupAbsentName(t *testing.T) {
 	mctx := testGroupMctx(exectest.NewFakeGroupExec())
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("oldgroup", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -427,7 +428,7 @@ func TestGroupAbsentName(t *testing.T) {
 func TestGroupAbsentCheckNotExists(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("ghost", map[string]any{})
 	if err != nil {
@@ -447,7 +448,7 @@ func TestGroupAbsentCheckExists(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "oldgroup"})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("oldgroup", map[string]any{})
 	if err != nil {
@@ -467,7 +468,7 @@ func TestGroupAbsentApply(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "oldgroup"})
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("oldgroup", map[string]any{})
 	if err != nil {
@@ -490,7 +491,7 @@ func TestGroupAbsentApply(t *testing.T) {
 
 func TestGroupAbsentNameFromConfig(t *testing.T) {
 	mctx := testGroupMctx(exectest.NewFakeGroupExec())
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("remove-legacy", map[string]any{
 		"name": "legacy",
 	})
@@ -505,7 +506,7 @@ func TestGroupAbsentNameFromConfig(t *testing.T) {
 
 func TestGroupAbsentRequisites(t *testing.T) {
 	mctx := testGroupMctx(exectest.NewFakeGroupExec())
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"user.absent:olduser"},
 		"watch":     []any{"file.managed:/etc/group"},
@@ -537,7 +538,7 @@ func TestGroupAbsentApplyAlreadyAbsentNoOp(t *testing.T) {
 	fakeGroup := exectest.NewFakeGroupExec()
 	fakeGroup.DeleteErr = fmt.Errorf("groupdel: group does not exist (exit 6)")
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("ghost", map[string]any{})
 	if err != nil {
@@ -558,7 +559,7 @@ func TestGroupAbsentApplyError(t *testing.T) {
 	fakeGroup.PreCreate(&exec.GroupInfo{Name: "oldgroup"}) // exists, so Delete IS attempted
 	fakeGroup.DeleteErr = fmt.Errorf("group in use")
 	mctx := testGroupMctx(fakeGroup)
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("oldgroup", map[string]any{})
 	if err != nil {
@@ -573,7 +574,7 @@ func TestGroupAbsentApplyError(t *testing.T) {
 
 func TestGroupAbsentRevert(t *testing.T) {
 	mctx := testGroupMctx(exectest.NewFakeGroupExec())
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("oldgroup", map[string]any{})
 	if err != nil {
@@ -598,7 +599,7 @@ func TestGroupAbsentNoProvider(t *testing.T) {
 			Command: exectest.NewFakeCommandExec(),
 		},
 	}
-	builder := NewGroupAbsentBuilder(mctx)
+	builder := NewGroupAbsentBuilder(mctx, modschema.DecodeOptions{})
 
 	_, err := builder("oldgroup", map[string]any{})
 	if err == nil {

@@ -12,6 +12,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/template"
 )
 
@@ -24,12 +26,25 @@ func testFileMctx() *exec.ModuleContext {
 	}
 }
 
+// newFileManagedTest builds a FileManaged state through the migrated builder
+// with a caller-supplied file provider and render function — the seam the
+// pre-migration inner constructor (newFileManaged) offered. It threads an
+// empty decode policy; the builder decodes through fileManagedSpec.
+func newFileManagedTest(id string, config map[string]any, file exec.FileExec,
+	render func(string, string, map[string]any) (string, error)) (state.State, error) {
+	mctx := &exec.ModuleContext{
+		ProviderSet:    exec.ProviderSet{File: file},
+		RenderTemplate: render,
+	}
+	return NewFileManagedBuilder(mctx, modschema.DecodeOptions{})(id, config)
+}
+
 func TestFileManagedCreateNew(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
 
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"path":    path,
 		"content": "hello world",
@@ -88,7 +103,7 @@ func TestFileManagedUpdateContent(t *testing.T) {
 	}
 
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"path":    path,
 		"content": "new content",
@@ -131,7 +146,7 @@ func TestFileManagedRevertToOriginal(t *testing.T) {
 	}
 
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"path":    path,
 		"content": "modified",
@@ -167,7 +182,7 @@ func TestFileManagedRevertNew(t *testing.T) {
 	path := filepath.Join(dir, "new.txt")
 
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"path":    path,
 		"content": "new file",
@@ -204,7 +219,7 @@ func TestFileManagedSource(t *testing.T) {
 	}
 
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"path":   destPath,
 		"source": sourcePath,
@@ -240,7 +255,7 @@ func TestFileManagedModeChange(t *testing.T) {
 	}
 
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"path":    path,
 		"content": "content",
@@ -262,7 +277,7 @@ func TestFileManagedModeChange(t *testing.T) {
 
 func TestFileManagedName(t *testing.T) {
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("my-file", map[string]any{
 		"path":    "/tmp/test",
 		"content": "x",
@@ -277,7 +292,7 @@ func TestFileManagedName(t *testing.T) {
 
 func TestFileManagedRequires(t *testing.T) {
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"path":    "/tmp/test",
 		"content": "x",
@@ -294,7 +309,7 @@ func TestFileManagedRequires(t *testing.T) {
 
 func TestFileManagedRequisites(t *testing.T) {
 	mctx := testFileMctx()
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"path":      "/tmp/test",
 		"content":   "x",
@@ -343,7 +358,7 @@ func TestFileManagedSourceTemplate(t *testing.T) {
 	}
 
 	render := testRenderFunc(t)
-	s, err := newFileManaged("test-tpl", map[string]any{
+	s, err := newFileManagedTest("test-tpl", map[string]any{
 		"path":     destPath,
 		"source":   sourcePath,
 		"template": true,
@@ -385,7 +400,7 @@ func TestFileManagedSourceTemplateContext(t *testing.T) {
 	}
 
 	render := testRenderFunc(t)
-	s, err := newFileManaged("ctx-test", map[string]any{
+	s, err := newFileManagedTest("ctx-test", map[string]any{
 		"path":     destPath,
 		"source":   sourcePath,
 		"template": "jinja",
@@ -424,7 +439,7 @@ func TestFileManagedSourceTemplateDefaults(t *testing.T) {
 	}
 
 	render := testRenderFunc(t)
-	s, err := newFileManaged("defaults-test", map[string]any{
+	s, err := newFileManagedTest("defaults-test", map[string]any{
 		"path":     destPath,
 		"source":   sourcePath,
 		"template": true,
@@ -460,7 +475,7 @@ func TestFileManagedSourceTemplateContextOverridesDefaults(t *testing.T) {
 	}
 
 	render := testRenderFunc(t)
-	s, err := newFileManaged("override-test", map[string]any{
+	s, err := newFileManagedTest("override-test", map[string]any{
 		"path":     destPath,
 		"source":   sourcePath,
 		"template": true,
@@ -505,7 +520,7 @@ func TestFileManagedSourceNoTemplate(t *testing.T) {
 
 	render := testRenderFunc(t)
 	// template is not set (defaults to false)
-	s, err := newFileManaged("no-tpl", map[string]any{
+	s, err := newFileManagedTest("no-tpl", map[string]any{
 		"path":   destPath,
 		"source": sourcePath,
 	}, &exec.OSFileExec{}, render)
@@ -534,7 +549,7 @@ func TestFileManagedContentTemplate(t *testing.T) {
 	destPath := filepath.Join(dir, "dest.conf")
 
 	render := testRenderFunc(t)
-	s, err := newFileManaged("content-tpl", map[string]any{
+	s, err := newFileManagedTest("content-tpl", map[string]any{
 		"path":     destPath,
 		"content":  "Hello {{ name }}!",
 		"template": true,
@@ -565,7 +580,7 @@ func TestFileManagedTemplateRenderError(t *testing.T) {
 	destPath := filepath.Join(dir, "dest.conf")
 
 	render := testRenderFunc(t)
-	s, err := newFileManaged("bad-tpl", map[string]any{
+	s, err := newFileManagedTest("bad-tpl", map[string]any{
 		"path":     destPath,
 		"content":  "{{ unclosed",
 		"template": true,
@@ -595,7 +610,7 @@ func TestFileManagedTemplateNoRenderFunc(t *testing.T) {
 	}
 
 	// template: true but render func is nil — graceful degradation to raw copy
-	s, err := newFileManaged("nil-render", map[string]any{
+	s, err := newFileManagedTest("nil-render", map[string]any{
 		"path":     destPath,
 		"source":   sourcePath,
 		"template": true,
@@ -651,7 +666,7 @@ func TestFileManagedCheckOwnershipDrift(t *testing.T) {
 	fake.PreCreate(path, []byte("content"), 0644)
 	fake.SetOwner(path, uid+1, gid+1)
 
-	s, err := newFileManaged("owned", map[string]any{
+	s, err := newFileManagedTest("owned", map[string]any{
 		"path":    path,
 		"content": "content",
 		"mode":    "0644",
@@ -693,7 +708,7 @@ func TestFileManagedCheckOwnershipUndeclared(t *testing.T) {
 	// Arbitrary ownership: without user:/group: declared the facet never fires.
 	fake.SetOwner(path, 12345, 54321)
 
-	s, err := newFileManaged("plain", map[string]any{
+	s, err := newFileManagedTest("plain", map[string]any{
 		"path":    path,
 		"content": "content",
 		"mode":    "0644",
@@ -718,7 +733,7 @@ func TestFileManagedCheckGroupOnlyDrift(t *testing.T) {
 	path := "/etc/grouponly.conf"
 	fake.PreCreate(path, []byte("content"), 0644)
 
-	s, err := newFileManaged("grouponly", map[string]any{
+	s, err := newFileManagedTest("grouponly", map[string]any{
 		"path":    path,
 		"content": "content",
 		"mode":    "0644",
@@ -759,7 +774,7 @@ func TestFileManagedRevertFreshInstanceNoOp(t *testing.T) {
 	}
 
 	mctx := testFileMctx()
-	s, err := NewFileManagedBuilder(mctx)("fresh", map[string]any{
+	s, err := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})("fresh", map[string]any{
 		"path":    path,
 		"content": "other",
 	})
@@ -794,7 +809,7 @@ func TestFileManagedCheckReadErrorFails(t *testing.T) {
 	fake.PreCreate(path, []byte("current"), 0644)
 	fake.SetReadError(path, errors.New("permission denied"))
 
-	s, err := newFileManaged("locked", map[string]any{
+	s, err := newFileManagedTest("locked", map[string]any{
 		"path":    path,
 		"content": "desired",
 	}, fake, nil)
@@ -817,7 +832,7 @@ func TestFileManagedModeConvergencePreExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+	s, err := NewFileManagedBuilder(testFileMctx(), modschema.DecodeOptions{})("test", map[string]any{
 		"path":    path,
 		"content": "content",
 		"mode":    "0644",
@@ -867,7 +882,7 @@ func TestFileManagedModeConvergenceDefaultMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+	s, err := NewFileManagedBuilder(testFileMctx(), modschema.DecodeOptions{})("test", map[string]any{
 		"path":    path,
 		"content": "content",
 	})
@@ -917,7 +932,7 @@ func TestFileManagedRevertRestoresPriorMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+	s, err := NewFileManagedBuilder(testFileMctx(), modschema.DecodeOptions{})("test", map[string]any{
 		"path":    path,
 		"content": "modified",
 		"mode":    "0644",
@@ -964,7 +979,7 @@ func TestFileManagedReApplyKeepsFirstBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+	s, err := NewFileManagedBuilder(testFileMctx(), modschema.DecodeOptions{})("test", map[string]any{
 		"path":    path,
 		"content": "B",
 		"mode":    "0644",
@@ -1006,7 +1021,7 @@ func TestFileManagedCreatedPrecedenceOverBackup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "created.conf")
 
-	s, err := NewFileManagedBuilder(testFileMctx())("test", map[string]any{
+	s, err := NewFileManagedBuilder(testFileMctx(), modschema.DecodeOptions{})("test", map[string]any{
 		"path":    path,
 		"content": "B",
 	})
@@ -1042,7 +1057,7 @@ func TestFileManagedApplyReadErrorFails(t *testing.T) {
 	fake.PreCreate(path, []byte("current"), 0644)
 	fake.SetReadError(path, errors.New("permission denied"))
 
-	s, err := newFileManaged("locked", map[string]any{
+	s, err := newFileManagedTest("locked", map[string]any{
 		"path":    path,
 		"content": "desired",
 	}, fake, nil)

@@ -1,0 +1,316 @@
+---
+title: "Developing a Built-in Module"
+---
+
+This is the developer howto for adding a **built-in Go state module** with a proper
+self-documenting schema. If you want a custom module without touching the Zester
+codebase, use [Starlark custom modules](/docs/guides/modules/starlark) instead —
+they load from `_modules/` directories at runtime.
+
+Built-in modules follow one rule: **one schema declaration per module**. The
+tagged struct you write is compiled once (`modschema.Compile`) into the plan that
+*everything* reads — the runtime decoder, `strict_params` validation, `sys.doc`,
+the offline `zester doc`, the generated reference page, the editor JSON Schema,
+and shell completion. There is no second place where a parameter is described, so
+documentation cannot drift from behavior. The framework and its guarantees are
+described in [Self-Documenting Modules](/docs/architecture/self-documenting-modules);
+this page is the practical recipe.
+
+Everything below uses `host.present` (`pkg/state/modules/host_present.go`) as the
+running example — it is deliberately kept small and exercises every schema
+feature: a primary, a required field, an alias, and a default.
+
+## Step 1 — Declare the schema: the proto struct
+
+The module struct **is** the schema. Tagged exported fields are parameters;
+untagged unexported fields (state ID, requisites, providers, revert memos) are
+runtime plumbing the compiler skips.
+
+```go
+type HostPresent struct {
+    id   string            // untagged: skipped by the schema compiler
+    reqs state.Requisites
+    file exec.FileExec
+
+    Hostname string `zester:"name,primary" usage:"host name to manage; defaults to the state ID"`
+    IP       string `zester:"ip,required" usage:"IP address the hostname should map to; required"`
+    Path     string `zester:"config,aliases=path,default=/etc/hosts" usage:"hosts file path; the path alias is also accepted; defaults to /etc/hosts"`
+}
+```
+
+The `zester` tag grammar is `zester:"<key>[,option...]"` plus a `usage:"..."`
+tag on every parameter — it becomes the parameter's documentation line on every
+surface (pages, `sys.doc`, `zester doc`, JSON Schema descriptions). The compiler
+does not reject a missing usage; the review bar does:
+
+| Option | Meaning |
+|---|---|
+| `<key>` (first item) | The canonical parameter key in state files and `key=value` CLI args. |
+| `primary` | The module's positional parameter: a bare CLI positional binds here, and when absent it defaults to the **state ID** (Salt's `name` idiom). At most one per module. |
+| `required` | Decode fails with a typed `MissingRequired` error when absent. Combining it with a `default=` is legal but pointless — the default fills absence first, so the required check never fires. |
+| `aliases=a\|b` | Alternate keys, pipe-separated. **Declaration order is resolution order**: the canonical key is consulted first, then each alias left to right. An empty-string value at one source falls through to the next (`""` is the framework's absence sentinel). |
+| `default=lit` | Eager default literal, decoded once at compile time (`default=/etc/hosts`, `default=0644`). |
+| `lazy` | The default is **documented but never applied by the decoder**: the field stays zero and the parameter is recorded in `DecodeReport.LazyDefaults`; the module materializes it at use time (e.g. `FileMode.Resolve(0o644)`) — used where "absent" and "explicitly zero" must stay distinguishable. The literal is still validated at compile time. Cannot be combined with `required`. |
+| `sensitive` | The value is redacted everywhere it could leak: decode errors, warnings, rendered docs, generated examples, and the JSON Schema (`writeOnly`). Use for passwords and secrets. |
+
+Field types are either **primitives** (`string`, `bool`, `int`, `float64`) with
+uniform, origin-independent coercion across all three input universes (YAML,
+CLI `key=value` strings, msgpack), or **semantic types** — see Step 2. Do not
+hand-roll parsing for a polymorphic parameter.
+
+Two hard rules:
+
+- **Never parse reserved keys yourself.** Requisites (`require`, `watch`,
+  `onchanges`, `onfail`, `listen`, `prereq`, the `_in` inverses), generic
+  attributes (`onlyif`, `unless`, `order`, `retry`, `failhard`), and the
+  compiler directive `names` are owned by the runner, compiler, and attribute
+  wrapper; the decoder excuses them via the shared reserved-key set
+  (`state.ReservedKeySet`). The exec-layer keys `test` and `name` are excused
+  separately through `DecodeOptions.ExtraReserved` (the peel wires both).
+- **Never define a polymorphic type inline.** Semantic types live only in the
+  controlled package (they are sealed) so that decoding, validation,
+  documentation, and JSON Schema always come from one implementation.
+
+## Step 2 — Polymorphic parameters: semantic types
+
+A parameter that accepts more than one representation (an octal string *or* an
+integer; a bool *or* `"yes"`/`1`; a GID *or* a group name) must use a named
+semantic type from `pkg/modschema/paramtypes`:
+
+| Type | Accepts |
+|---|---|
+| `paramtypes.FileMode` | Octal string (`"0644"`, `"4755"`) or integer mode |
+| `paramtypes.TriState` | Declared-true / declared-false / **undeclared** three-state bool (`true`, `"yes"`, `1`, `0`, …) |
+| `paramtypes.GroupRef` | Numeric GID or group name (all-digit strings are GIDs) |
+| `paramtypes.TemplateFlag` | Template-engine selector (`jinja`, boolean forms) |
+| `paramtypes.StringList` | Scalar-tolerant string list (a bare scalar becomes a one-element list) |
+| `paramtypes.StringMap` | String-valued map with scalar rendering |
+
+Just declare the field with the type — the compiler dispatches to it
+automatically:
+
+```go
+Mode paramtypes.FileMode `zester:"mode,lazy,default=0644" usage:"file mode as an octal string or integer"`
+```
+
+If no existing type fits, add one to `paramtypes`: implement the full sealed
+interface — `Name()`, `GoType()`, `Decode(Input)`, `Doc()`, `JSONSchema()` —
+on one type, add a `register(...)` call in `vocabulary.go`'s `init` and bump
+`VocabularySize` (the conformance test pins it), and add the type's fixture set
+to the **single fixture registry**
+(`pkg/modschema/paramtypes/fixtures_test.go`). Completeness is test-enforced —
+a registered type without fixtures fails the suite, and the fixture↔schema
+agreement gate automatically verifies that whatever the decoder accepts/rejects,
+the emitted JSON Schema fragment agrees.
+
+## Step 3 — Write the documentation: `Doc` + `mustSpec`
+
+Compile the schema and its documentation together at package init:
+
+```go
+var hostPresentSpec = mustSpec("host.present", modschema.KindState, HostPresent{}, modschema.Doc{
+    Summary:     "Ensure a hostname maps to an IP address in the hosts file.",
+    Description: "`host.present` ensures a hostname (`name`, defaulting to the state ID) is mapped to `ip` ...",
+    Effects: modschema.Effects{
+        Check:  "Reads the hosts file and computes the desired content. Reports a change when ...",
+        Apply:  "Rewrites the hosts file so the hostname maps to `ip` ...",
+        Revert: "Restores what this run's Apply changed ... A fresh instance is an explicit clean no-op.",
+    },
+    Examples: []modschema.Example{
+        {Title: "Map a hostname to an IP", Kind: "state",
+            Explanation: "The hostname defaults to the state ID; ip is required.",
+            Code:        "web1:\n  host.present:\n    - ip: 10.0.0.5\n"},
+        {Title: "Add a host mapping ad hoc", Kind: "cli",
+            Explanation: "The bare positional argument is the hostname; ip is a key=value.",
+            Code:        "zester '*' host.present web1 ip=10.0.0.5"},
+    },
+    Notes:       []modschema.Note{ /* callouts: gotchas, precedence rules, Salt divergences */ },
+    Divergences: []string{ /* BD ids, when behavior deliberately differs from legacy/Salt */ },
+    SeeAlso:     []string{"host.absent"},
+})
+```
+
+What the fields feed:
+
+- **Summary** — the one-liner in `zester doc`'s index, the `sys.doc` index, and
+  the generated pages' tables.
+- **Description** — CommonMark; the page/`sys.doc` body.
+- **Effects** — what each phase actually does. For `KindState`, `Check` and
+  `Apply` are mandatory (`Revert` optional); coverage is enforced by
+  `TestDocCoverage_EffectsByKind`. Write these *drift-corrected*: describe what
+  the code does, not what you wish it did.
+- **Examples** — `Kind: "state"` examples must be valid YAML: docgen validates
+  every generated example against the compiled JSON Schema artifact and refuses
+  examples that repeat a parameter key across list items. `Kind: "cli"` examples
+  are shown verbatim.
+- **Divergences** — every deliberate behavioral difference gets a stable BD id,
+  a CHANGELOG entry, and its own contract fixture **per parameter** (see Step 6).
+
+`mustSpec` panics at package load on any compile error (duplicate key, two
+primaries, alias collision, invalid default literal, unregistered field type) —
+an invalid schema is a programming error, never a runtime condition.
+
+## Step 4 — Implement the builder and lifecycle
+
+The builder decodes through the spec and wires providers:
+
+```go
+func NewHostPresentBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions) state.Builder {
+    return func(id string, config map[string]any) (state.State, error) {
+        if mctx.File == nil {
+            return nil, fmt.Errorf("host.present: no file provider available")
+        }
+        var h HostPresent
+        if _, err := hostPresentSpec.Decode(id, config, &h, opts); err != nil {
+            return nil, err
+        }
+        h.id = id
+        h.file = mctx.File
+        h.reqs = state.ParseRequisites(config)
+        // tail: cross-field validation the schema cannot express goes here
+        return &h, nil
+    }
+}
+```
+
+The order matters: provider nil-guard → `spec.Decode` (transactional — the
+struct is untouched on error) → assign runtime fields **after** → cross-field
+validation in the tail. `Decode` handles required/defaults/aliases/coercion and
+— under `strict_params` (default on) — rejects unknown keys with a typed
+did-you-mean error. Your builder never re-parses parameters.
+
+Then implement `Name()`, `Reqs()`, `Check()`, `Apply()`, `Revert()` with the
+module contract:
+
+- **Check's comparison must equal Apply's product** — whatever Apply writes,
+  Check must consider "no change" on the next run (convergence; add a test).
+- **Standalone Revert is a clean no-op** — the runner builds states fresh per
+  execution, so a Revert that didn't follow a same-instance Apply must not
+  touch the system. Memoize Apply's prior state in unexported fields.
+- System calls go through the injected `exec` providers (`mctx.File`,
+  `mctx.Package`, `mctx.Command`, …) so the `exectest` fakes work in tests.
+- Wrap errors `fmt.Errorf("host.present: read %s: %w", path, err)`.
+
+## Step 5 — Register it
+
+Add one row to the `registrations` table in `pkg/state/modules/register.go`:
+
+```go
+{Name: "host.present", Spec: hostPresentSpec, Build: NewHostPresentBuilder},
+```
+
+Exactly one builder shape per row: `Build` (needs providers), `BuildPlain` (no
+providers — the `test.*` family), or `BuildWithRegistry` (`module.run` only,
+which stays last). **The `Spec` field is not optional**: the coverage gate
+(`TestDocCoverage_EveryModuleHasSpec`) fails the build for any registration
+without a schema — there is no allowlist to hide behind. The same test also
+pins the table's exact size, so bump its module-count constant deliberately in
+the same commit — a new module changing the count is the point of the pin.
+
+## Step 6 — Tests
+
+Unit tests (see any `*_test.go` sibling for the pattern, using the
+`pkg/exec/exectest` fakes): name/ID defaulting, the primary default, requisite
+parsing, Check both ways, Apply, Apply error paths, Revert (including the
+standalone no-op), provider-missing, and a convergence test (Apply → Check
+reports no change).
+
+Every module also ships a **permanent contract fixture** —
+`pkg/state/modules/testdata/contract/<module>.yaml` — replayed by a small
+wiring test:
+
+```go
+func TestHostPresentContract(t *testing.T) {
+    decode := func(id string, config map[string]any) (any, error) {
+        var h HostPresent
+        if _, err := hostPresentSpec.Decode(id, config, &h, modschema.DecodeOptions{}); err != nil {
+            return nil, err
+        }
+        return &h, nil
+    }
+    schematest.RunContract(t, decode, "testdata/contract/host.present.yaml")
+}
+```
+
+Fixture cases pin decode behavior across the three input universes:
+
+```yaml
+module: host.present
+cases:
+  - label: alias-path-sets-config
+    universe: yaml          # yaml | cli | msgpack
+    id: state-label
+    input:
+      ip: 10.0.0.5
+      path: /tmp/hosts
+    want:
+      IP: 10.0.0.5
+      Path: /tmp/hosts
+  - label: reject-composite-ip
+    universe: yaml
+    id: state-label
+    input:
+      ip: [10, 0, 0, 5]
+    want_error: wrong_type   # missing_required | wrong_type | value_invalid
+                             # (any other token asserts only "an error occurred")
+```
+
+The `yaml` leg runs the real `yaml.v3` unmarshaler, the `cli` leg the real
+`key=value` parser, and the `msgpack` leg is derived mechanically by
+round-tripping the YAML value through `bus.Encode`/`bus.Decode` — never
+hand-write msgpack fixtures; the round-trip is what exercises sized-int shapes.
+Any deliberate behavioral difference (a BD) is pinned **per parameter**, tagged
+with `bd: BD-n` in the fixture, and gets a CHANGELOG entry — "same pattern as
+that other parameter" is not accepted as a pin.
+
+Finally: **new features need integration coverage** — add an end-to-end case in
+`integration/` (Docker suite) exercising the module through the real CLI.
+
+## Step 7 — Regenerate the documentation
+
+```bash
+go run ./cmd/zester-docgen
+```
+
+This regenerates, from the live registries: the module's MDX reference page
+(written per page-group **slug** under `website/content/docs/guides/modules/` —
+`file.managed` → `file-managed.mdx`, while N:1 groups share one page:
+`host.present` and `host.absent` both render into `host.mdx`), the modules nav
+(`meta.json`), the embedded offline docs (`pkg/moduledoc/docdata.json` — what
+`zester doc` and `TestDocdataMatchesLive` read), and the editor JSON Schema
+(`website/public/schema/zester-modules.schema.json`). Commit the regenerated
+files: CI re-runs docgen and **fails on any diff**, so a stale artifact cannot
+merge. Run it *last*, after the schema and docs have settled.
+
+## Execution modules
+
+Remote-execution functions (`pkg/execmod` — the `salt['mod.func'](...)` /
+ad-hoc CLI surface) follow the same pattern with two differences: specs are
+declared with `modschema.KindExec` (documenting `Effects.Execution` instead of
+Check/Apply/Revert) in `pkg/execmod/specs.go`, and **the spec's canonical
+key + alias order must mirror the runtime `argStr` lookup order exactly** —
+e.g. `cmd.run`'s exec spec declares `cmd,primary,aliases=command|name` because
+that is the order the function actually consults. The exec coverage gate enforces a
+spec for every registered function, same as the state table. If the same name
+exists as both a state module and an exec function (like `cmd.run`), remember
+that **CLI dispatch prefers the state module** — keep the two schemas'
+accepted key sets compatible (that is why the state `cmd.run` also accepts
+`cmd` and `dir` as aliases).
+
+## Checklist
+
+- [ ] Proto struct: tagged exported params (`usage:` on every one), untagged
+      runtime fields; semantic types from `paramtypes` for anything polymorphic.
+- [ ] `mustSpec` with a drift-corrected `Doc` (Summary / Description /
+      Effects-by-kind / Examples / Notes / Divergences / SeeAlso); `sensitive`
+      on secret-bearing params.
+- [ ] Builder: provider guard → `spec.Decode` → runtime fields →
+      `ParseRequisites` → tail cross-field validation.
+- [ ] Lifecycle: Check-compares-equals-Apply-produces; standalone Revert is a
+      clean no-op; no reserved-key parsing; wrapped errors.
+- [ ] Row in `register.go`'s table with the `Spec` set; bump the coverage
+      gate's module-count pin.
+- [ ] Unit tests incl. convergence; permanent contract fixture +
+      `RunContract`; per-param BD fixtures + CHANGELOG for any divergence.
+- [ ] Integration test in `integration/`.
+- [ ] `go run ./cmd/zester-docgen` last; commit the regenerated artifacts.

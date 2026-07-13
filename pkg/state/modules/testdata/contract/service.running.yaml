@@ -1,0 +1,295 @@
+module: service.running
+# Permanent differential contract for the service.running migration (semantic-type
+# pilot, tranche 0E). These cases were approved by the legacy-vs-new equivalence
+# comparison while the legacy constructor still existed; after its deletion
+# RunContract replays them as the permanent regression guard. Accept cases pin the
+# decoded Service (primary string) and Enable (paramtypes.TriState) projection;
+# reject cases pin the error kind. A TriState `want` is a bool (declared with that
+# value) or `{declared: false}` (undeclared). BD-tagged cases pin the flagged
+# behavioral differences: BD-2 (a CLI enable string is now honored, was silently
+# dropped) and BD-6 (a non-string name is coerced or rejected, not silently
+# replaced by the state ID).
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+    want:
+      Service: nginx
+      Enable: {declared: false}
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: nginx
+    want:
+      Service: nginx
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: nginx
+    want:
+      Service: nginx
+
+  # --- parity: no name key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: nginx
+    input: {}
+    want:
+      Service: nginx
+      Enable: {declared: false}
+  - label: primary-fallback-cli
+    universe: cli
+    id: nginx
+    input: {}
+    want:
+      Service: nginx
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: nginx
+    input:
+      name: ""
+    want:
+      Service: nginx
+  - label: empty-name-falls-back-to-id-cli
+    universe: cli
+    id: nginx
+    input:
+      name: ""
+    want:
+      Service: nginx
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent, falls back to
+  # the state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: nginx
+    input:
+      name:
+    want:
+      Service: nginx
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: nginx
+    input:
+      name:
+    want:
+      Service: nginx
+
+  # --- parity: enable:true is a declared true TriState (bool universes) ---
+  - label: enable-true-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+      enable: true
+    want:
+      Service: nginx
+      Enable: true
+  - label: enable-true-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: nginx
+      enable: true
+    want:
+      Enable: true
+
+  # --- BD-2: CLI enable=true (the string "true") is now honored as declared true
+  # (legacy .(bool) dropped it, leaving the enable facet unmanaged) ---
+  - label: enable-true-cli
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: nginx
+      enable: true
+    want:
+      Service: nginx
+      Enable: true
+
+  # --- parity: enable:false is a declared false TriState (bool universes) ---
+  - label: enable-false-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+      enable: false
+    want:
+      Service: nginx
+      Enable: false
+  - label: enable-false-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: nginx
+      enable: false
+    want:
+      Enable: false
+
+  # --- BD-2: CLI enable=false (the string "false") is now honored as declared
+  # false (legacy dropped it) ---
+  - label: enable-false-cli
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: nginx
+      enable: false
+    want:
+      Enable: false
+
+  # --- BD-7: an integer enable is coerced narrowly — 1 is declared-true and 0 is
+  # declared-false (across every int kind; the msgpack leg here decodes to a sized
+  # int8). Any OTHER integer is a typed value error — pinned by the
+  # enable-invalid-int-rejected-yaml case below. yaml and msgpack deliver a real
+  # int; the CLI delivers the digit as the string "1"/"0", which the truthy/falsy
+  # set maps to the same declared result, so all three universes agree. ---
+  - label: enable-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 1
+    want:
+      Service: nginx
+      Enable: true
+  - label: enable-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 1
+    want:
+      Enable: true
+  - label: enable-int-one-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 1
+    want:
+      Enable: true
+  - label: enable-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 0
+    want:
+      Service: nginx
+      Enable: false
+  - label: enable-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 0
+    want:
+      Enable: false
+  - label: enable-int-zero-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 0
+    want:
+      Enable: false
+
+  # --- parity: an omitted enable is an UNDECLARED TriState (the enable facet is
+  # never compared/enforced — matches legacy hasEnable=false) ---
+  - label: enable-undeclared-yaml
+    universe: yaml
+    id: web
+    input:
+      name: nginx
+    want:
+      Service: nginx
+      Enable: {declared: false}
+
+  # --- BD-6: a numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Service: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Service: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      Service: "123"
+
+  # --- BD-6: a composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # --- BD-7 (rejection arm): any integer other than 0/1 is rejected with a typed
+  # error, where legacy silently ignored it. Pinned across all three universes:
+  # yaml and msgpack deliver a real int 2; the CLI delivers the string "2", which
+  # is outside the truthy/falsy set and rejects identically. ---
+  - label: enable-invalid-int-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 2
+    want_error: value_invalid
+  - label: enable-invalid-int-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 2
+    want_error: value_invalid
+  - label: enable-invalid-int-rejected-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: nginx
+      enable: 2
+    want_error: value_invalid

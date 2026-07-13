@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nirnx/zester/pkg/state"
 )
@@ -9,22 +10,41 @@ import (
 // mergedStateMap is stateID -> module -> args list (single-key maps).
 type mergedStateMap = map[string]map[string][]map[string]any
 
-// inverseForward maps a Salt "_in" requisite to the forward requisite it
-// injects onto its target. listen/listen_in are aliased to watch (Zester runs
-// watch-triggered applies during the run rather than deferring to the end;
-// the effect — apply-on-change — matches, only the timing differs).
-var inverseForward = map[string]string{
-	"require_in":   "require",
-	"watch_in":     "watch",
-	"onchanges_in": "onchanges",
-	"onfail_in":    "onfail",
-	"listen_in":    "watch",
-	"prereq_in":    "prereq",
-}
+// inSuffix is the Salt inverse-requisite suffix ("require_in", "watch_in", …).
+const inSuffix = "_in"
 
 // sameStateAlias renames same-state requisite keys to their Zester equivalent.
+// Zester's single alias is listen → watch (Zester runs watch-triggered applies
+// during the run rather than deferring to the end; the effect —
+// apply-on-change — matches, only the timing differs). This is the compiler's
+// one irreducible aliasing policy; both key strings are reserved
+// (state.CompilerKeys has "listen", state.RequisiteKeys has "watch"), pinned
+// ⊆ state.ReservedKeys() by TestCompilerConsumedKeysAreReserved.
 var sameStateAlias = map[string]string{
 	"listen": "watch",
+}
+
+// inverseForward maps each Salt "_in" requisite to the forward requisite it
+// injects onto its target. It is DERIVED from state.CompilerKeys() so the
+// "_in" key strings live only in pkg/state/reserved.go: strip the "_in"
+// suffix to get the base requisite, then apply sameStateAlias (so
+// listen_in → watch). Behavior-identical to the former literal map.
+var inverseForward = deriveInverseForward()
+
+func deriveInverseForward() map[string]string {
+	out := make(map[string]string)
+	for _, k := range state.CompilerKeys() {
+		base, ok := strings.CutSuffix(k, inSuffix)
+		if !ok {
+			continue
+		}
+		if alias, ok := sameStateAlias[base]; ok {
+			out[k] = alias
+		} else {
+			out[k] = base
+		}
+	}
+	return out
 }
 
 // transformRequisites rewrites inverse ("_in") requisites and prereq ordering

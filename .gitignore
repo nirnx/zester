@@ -28,3 +28,4 @@ website/next-env.d.ts
 
 # Local secrets (Context7 API key etc.) — never commit
 .env
+/zester-docgen

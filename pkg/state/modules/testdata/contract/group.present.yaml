@@ -1,0 +1,602 @@
+module: group.present
+# Permanent differential contract for the group.present migration. Unlike
+# user.present, group.present's `gid` is a PLAIN int (group.present never resolves
+# a group NAME), so there is no GroupRef and no BD-4: a negative gid is accepted,
+# not rejected. `members`/`addusers`/`delusers` are paramtypes.StringList and
+# `system` is a primitive bool. These cases were approved by the legacy-vs-new
+# equivalence comparison while the legacy constructor still existed (see the
+# migration changelog); after its deletion RunContract replays them as the
+# permanent regression guard. Accept cases pin the decoded exported-field
+# projection (StringList `want` is a plain YAML list compared element-by-element
+# in string form); reject cases pin the error kind. BD-tagged cases:
+#   BD-1 (PENDING) — a msgpack-delivered sized-int gid is honored (the legacy
+#                    config["gid"].(int) assertion never matched a uint16, leaving
+#                    GID at 0);
+#   BD-2 (APPROVED) — an ORIGIN-INDEPENDENT string coercion (a numeric-string gid
+#                     or a truthy-string system, in EITHER the CLI or a
+#                     YAML-quoted value) is honored (was silently dropped);
+#   BD-5 (PENDING) — a StringList scalar list element is rendered to a string, a
+#                    nested list/map element is rejected, and a BARE-STRING value
+#                    decodes as a single-element list that activates membership
+#                    management (all three were silently dropped/ignored by the
+#                    legacy parseAnyStringList);
+#   BD-6 (APPROVED) — a wrong-typed value is coerced (numeric name, or a
+#                     finite-integral FLOAT gid like `999.0` -> 999 where legacy
+#                     `.(int)` dropped it to 0) or rejected (composite name,
+#                     composite gid) instead of silently falling back / to a zero
+#                     (BD-2 stays strictly string-coercion; a non-string
+#                     wrong-typed value like a float is BD-6's class);
+#   BD-7 (APPROVED) — an integer `system` is 1=true / 0=false, any other integer a
+#                     typed error (was silently dropped);
+#   §2.1/§3 empty-string (PARITY, not a BD) — an empty-string `gid` falls through
+#                     to the 0/auto-assign zero, and an empty-string
+#                     `members`/`addusers`/`delusers` is undeclared (nil), as the
+#                     legacy comma-ok / parseAnyStringList extractions did.
+cases:
+  # ============================ name (primary) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+    want:
+      GroupName: docker
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: docker
+    want:
+      GroupName: docker
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: docker
+    want:
+      GroupName: docker
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: docker
+    input: {}
+    want:
+      GroupName: docker
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: docker
+    input:
+      name: ""
+    want:
+      GroupName: docker
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: docker
+    input:
+      name:
+    want:
+      GroupName: docker
+  # BD-6: a numeric name is coerced to its string form (was fallback-to-id).
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      GroupName: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      GroupName: "123"
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ================================ gid ================================
+  # Parity: a native YAML int gid decodes unchanged.
+  - label: gid-int-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      gid: 999
+    want:
+      GID: 999
+  # BD-1: a msgpack gid arrives as a sized kind (uint16) the legacy .(int)
+  # assertion missed, leaving GID=0; the uniform decoder honors it.
+  - label: gid-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-1
+    input:
+      name: docker
+      gid: 999
+    want:
+      GID: 999
+  # BD-2: a CLI gid=999 (the string "999") is coerced base-10 (was dropped to 0).
+  - label: gid-string-cli
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: docker
+      gid: 999
+    want:
+      GID: 999
+  # BD-2 is ORIGIN-INDEPENDENT: a YAML-quoted numeric-string gid is coerced too.
+  - label: gid-numeric-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-2
+    input:
+      name: docker
+      gid: "999"
+    want:
+      GID: 999
+  # Parity: an absent gid stays 0 (auto-assign / not compared).
+  - label: gid-absent-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+    want:
+      GID: 0
+  # PARITY (§2.1/§3 empty-string, not a BD): an empty-string gid falls THROUGH like
+  # absence to the 0/auto-assign zero (gid has no alias/default), exactly as the
+  # legacy `config["gid"].(int)` comma-ok left GID=0. Pinned across all three
+  # universes (yaml/msgpack carry "", the CLI delivers the bare `gid=` token).
+  - label: gid-empty-string-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      gid: ""
+    want:
+      GID: 0
+  - label: gid-empty-string-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: docker
+      gid: ""
+    want:
+      GID: 0
+  - label: gid-empty-string-cli
+    universe: cli
+    id: web
+    input:
+      name: docker
+      gid: ""
+    want:
+      GID: 0
+  # Parity (plain-int, NO BD-4): a NEGATIVE gid is accepted, not rejected — unlike
+  # user.present's GroupRef, group.present's gid is a plain signed int.
+  - label: gid-negative-accepted-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      gid: -5
+    want:
+      GID: -5
+  # BD-6: a finite-integral FLOAT gid is coerced to the integer (`999.0` -> 999),
+  # where the legacy `config["gid"].(int)` assertion missed a float64 and left
+  # GID=0. Non-string wrong-typed, handled deterministically — BD-6's class, NOT
+  # BD-2 (which is strictly string-coercion).
+  - label: gid-float-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: docker
+      gid: 999.0
+    want:
+      GID: 999
+  - label: gid-float-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: docker
+      gid: 999.0
+    want:
+      GID: 999
+  # BD-6: a composite gid is a typed wrong_type error (was silent 0).
+  - label: gid-composite-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: docker
+      gid:
+        - 1
+        - 2
+    want_error: wrong_type
+  - label: gid-composite-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: docker
+      gid:
+        - 1
+        - 2
+    want_error: wrong_type
+
+  # ============================== system (bool) ==============================
+  # Parity: a native YAML/msgpack bool decodes unchanged.
+  - label: system-true-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      system: true
+    want:
+      System: true
+  - label: system-true-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: docker
+      system: true
+    want:
+      System: true
+  # BD-2: a CLI system=true (the string "true") is honored (was dropped to false).
+  - label: system-truthy-string-cli
+    universe: cli
+    id: web
+    bd: BD-2
+    input:
+      name: docker
+      system: true
+    want:
+      System: true
+  # BD-2 is ORIGIN-INDEPENDENT: a YAML-quoted "yes" is honored too.
+  - label: system-truthy-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-2
+    input:
+      name: docker
+      system: "yes"
+    want:
+      System: true
+  # BD-7: an integer system is coerced narrowly — 1 is true, 0 is false — across
+  # every int kind (msgpack sizes small ints as int8); the CLI delivers "1"/"0"
+  # which the truthy/falsy set maps to the same result, so all three agree.
+  - label: system-int-one-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 1
+    want:
+      System: true
+  - label: system-int-one-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 1
+    want:
+      System: true
+  - label: system-int-one-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 1
+    want:
+      System: true
+  - label: system-int-zero-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 0
+    want:
+      System: false
+  - label: system-int-zero-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 0
+    want:
+      System: false
+  - label: system-int-zero-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 0
+    want:
+      System: false
+  # BD-7 (rejection arm): any integer other than 0/1 is a typed value error.
+  - label: system-invalid-int-yaml
+    universe: yaml
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 2
+    want_error: value_invalid
+  - label: system-invalid-int-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 2
+    want_error: value_invalid
+  - label: system-invalid-int-cli
+    universe: cli
+    id: web
+    bd: BD-7
+    input:
+      name: docker
+      system: 2
+    want_error: value_invalid
+
+  # ================= members / addusers / delusers (StringList) =================
+  # Parity: a list of strings decodes unchanged (yaml + msgpack).
+  - label: members-list-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      members:
+        - alice
+        - bob
+    want:
+      Members:
+        - alice
+        - bob
+  - label: members-list-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: docker
+      members:
+        - alice
+        - bob
+    want:
+      Members:
+        - alice
+        - bob
+  # BD-5: a scalar list element is rendered to a string (legacy dropped the int).
+  - label: members-scalar-sprint-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      members:
+        - alice
+        - 1000
+    want:
+      Members:
+        - alice
+        - "1000"
+  - label: members-scalar-sprint-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      members:
+        - alice
+        - 1000
+    want:
+      Members:
+        - alice
+        - "1000"
+  # BD-5: a nested list element is rejected (legacy silently dropped it).
+  - label: members-nested-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      members:
+        - alice
+        - - nested
+    want_error: value_invalid
+  - label: members-nested-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      members:
+        - alice
+        - - nested
+    want_error: value_invalid
+  # BD-5 (third arm): a BARE-STRING members value decodes as a single-element list
+  # and ACTIVATES exact-membership management (legacy parseAnyStringList ignored a
+  # non-list value entirely). Pinned across all three universes.
+  - label: members-bare-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      members: alice
+    want:
+      Members:
+        - alice
+  - label: members-bare-string-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      members: alice
+    want:
+      Members:
+        - alice
+  - label: members-bare-string-cli
+    universe: cli
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      members: alice
+    want:
+      Members:
+        - alice
+  # PARITY (§3 empty-string, not a BD): an empty-string members is undeclared (the
+  # nil zero value), NOT a one-element [""] — it activates no membership
+  # management, as the legacy parseAnyStringList (which ignored a non-list value)
+  # left it.
+  - label: members-empty-string-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      members: ""
+    want:
+      Members: []
+
+  # addusers — the same StringList type, pinned per-param (not "same pattern").
+  - label: addusers-list-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      addusers:
+        - newdev
+    want:
+      AddUsers:
+        - newdev
+  - label: addusers-scalar-sprint-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      addusers:
+        - newdev
+        - 42
+    want:
+      AddUsers:
+        - newdev
+        - "42"
+  - label: addusers-bare-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      addusers: newdev
+    want:
+      AddUsers:
+        - newdev
+  - label: addusers-nested-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      addusers:
+        - - nested
+    want_error: value_invalid
+  # PARITY (§3 empty-string): an empty-string addusers is undeclared (nil).
+  - label: addusers-empty-string-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      addusers: ""
+    want:
+      AddUsers: []
+
+  # delusers — the same StringList type, pinned per-param.
+  - label: delusers-list-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      delusers:
+        - formerdev
+    want:
+      DelUsers:
+        - formerdev
+  - label: delusers-scalar-sprint-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      delusers:
+        - formerdev
+        - 7
+    want:
+      DelUsers:
+        - formerdev
+        - "7"
+  - label: delusers-bare-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      delusers: formerdev
+    want:
+      DelUsers:
+        - formerdev
+  - label: delusers-nested-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: docker
+      delusers:
+        - - nested
+    want_error: value_invalid
+  # PARITY (§3 empty-string): an empty-string delusers is undeclared (nil).
+  - label: delusers-empty-string-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      delusers: ""
+    want:
+      DelUsers: []
+
+  # ============================== misc ==============================
+  # A reserved requisite key does not break the decode (it is not a parameter).
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: web
+    input:
+      name: docker
+      require:
+        - user.present:newdev
+    want:
+      GroupName: docker

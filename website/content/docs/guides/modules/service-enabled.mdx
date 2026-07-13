@@ -1,9 +1,15 @@
 ---
 title: "service.enabled"
-description: "Ensures a service is enabled to start at boot. Does not affect whether the service is currently running."
+description: "Ensure a service is enabled to start at boot."
 ---
 
-**Source**: `pkg/state/modules/service.go`
+{/* zester-docgen:managed module="service.enabled" */}
+
+**Source**: `pkg/state/modules/service_enabled.go`
+
+---
+
+`service.enabled` ensures a service (`name`, defaulting to the state ID) is enabled to start at boot. It manages ONLY the boot-time enablement — it does not start, stop, or otherwise affect whether the service is currently running (use `service.running` for that).
 
 ---
 
@@ -11,70 +17,77 @@ description: "Ensures a service is enabled to start at boot. Does not affect whe
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | The service name. If omitted, the state ID is used. |
+| `name` | `string` | No | State ID | service name to enable at boot; defaults to the state ID |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-- Calls `systemctl is-enabled --quiet <service>` (via the injected ServiceExec).
-- Reports no changes needed if the service is already enabled.
-- Reports `NeedsChange: true` if the service is not enabled.
+### Check
 
----
+Reads the service's boot-enablement (via the service manager, e.g. `systemctl is-enabled --quiet <service>`). Reports no change when it is already enabled, and a change when it is not.
 
-## Apply Behavior
+### Apply
 
-1. Calls `Enable` on the service manager.
-2. Returns `Changed: true`.
+Re-reads the enablement (a self-contained flow: a watch-forced Apply bypasses Check). An already-enabled service is a clean no-op that does NOT arm the revert memo. Otherwise it enables the service and records that this run did so, reporting the service name and manager in its details.
 
----
+### Revert
 
-## Revert Behavior
+Disables the service ONLY when this run's Apply actually enabled it (the revert memo). A fresh instance (a standalone revert) or a no-op Apply recorded nothing and is an explicit clean no-op — it never disables a service this run did not enable.
 
-- Calls `Disable` on the service manager.
-- Returns `Changed: true`.
-
----
-
-## Details Returned
-
-| Key | Description |
-|---|---|
-| `service` | The service name |
-| `manager` | The service manager name (e.g., `"systemd"`) |
 
 ---
 
 ## Examples
 
-### Ensure sshd starts at boot
+### Enable a service at boot
+
+The service name defaults to the state ID.
 
 ```yaml
 sshd:
-  service.enabled:
-    - require:
-      - pkg.installed:openssh-server
+  service.enabled: []
 ```
 
-### Enable after installation
+### Enable a service under a descriptive ID
 
-```yaml
-openssh-server:
-  pkg.installed: []
-
-sshd:
-  service.enabled:
-    - require:
-      - pkg.installed:openssh-server
-```
-
-### Explicit name
+name selects the managed service when the state ID is not the service name.
 
 ```yaml
 enable-nginx-boot:
   service.enabled:
     - name: nginx
 ```
+
+### Enable a service ad hoc
+
+The bare positional argument is the service name.
+
+```bash
+zester 'web*' service.enabled nginx
+```
+
+
+---
+
+## Notes
+
+> **Boot enablement only, not running state**
+>
+> `service.enabled` manages only whether the service starts at boot; it never starts or stops the service. Pair it with `service.running` (which can also enable) when the service must be both running now and enabled at boot.
+
+
+---
+
+## Divergences
+
+- BD-6
+
+---
+
+## See Also
+
+- [service.running](/docs/guides/modules/service-running)
+- [service.dead](/docs/guides/modules/service-dead)

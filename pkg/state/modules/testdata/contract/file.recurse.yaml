@@ -1,0 +1,486 @@
+module: file.recurse
+# Permanent differential contract for the file.recurse migration (the
+# DECLARED-ONLY facet exemplar). These cases were approved by the legacy-vs-new
+# equivalence comparison while the legacy parse still existed; after its deletion
+# RunContract replays them as the permanent regression guard. Accept cases pin the
+# decoded projection — Dest (primary string), Source/User/Group (strings), Clean
+# and MakeDirs (bools), FileMode and DirMode (paramtypes.FileMode); reject cases
+# pin the error kind. A FileMode `want` is an octal string/int (compared on the
+# managed facets) or `{declared: false}` (the lazy, unset default). The
+# `{declared: false}` DirMode pins are load-bearing: dir_mode is a DECLARED-ONLY
+# facet — undeclared, the module never compares or rewrites existing directory
+# modes, so the FileMode.Declared() bit MUST survive decode. Source is a plain
+# string whose emptiness is a run-time error (parity), not a decode-time required.
+# BD-tagged cases: BD-1 (a msgpack-delivered sized-int file_mode/dir_mode is
+# applied, where the legacy modeConfigToString switch dropped it to the default —
+# and for dir_mode the drop ALSO disabled the declared-only facet, so BD-1 restores
+# both the value AND its declared-ness), BD-2 (a CLI clean/makedirs string is
+# honored), BD-6 (a wrong-typed value is coerced or rejected, not silently
+# ignored), and BD-7 (each boolean — clean AND makedirs — accepts the integers 1/0
+# and rejects any other integer with a typed error).
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: st
+    input:
+      name: /etc/app
+      source: /srv/app
+    want:
+      Dest: /etc/app
+      Source: /srv/app
+      FileMode: {declared: false}
+      DirMode: {declared: false}
+  - label: string-name-msgpack
+    universe: msgpack
+    id: st
+    input:
+      name: /etc/app
+      source: /srv/app
+    want:
+      Dest: /etc/app
+      Source: /srv/app
+  - label: string-name-cli
+    universe: cli
+    id: st
+    input:
+      name: /etc/app
+      source: /srv/app
+    want:
+      Dest: /etc/app
+      Source: /srv/app
+
+  # --- parity: no name key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /etc/app
+    input:
+      source: /srv/app
+    want:
+      Dest: /etc/app
+      Source: /srv/app
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/app
+    input:
+      name: ""
+      source: /srv/app
+    want:
+      Dest: /etc/app
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent, falls back to the
+  # state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/app
+    input:
+      name:
+      source: /srv/app
+    want:
+      Dest: /etc/app
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /etc/app
+    input:
+      name:
+      source: /srv/app
+    want:
+      Dest: /etc/app
+
+  # --- parity: an octal-STRING file_mode decodes to that mode (all universes) ---
+  - label: file-mode-string-yaml
+    universe: yaml
+    id: st
+    input:
+      source: /srv/app
+      file_mode: "0640"
+    want:
+      FileMode: "0640"
+  - label: file-mode-string-msgpack
+    universe: msgpack
+    id: st
+    input:
+      source: /srv/app
+      file_mode: "0640"
+    want:
+      FileMode: "0640"
+  - label: file-mode-string-cli
+    universe: cli
+    id: st
+    input:
+      source: /srv/app
+      file_mode: "0640"
+    want:
+      FileMode: "0640"
+
+  # --- parity: an octal-INT file_mode in YAML decodes to that mode ---
+  - label: file-mode-octal-int-yaml
+    universe: yaml
+    id: st
+    input:
+      source: /srv/app
+      file_mode: 0640
+    want:
+      FileMode: "0640"
+
+  # --- parity: an omitted file_mode leaves the lazy, undeclared FileMode (the
+  # module applies the documented 0644 default at use time) ---
+  - label: file-mode-undeclared-yaml
+    universe: yaml
+    id: st
+    input:
+      source: /srv/app
+    want:
+      FileMode: {declared: false}
+
+  # --- parity: a declared dir_mode decodes to that mode (declared facet ON) ---
+  - label: dir-mode-declared-yaml
+    universe: yaml
+    id: st
+    input:
+      source: /srv/app
+      dir_mode: "0750"
+    want:
+      DirMode: "0750"
+
+  # --- parity + DECLARED-ONLY: an omitted dir_mode leaves an UNDECLARED FileMode.
+  # The Declared() bit is load-bearing — undeclared, existing directory modes are
+  # never compared or rewritten. Pinned in yaml and msgpack. ---
+  - label: dir-mode-undeclared-yaml
+    universe: yaml
+    id: st
+    input:
+      source: /srv/app
+    want:
+      DirMode: {declared: false}
+  - label: dir-mode-undeclared-msgpack
+    universe: msgpack
+    id: st
+    input:
+      source: /srv/app
+    want:
+      DirMode: {declared: false}
+
+  # --- parity: clean/makedirs as native bools ---
+  - label: clean-true-yaml
+    universe: yaml
+    id: st
+    input:
+      source: /srv/app
+      clean: true
+    want:
+      Clean: true
+  - label: makedirs-true-yaml
+    universe: yaml
+    id: st
+    input:
+      source: /srv/app
+      makedirs: true
+    want:
+      MakeDirs: true
+
+  # --- parity: a full realistic config ---
+  - label: full-config-yaml
+    universe: yaml
+    id: st
+    input:
+      name: /etc/app
+      source: /srv/app
+      file_mode: "0640"
+      dir_mode: "0750"
+      user: appuser
+      group: appgroup
+      clean: true
+      makedirs: true
+    want:
+      Dest: /etc/app
+      Source: /srv/app
+      FileMode: "0640"
+      DirMode: "0750"
+      User: appuser
+      Group: appgroup
+      Clean: true
+      MakeDirs: true
+
+  # --- BD-1 CENTERPIECE: a `file_mode: 0640` delivered over msgpack (a sized
+  # uint16) is now applied. The legacy modeConfigToString switch handled only
+  # int/int64/float64, so the msgpack-sized-int fell through to "" and the module
+  # applied the 0644 default. The YAML leg (native int) matched legacy and is pinned
+  # as parity above (file-mode-octal-int-yaml). ---
+  - label: file-mode-0640-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-1
+    input:
+      source: /srv/app
+      file_mode: 0640
+    want:
+      FileMode: "0640"
+
+  # --- BD-1: a `dir_mode: 0750` over msgpack is now applied AND stays declared. The
+  # legacy sized-int fell through to "", which not only lost the mode value but also
+  # DISABLED the declared-only facet (DirMode != "" was false). The new decoder
+  # honors both: the 0750 value and the declared bit. Pinned alongside the YAML
+  # parity (dir-mode-octal-int-yaml). ---
+  - label: dir-mode-0750-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-1
+    input:
+      source: /srv/app
+      dir_mode: 0750
+    want:
+      DirMode: "0750"
+  - label: dir-mode-octal-int-yaml
+    universe: yaml
+    id: st
+    input:
+      source: /srv/app
+      dir_mode: 0750
+    want:
+      DirMode: "0750"
+
+  # --- BD-2: a CLI clean=true / makedirs=true (the string "true") now applies,
+  # where the legacy .(bool) assertion dropped the string ---
+  - label: clean-cli-truthy-string
+    universe: cli
+    id: st
+    bd: BD-2
+    input:
+      source: /srv/app
+      clean: true
+    want:
+      Clean: true
+  - label: makedirs-cli-truthy-string
+    universe: cli
+    id: st
+    bd: BD-2
+    input:
+      source: /srv/app
+      makedirs: true
+    want:
+      MakeDirs: true
+
+  # --- BD-6: a numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      source: /srv/app
+    want:
+      Dest: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      source: /srv/app
+    want:
+      Dest: "123"
+
+  # --- BD-6: a numeric source is coerced to its string form (was silent "") ---
+  - label: numeric-source-coerced-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      name: /etc/app
+      source: 123
+    want:
+      Source: "123"
+
+  # --- BD-6: a composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # --- BD-6: a FLOAT file_mode is rejected at decode with a typed value error (the
+  # legacy modeConfigToString `case float64: return "%04o"` arm silently converted
+  # it and applied it later). Pinned across yaml and msgpack. ---
+  - label: float-file-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      source: /srv/app
+      file_mode: 420.0
+    want_error: value_invalid
+  - label: float-file-mode-rejected-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-6
+    input:
+      source: /srv/app
+      file_mode: 420.0
+    want_error: value_invalid
+
+  # --- BD-6: a FLOAT dir_mode is rejected at decode too ---
+  - label: float-dir-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      source: /srv/app
+      dir_mode: 493.0
+    want_error: value_invalid
+
+  # --- BD-6: an INVALID-OCTAL string file_mode is rejected at DECODE, where the
+  # legacy path carried it through and only failed at apply. A string survives every
+  # ingress, so pinned on yaml and the CLI. ---
+  - label: invalid-octal-string-file-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      source: /srv/app
+      file_mode: "banana"
+    want_error: value_invalid
+  - label: invalid-octal-string-file-mode-rejected-cli
+    universe: cli
+    id: st
+    bd: BD-6
+    input:
+      source: /srv/app
+      file_mode: "banana"
+    want_error: value_invalid
+
+  # --- BD-6: a composite dir_mode is rejected with a typed value error ---
+  - label: composite-dir-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      source: /srv/app
+      dir_mode:
+        - a
+    want_error: value_invalid
+
+  # --- BD-7: EVERY boolean parameter accepts the integers 1/0 and rejects any other
+  # integer with a typed error (§11 per-param pinning standard). `clean` first. ---
+  - label: clean-int-one-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      clean: 1
+    want:
+      Clean: true
+  - label: clean-int-one-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      clean: 1
+    want:
+      Clean: true
+  - label: clean-int-zero-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      clean: 0
+    want:
+      Clean: false
+  - label: clean-int-zero-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      clean: 0
+    want:
+      Clean: false
+  - label: clean-int-invalid-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      clean: 2
+    want_error: value_invalid
+  - label: clean-int-invalid-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      clean: 2
+    want_error: value_invalid
+
+  # --- BD-7: `makedirs` — the second boolean, pinned per-param (not "same as
+  # clean") per the §11 ruling. ---
+  - label: makedirs-int-one-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-one-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-zero-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-zero-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-invalid-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      makedirs: 2
+    want_error: value_invalid
+  - label: makedirs-int-invalid-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      source: /srv/app
+      makedirs: 2
+    want_error: value_invalid

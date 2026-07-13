@@ -1,10 +1,15 @@
 ---
 title: "git.latest"
+description: "Ensure a Git repository is cloned at a target directory and kept up to date with its remote."
 ---
 
-Ensures a Git repository is cloned at a target directory **and kept up to date** with its remote: an existing clone is fetched and fast-forwarded (or hard-reset with `force`). Compare with [`git.cloned`](/docs/guides/modules/git-cloned), which only ensures the clone exists at a revision.
+{/* zester-docgen:managed module="git.latest" */}
 
 **Source**: `pkg/state/modules/git_latest.go`
+
+---
+
+`git.latest` ensures a repository is present at `target` (required) AND keeps it current with its remote: an existing clone is fetched and fast-forwarded (or hard-reset with `force`). `name` (defaulting to the state ID) is the remote URL — NOTE: this is the opposite of `git.cloned`, whose `name`/primary is the clone PATH and whose `target`-equivalent is instead folded into `name`. Compare with [`git.cloned`](/docs/guides/modules/git-cloned), which only ensures the clone exists at a revision and never updates a moving branch tip. `name`'s state-ID fallback still applies, but a state declaring neither `name` NOR a non-empty state ID has no URL at all — that combination is rejected with a required-parameter error.
 
 ---
 
@@ -12,54 +17,38 @@ Ensures a Git repository is cloned at a target directory **and kept up to date**
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Remote repository URL. |
-| `target` | `string` | **Yes** | — | Filesystem path for the working tree. |
-| `branch` | `string` | No | `""` | Branch to track. Used for `git clone --branch`, checkout, and the remote-tip comparison. |
-| `rev` | `string` | No | `""` | Pin to a specific commit/ref. When set, the clone is checked out at `rev` and the up-to-date check is a local HEAD comparison (no network). |
-| `force` | `bool` | No | `false` | Discard local changes: update with `git reset --hard` (to `rev`, `origin/<branch>`, or `origin/HEAD`) instead of a fast-forward merge. |
+| `name` | `string` | No | State ID | remote repository URL; defaults to the state ID (contrast with git.cloned, whose name/primary is the clone path); required if the state ID is also empty |
+| `target` | `string` | Yes | *(none)* | filesystem path for the working tree; required |
+| `branch` | `string` | No | *(none)* | branch to track; used for git clone --branch, checkout, and the remote-tip comparison |
+| `rev` | `string` | No | *(none)* | pin to a specific commit/ref; when set, the up-to-date check is a local HEAD comparison (no network) |
+| `force` | `bool` | No | *(none)* | discard local changes: update with git reset --hard (to rev, origin/&lt;branch&gt;, or origin/HEAD) instead of a fast-forward merge; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-1. Target missing → changes needed (clone).
-2. `git remote get-url origin` compared with `name` → mismatch means changes needed.
-3. With `rev` set: no changes needed if `HEAD` starts with `rev` (prefix match, so short hashes work) — checked locally without network access.
-4. Otherwise: `git ls-remote origin <branch|HEAD>` is compared against the local `HEAD`; a differing remote tip means changes needed.
+### Check
 
----
+Reports a change when `target` does not exist (any stat error OTHER than not-exist fails the phase). Otherwise compares `git remote get-url origin` against `name`; a mismatch needs a change. With `rev` set: no change needed if local `HEAD` matches `rev` — a hex-looking rev by sha PREFIX (no subprocess), a tag or other symbolic rev resolved LOCALLY via `git rev-parse --verify <rev>^{commit}` (no network) and compared by commit id, so a checked-out tag CONVERGES rather than perpetually reporting a change. Without `rev`: `git ls-remote origin <branch|HEAD>` is compared against the local `HEAD`; a differing remote tip needs a change.
 
-## Apply Behavior
+### Apply
 
-**Fresh clone** (target missing): `git clone [--branch <branch>] <url> <target>`, then `git checkout <rev>` when `rev` is set.
+Fresh clone (target missing): `git clone [--branch <branch>] <name> <target>`, then `git checkout <rev>` when `rev` is set. Existing clone: corrects the origin URL with `git remote set-url` if it drifted, records the current HEAD (for revert), then `git fetch origin`. Update strategy: `force: true` → `git reset --hard` to `rev`, `origin/<branch>`, or `origin/HEAD`; `rev` set → `git checkout <rev>`; `branch` set → `git checkout <branch>` + `git merge --ff-only origin/<branch>`; neither → `git merge --ff-only` (fails if the local branch diverged — use `force`). Reports the url and target in its details.
 
-**Existing clone**:
+### Revert
 
-1. The origin URL is corrected with `git remote set-url` if it drifted.
-2. The current HEAD is recorded (for revert), then `git fetch origin`.
-3. Update strategy:
-    - `force: true` → `git reset --hard` to `rev`, `origin/<branch>`, or `origin/HEAD`.
-    - `rev` set → `git checkout <rev>`.
-    - `branch` set → `git checkout <branch>` + `git merge --ff-only origin/<branch>`.
-    - Neither → `git merge --ff-only` (fails if the local branch diverged — use `force`).
+If Apply cloned the repository, removes the target directory recursively. If Apply updated an existing clone, runs `git reset --hard <previous HEAD>` to the HEAD recorded before the update. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
 
----
-
-## Revert Behavior
-
-- If Apply cloned the repository, Revert removes the target directory recursively.
-- If Apply updated an existing clone, Revert runs `git reset --hard <previous HEAD>`.
-- Otherwise Revert is a no-op.
 
 ---
 
 ## Examples
 
-### State File
+### Track a branch
 
-**Track a branch:**
+name (the state ID here) is the remote URL; target is the clone path.
 
 ```yaml
 https://github.com/example/app.git:
@@ -68,7 +57,9 @@ https://github.com/example/app.git:
     - branch: main
 ```
 
-**Force-sync, discarding local changes:**
+### Force-sync, discarding local changes
+
+force replaces a fast-forward merge with a hard reset when the local branch has diverged.
 
 ```yaml
 deploy-config:
@@ -78,12 +69,45 @@ deploy-config:
     - branch: production
     - force: true
     - require:
-      - "pkg.installed:git"
+      - pkg.installed:git
 ```
+
+### Clone/update ad hoc
+
+The bare positional argument is the remote URL; target is a key=value.
+
+```bash
+zester '*' git.latest https://github.com/example/app.git target=/opt/app
+```
+
 
 ---
 
-## Divergences from Salt
+## Notes
 
-- Salt's `user`, `identity` (SSH key), `submodules`, `depth`, and `rev`-as-branch semantics are not supported. Authentication relies on the peel's ambient git configuration (credential helpers, ssh-agent).
-- `rev` is compared as a commit-hash prefix against `HEAD`; symbolic refs (tag names) will always report changes needed since `rev-parse HEAD` returns a hash.
+> **name means the remote URL here — the opposite of git.cloned**
+>
+> `git.latest`'s `name` (and state-ID default) is the remote URL; the clone path is the separate `target` parameter. `git.cloned`'s `name` is instead the clone PATH. Mixing the two up under a shared naming assumption is the most common authoring mistake between these two modules.
+
+> **rev resolves tags locally, no network round-trip**
+>
+> A hex-looking `rev` matches by sha PREFIX against local `HEAD`. A tag name or other symbolic rev is resolved with a local, network-free `git rev-parse --verify <rev>^{commit}` and compared by commit id, so a pinned tag converges once checked out — it is not limited to a literal prefix match against a hash.
+
+> **Divergences from Salt**
+>
+> Salt's `user`, `identity` (SSH key), `submodules`, and `depth` parameters are not supported. Authentication relies on the peel's ambient git configuration (credential helpers, ssh-agent).
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [git.cloned](/docs/guides/modules/git-cloned)

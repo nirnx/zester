@@ -1,10 +1,15 @@
 ---
 title: "file.keyvalue"
+description: "Ensure key/value lines are present in a file, updating values in place."
 ---
 
-Ensures one or more `key<separator>value` lines are present in a file, updating the value in place when the key already exists. Useful for `sysctl.conf`, `/etc/os-release`, environment files, and similar formats. Modeled after Salt's `file.keyvalue` module.
+{/* zester-docgen:managed module="file.keyvalue" */}
 
 **Source**: `pkg/state/modules/file_keyvalue.go`
+
+---
+
+`file.keyvalue` ensures one or more `key<separator>value` lines exist in a file, updating the value in place when the key already exists (for `sysctl.conf`, `os-release`, or environment files). The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). Supply the pairs as a `key_values` map (Salt's name), an `entries` map, a single `key`/`value` pair, or any combination — `key_values` and `entries` are UNIONED (they are two separate parameters, not aliases), with `entries` winning a per-key collision, and the single `key`/`value` pair overriding both for its key. The `separator` defaults to `=` and is matched trimmed, so an existing `k = v` line (with surrounding spaces) is recognized and updated rather than duplicated.
 
 ---
 
@@ -12,75 +17,106 @@ Ensures one or more `key<separator>value` lines are present in a file, updating 
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Absolute path to the target file. `path` is accepted as an alias. |
-| `key` | `string` | No | — | Single-entry form: the key to manage. Requires `value`. |
-| `value` | `any` | No | — | Single-entry form: the value for `key`. Required when `key` is set. |
-| `key_values` | `map` | No | `{}` | Multiple entries as a key → value map (Salt's parameter name). |
-| `entries` | `map` | No | `{}` | Alias for `key_values`. |
-| `separator` | `string` | No | `=` | Literal token written between key and value. When matching existing lines, surrounding whitespace around the separator is tolerated. |
-
-At least one entry must be provided (via `key`/`value` or `key_values`/`entries`); the builder fails otherwise. Values are stringified with `%v`, so numbers and booleans work as expected.
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `separator` | `string` | No | `=` | literal token written between key and value; defaults to = |
+| `key_values` | `StringMap` | No | *(none)* | map of keys to their desired values (Salt's key_values); unioned with entries, which wins a per-key collision |
+| `entries` | `StringMap` | No | *(none)* | map of keys to their desired values; unioned with key_values, winning a per-key collision |
+| `key` | `string` | No | *(none)* | a single key to manage (used with value); merged into the entries map |
+| `value` | `string` | No | *(none)* | the desired value for key; required when key is set |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Parameter Types
 
-- If the file does not exist, the state reports changes needed (it will be created).
-- Otherwise the rewrite is computed in memory: for each key (processed in sorted order), the first line matching `key <sep> ...` (leading whitespace preserved, separator whitespace tolerated) is compared against the desired `key<separator>value` line. Changes are reported if any line would be rewritten or appended.
+### StringMap
 
----
+A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.
 
-## Apply Behavior
-
-1. Reads the file if it exists (stored as a backup for revert).
-2. For each entry: the first matching line is rewritten in place as `key<separator>value` (preserving leading whitespace); if no line matches, `key<separator>value` is appended at the end.
-3. Writes the result with mode `0644`. A missing file is created.
 
 ---
 
-## Revert Behavior
+## Effects
 
-- If the file did not exist before Apply, it is removed.
-- Otherwise the original content is restored from the backup.
+### Check
+
+Reads the file (a missing file needs a change — it will be created; any other read error fails the check) and computes the result in memory: a change is needed when any managed key is absent or its current value differs from the desired one.
+
+### Apply
+
+Reads the file (capturing the original for revert on the first write when it already exists). For each key, updates the matching line's value in place (preserving its leading whitespace) or appends `key<separator>value` when absent, then writes the result with mode 0644 (preserving the trailing newline). Creates the file with the managed lines when it does not exist.
+
+### Revert
+
+Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Set kernel parameters
 
-```bash
-# Single entry
-zester 'web-01' file.keyvalue /etc/sysctl.conf key=vm.swappiness value=10
-```
-
-### State File
-
-**Single key/value:**
-
-```yaml
-/etc/default/grub:
-  file.keyvalue:
-    - key: GRUB_TIMEOUT
-    - value: 5
-```
-
-**Multiple entries:**
+key_values sets multiple entries; an existing line's value is updated in place.
 
 ```yaml
 /etc/sysctl.conf:
   file.keyvalue:
     - key_values:
-        vm.swappiness: 10
-        net.ipv4.ip_forward: 1
+        net.ipv4.ip_forward: "1"
+        vm.swappiness: "10"
 ```
+
+### Set a single value with a custom separator
+
+key/value is the single-entry form; separator overrides the default = (a spaced separator here).
+
+```yaml
+/etc/login.defs:
+  file.keyvalue:
+    - key: UMASK
+    - value: "027"
+    - separator: "   "
+```
+
+### Set a value ad hoc
+
+The bare positional is the path; key and value are key=value args.
+
+```bash
+zester 'web*' file.keyvalue /etc/os-release key=PRETTY_NAME value='Zester Linux'
+```
+
 
 ---
 
-## Divergences from Salt
+## Notes
 
-- Keys that are not found are **always appended** — Salt requires `append_if_not_found: True` for that; Zester has no such flag.
-- Salt's `count`, `uncomment`, `key_ignore_case`, and `value_ignore_case` parameters are not supported.
-- Only the **first** matching line per key is updated; duplicates further down are left alone.
+> **Separator matching tolerates spaces**
+>
+> The separator is matched with its surrounding whitespace trimmed, so an existing `key = value` line is recognized and updated rather than a duplicate `key=value` line being appended. The written line uses the separator exactly as configured.
+
+> **key_values and entries are unioned**
+>
+> `key_values` (Salt's name) and `entries` are two SEPARATE parameters, not aliases. When both are supplied their maps are unioned; on a per-key collision the `entries` value wins (it merges after `key_values`). A single `key`/`value` pair is merged last, overriding both for its key.
+
+> **Divergences from Salt**
+>
+> Keys that are not found are always appended — Salt requires `append_if_not_found: True` for that, but Zester has no such flag. Only the FIRST matching line per key is updated; duplicate lines further down are left untouched. Salt's `count`, `uncomment`, `key_ignore_case`, and `value_ignore_case` parameters are not supported.
+
+
+---
+
+## Divergences
+
+- BD-5
+- BD-6
+
+---
+
+## See Also
+
+- [file.line](/docs/guides/modules/file-line)
+- [file.replace](/docs/guides/modules/file-replace)
+- [sysctl.present](/docs/guides/modules/sysctl-present)

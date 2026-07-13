@@ -76,9 +76,12 @@ func colorize(text, color string, enabled bool) string {
 }
 
 // isStreamlined returns true for modules whose output should show only
-// stdout/stderr rather than full detail fields.
+// stdout/stderr rather than full detail fields. sys.doc rides its rendered
+// text in Details["result"] (keystone spec §7); keying on the module name here
+// is safe before the peel-side sys.doc lands — the CLI just prints whatever
+// result text a supporting peel returns.
 func isStreamlined(module string) bool {
-	return module == "cmd.run" || module == "test.ping" ||
+	return module == "cmd.run" || module == "test.ping" || module == "sys.doc" ||
 		strings.HasPrefix(module, "facts.") || strings.HasPrefix(module, "settings.")
 }
 
@@ -125,13 +128,13 @@ func printDirectText(peelID, module string, resp *proto.ExecResponse, err error,
 				stdout = sr.Details["result"]
 			}
 			if stdout != "" {
-				for _, line := range strings.Split(stdout, "\n") {
+				for line := range strings.SplitSeq(stdout, "\n") {
 					fmt.Printf("    %s\n", line)
 				}
 			}
 			stderr := sr.Details["stderr"]
 			if stderr != "" {
-				for _, line := range strings.Split(stderr, "\n") {
+				for line := range strings.SplitSeq(stderr, "\n") {
 					fmt.Printf("    stderr: %s\n", line)
 				}
 			}
@@ -261,13 +264,13 @@ func printJobReturnText(ret job.Return, module string, useColor bool) {
 				stdout, _ = details["result"].(string)
 			}
 			if stdout != "" {
-				for _, line := range strings.Split(stdout, "\n") {
+				for line := range strings.SplitSeq(stdout, "\n") {
 					fmt.Printf("    %s\n", line)
 				}
 			}
 			stderr, _ := details["stderr"].(string)
 			if stderr != "" {
-				for _, line := range strings.Split(stderr, "\n") {
+				for line := range strings.SplitSeq(stderr, "\n") {
 					fmt.Printf("    stderr: %s\n", line)
 				}
 			}

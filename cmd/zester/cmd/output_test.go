@@ -9,8 +9,6 @@ import (
 	"github.com/nirnx/zester/pkg/proto"
 )
 
-var errTimeout = errors.New("request timeout")
-
 func TestShouldColor(t *testing.T) {
 	// shouldColor should return false when NO_COLOR is set.
 	t.Setenv("NO_COLOR", "1")
@@ -90,6 +88,7 @@ func TestIsStreamlined(t *testing.T) {
 	}{
 		{"cmd.run", true},
 		{"test.ping", true},
+		{"sys.doc", true},
 		{"facts.items", true},
 		{"facts.get", true},
 		{"facts.keys", true},
@@ -100,6 +99,7 @@ func TestIsStreamlined(t *testing.T) {
 		{"pkg.installed", false},
 		{"state.apply", false},
 		{"state.highstate", false},
+		{"sys.list_functions", false},
 		{"custom.module", false},
 		{"", false},
 	}

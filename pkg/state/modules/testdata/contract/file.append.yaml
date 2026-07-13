@@ -1,0 +1,264 @@
+module: file.append
+# Permanent differential contract for the file.append migration. These cases
+# were approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accepting cases
+# pin the decoded Path/Text projection — Text (paramtypes.StringList) is
+# compared element-by-element in string form, and a bare scalar `want`
+# matches a one-element list; rejecting cases pin the error kind. BD-tagged
+# cases pin the flagged behavioral differences:
+#   BD-5 (PENDING maintainer sign-off) — a scalar Text list element is
+#   rendered to a string (legacy's parseAnyStringList silently DROPPED any
+#   non-string element instead of sprinting it — a stricter drop than
+#   user.present's groups, which at least kept string elements uniformly);
+#   a nested element is rejected with a typed error (legacy silently
+#   dropped it too); and a BARE-STRING value now activates one-line
+#   management (legacy's `config[key].([]any)` type assertion failed
+#   entirely on a non-list value, so `text: someline` silently managed NO
+#   lines) — pinned across yaml/msgpack for the scalar/nested-element arms
+#   (no CLI spelling for a mixed/nested list) and across all three universes
+#   for the bare-string arm.
+#   BD-6 (APPROVED) — a wrong-typed `name` is coerced (scalar) or rejected
+#   (composite) instead of silently falling back to the state ID.
+# Unlike file.managed/file.touch/file.copy, `name` has NO `path` alias here
+# (the legacy constructor never accepted one).
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/hosts
+      text:
+        - line1
+        - line2
+    want:
+      Path: /etc/hosts
+      Text:
+        - line1
+        - line2
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/hosts
+      text:
+        - line1
+        - line2
+    want:
+      Path: /etc/hosts
+      Text:
+        - line1
+        - line2
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: /etc/hosts
+    want:
+      Path: /etc/hosts
+
+  # --- parity: no name key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /etc/hosts
+    input: {}
+    want:
+      Path: /etc/hosts
+  - label: primary-fallback-cli
+    universe: cli
+    id: /etc/hosts
+    input: {}
+    want:
+      Path: /etc/hosts
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/hosts
+    input:
+      name: ""
+    want:
+      Path: /etc/hosts
+  - label: empty-name-falls-back-to-id-cli
+    universe: cli
+    id: /etc/hosts
+    input:
+      name: ""
+    want:
+      Path: /etc/hosts
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent, falls back
+  # to the state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/hosts
+    input:
+      name:
+    want:
+      Path: /etc/hosts
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /etc/hosts
+    input:
+      name:
+    want:
+      Path: /etc/hosts
+
+  # --- parity: an omitted text is an empty/undeclared list ---
+  - label: text-absent-yaml
+    universe: yaml
+    id: /etc/hosts
+    input: {}
+    want:
+      Text: []
+
+  # --- parity: a list of strings decodes unchanged ---
+  - label: text-list-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/hosts
+      text:
+        - line1
+        - line2
+    want:
+      Text:
+        - line1
+        - line2
+
+  # --- BD-5 (PENDING): a scalar text list element is rendered to a string
+  # (legacy silently dropped any non-string element). No CLI spelling for a
+  # mixed list. ---
+  - label: text-scalar-sprint-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/hosts
+      text:
+        - line1
+        - 2
+    want:
+      Text:
+        - line1
+        - "2"
+  - label: text-scalar-sprint-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/hosts
+      text:
+        - line1
+        - 2
+    want:
+      Text:
+        - line1
+        - "2"
+
+  # --- BD-5 (PENDING): a nested list/map element is rejected with a typed
+  # error (legacy silently dropped it). No CLI spelling for a nested list. ---
+  - label: text-nested-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/hosts
+      text:
+        - line1
+        - - nested
+    want_error: value_invalid
+  - label: text-nested-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/hosts
+      text:
+        - line1
+        - - nested
+    want_error: value_invalid
+
+  # --- BD-5 (PENDING, third arm): a BARE-STRING text value now decodes as a
+  # single-element list and ACTIVATES line management, where the legacy
+  # `config["text"].([]any)` assertion failed entirely on a non-list value
+  # (so `text: someline` silently managed NO lines). Pinned across all three
+  # universes; the CLI scalar `text=someline` is the same single-element
+  # case. ---
+  - label: text-bare-string-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/hosts
+      text: someline
+    want:
+      Text:
+        - someline
+  - label: text-bare-string-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/hosts
+      text: someline
+    want:
+      Text:
+        - someline
+  - label: text-bare-string-cli
+    universe: cli
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/hosts
+      text: someline
+    want:
+      Text:
+        - someline
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Path: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      Path: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type

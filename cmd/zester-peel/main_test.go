@@ -41,6 +41,9 @@ func TestPeelFlagParity(t *testing.T) {
 		"data-dir":      "/var/lib/zester",
 		"enroll-ca-pin": "",
 		"enroll-trust":  "",
+		// strict_params: default on (the strict flip) — a typo'd state-module
+		// parameter fails the build; --strict-params=false relaxes to a warning.
+		"strict-params": "true",
 	}
 
 	got := make(map[string]string)

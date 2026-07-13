@@ -7,6 +7,9 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testTZMctx(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileExec) *exec.ModuleContext {
@@ -21,7 +24,7 @@ func testTZMctx(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileEx
 
 func TestTimezoneSystemName(t *testing.T) {
 	mctx := testTZMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("America/New_York", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +36,7 @@ func TestTimezoneSystemName(t *testing.T) {
 
 func TestTimezoneSystemPrimaryParamDefault(t *testing.T) {
 	mctx := testTZMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("UTC", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +49,7 @@ func TestTimezoneSystemPrimaryParamDefault(t *testing.T) {
 
 func TestTimezoneSystemRequisites(t *testing.T) {
 	mctx := testTZMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("UTC", map[string]any{
 		"require": []any{"pkg.installed:tzdata"},
 		"onfail":  []any{"cmd.run:fallback"},
@@ -70,7 +73,7 @@ func TestTimezoneSystemCheckNoChange(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("America/New_York", map[string]any{})
 	if err != nil {
@@ -93,7 +96,7 @@ func TestTimezoneSystemCheckNeedsChange(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("America/New_York", map[string]any{})
 	if err != nil {
@@ -116,7 +119,7 @@ func TestTimezoneSystemCheckFallbackFile(t *testing.T) {
 	fakeFile.PreCreate("/etc/timezone", []byte("UTC\n"), 0644)
 
 	mctx := testTZMctx(fakeCmd, fakeFile)
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("UTC", map[string]any{})
 	if err != nil {
@@ -137,7 +140,7 @@ func TestTimezoneSystemApply(t *testing.T) {
 	// First call (Check inside Apply for previousTZ): timedatectl show
 	fakeCmd.SetResult("timedatectl", &exec.CommandResult{Stdout: "UTC\n", ExitCode: 0}, nil)
 	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("America/New_York", map[string]any{})
 	if err != nil {
@@ -164,7 +167,7 @@ func TestTimezoneSystemApplyError(t *testing.T) {
 	fakeCmd.SetError("dpkg-reconfigure", errors.New("not found"))
 
 	mctx := testTZMctx(fakeCmd, fakeFile)
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("America/New_York", map[string]any{})
 	if err != nil {
@@ -181,7 +184,7 @@ func TestTimezoneSystemRevert(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetResult("timedatectl", &exec.CommandResult{Stdout: "UTC\n", ExitCode: 0}, nil)
 	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("America/New_York", map[string]any{})
 	if err != nil {
@@ -205,7 +208,7 @@ func TestTimezoneSystemRevert(t *testing.T) {
 func TestTimezoneSystemRevert_NoPreviousTZ(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testTZMctx(fakeCmd, exectest.NewFakeFileExec())
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("America/New_York", map[string]any{})
 	if err != nil {
@@ -227,9 +230,28 @@ func TestTimezoneSystemNoProvider(t *testing.T) {
 			File: exectest.NewFakeFileExec(),
 		},
 	}
-	builder := NewTimezoneSystemBuilder(mctx)
+	builder := NewTimezoneSystemBuilder(mctx, modschema.DecodeOptions{})
 	_, err := builder("UTC", map[string]any{})
 	if err == nil {
 		t.Error("expected error when no command provider is set")
 	}
+}
+
+var _ state.State = (*TimezoneSystem)(nil)
+
+// TestTimezoneSystemContract replays the permanent differential contract
+// fixtures against the migrated timezone.system decoder. The cases were
+// approved by the legacy-vs-new equivalence comparison while the legacy
+// constructor still existed (see the migration changelog); after its deletion
+// this replay is the permanent regression guard for timezone.system's decode
+// behavior, including the flagged BD-2/BD-6/BD-7 divergences.
+func TestTimezoneSystemContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var tz TimezoneSystem
+		if _, err := timezoneSystemSpec.Decode(id, config, &tz, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &tz, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/timezone.system.yaml")
 }

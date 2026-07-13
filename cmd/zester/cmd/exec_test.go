@@ -47,6 +47,117 @@ func TestParseModuleArgs_CmdRunMissing(t *testing.T) {
 	}
 }
 
+// TestParseModuleArgs_CmdRunKeyValueForms pins the review-round-4 P1 fix:
+// a Salt-style `cmd.run name=<cmd>` (or command=/cmd=) invocation is key=value
+// form — the assignment must NOT become the literal command string — while a
+// positional command that merely CONTAINS '=' (env-prefix style) stays the
+// verbatim command.
+func TestParseModuleArgs_CmdRunKeyValueForms(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantCmd string
+		extra   map[string]any
+	}{
+		{"name= form (Salt parity)", []string{"name=echo hi"}, "echo hi", nil},
+		{"command= form", []string{"command=uptime"}, "uptime", nil},
+		{"cmd= form", []string{"cmd=uptime", "env=prod"}, "uptime", map[string]any{"env": "prod"}},
+		{"positional with embedded =", []string{"FOO=bar env"}, "FOO=bar env", nil},
+		{"positional then kv", []string{"echo a=b", "shell=/bin/sh"}, "echo a=b", map[string]any{"shell": "/bin/sh"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, args, err := parseModuleArgs("cmd.run", tc.args)
+			if err != nil {
+				t.Fatalf("parseModuleArgs: %v", err)
+			}
+			if id != "ad-hoc" {
+				t.Errorf("id = %q, want ad-hoc", id)
+			}
+			key := "command"
+			if _, viaName := args["name"]; viaName {
+				key = "name"
+			}
+			if _, viaCmd := args["cmd"]; viaCmd {
+				key = "cmd"
+			}
+			if got := args[key]; got != tc.wantCmd {
+				t.Errorf("args[%q] = %v, want %q (full args: %v)", key, got, tc.wantCmd, args)
+			}
+			for k, v := range tc.extra {
+				if args[k] != v {
+					t.Errorf("args[%q] = %v, want %v", k, args[k], v)
+				}
+			}
+		})
+	}
+}
+
+// TestParseModuleArgs_PillarAliases pins the round-5 critic fix: pillar.* is
+// the peel's Salt-compat alias of settings.*, answered by the same handler
+// that reads only args["key"] — so the CLI must bind the keyed form for both
+// spellings (pillar.get previously fell through to the generic fallback with
+// empty args and the peel errored).
+func TestParseModuleArgs_PillarAliases(t *testing.T) {
+	id, args, err := parseModuleArgs("pillar.get", []string{"app.port"})
+	if err != nil {
+		t.Fatalf("pillar.get: %v", err)
+	}
+	if id != "app.port" || args["key"] != "app.port" {
+		t.Errorf("pillar.get: id=%q args=%v, want key bound", id, args)
+	}
+	if _, _, err := parseModuleArgs("pillar.get", nil); err == nil {
+		t.Error("pillar.get without a key must be a usage error")
+	}
+	if id, _, err := parseModuleArgs("pillar.items", nil); err != nil || id != "items" {
+		t.Errorf("pillar.items: id=%q err=%v", id, err)
+	}
+	if id, _, err := parseModuleArgs("pillar.keys", nil); err != nil || id != "keys" {
+		t.Errorf("pillar.keys: id=%q err=%v", id, err)
+	}
+}
+
+// TestParseModuleArgs_DocdataKeyValueGuard pins the generalized round-4 fix
+// (round-5 critic): a first token assigning to a DECLARED parameter key makes
+// the whole invocation key=value form for every docdata module — previously
+// `pkg.installed name=nginx` bound the literal string "name=nginx" as the
+// package name. An assignment to an UNDECLARED key stays positional.
+func TestParseModuleArgs_DocdataKeyValueGuard(t *testing.T) {
+	// Primary via its canonical key.
+	id, args, err := parseModuleArgs("pkg.installed", []string{"name=nginx"})
+	if err != nil {
+		t.Fatalf("pkg.installed name=: %v", err)
+	}
+	if id != "nginx" || args["name"] != "nginx" {
+		t.Errorf("pkg.installed name=: id=%q args=%v, want nginx/name:nginx", id, args)
+	}
+
+	// Primary via a registered ALIAS; the ID follows the alias value.
+	id, args, err = parseModuleArgs("file.managed", []string{"path=/etc/motd", "contents=hi"})
+	if err != nil {
+		t.Fatalf("file.managed path=: %v", err)
+	}
+	if id != "/etc/motd" || args["path"] != "/etc/motd" || args["contents"] != "hi" {
+		t.Errorf("file.managed path=: id=%q args=%v", id, args)
+	}
+
+	// Declared non-primary key with a default-less primary absent: usage error,
+	// not a state named "ad-hoc".
+	if _, _, err := parseModuleArgs("pkg.installed", []string{"version=1.2"}); err == nil {
+		t.Error("pkg.installed version= without a name must be a usage error")
+	}
+
+	// Undeclared key stays a positional value (only the schema's own key set
+	// switches modes).
+	id, args, err = parseModuleArgs("pkg.installed", []string{"foo=bar"})
+	if err != nil {
+		t.Fatalf("pkg.installed foo=: %v", err)
+	}
+	if id != "foo=bar" || args["name"] != "foo=bar" {
+		t.Errorf("pkg.installed foo=: id=%q args=%v, want verbatim positional", id, args)
+	}
+}
+
 func TestParseModuleArgs_TestPing(t *testing.T) {
 	id, args, err := parseModuleArgs("test.ping", nil)
 	if err != nil {
@@ -176,11 +287,35 @@ func TestParseModuleArgs_FileManaged(t *testing.T) {
 	if id != "/etc/nginx/nginx.conf" {
 		t.Errorf("id = %q, want %q", id, "/etc/nginx/nginx.conf")
 	}
-	if args["path"] != "/etc/nginx/nginx.conf" {
-		t.Errorf("args[path] = %v, want %q", args["path"], "/etc/nginx/nginx.conf")
+	// file.managed now resolves through the embedded docdata (Phase-4
+	// unification): the bare positional binds to its DECLARED primary "name",
+	// not the historical "path". These are decode-identical on a migrated peel
+	// ("path" is a registered alias of "name" and the ID carries the same
+	// value), so the observable dispatch is unchanged.
+	if args["name"] != "/etc/nginx/nginx.conf" {
+		t.Errorf("args[name] = %v, want %q", args["name"], "/etc/nginx/nginx.conf")
+	}
+	if _, ok := args["path"]; ok {
+		t.Errorf("args[path] should be unset (primary is now name); got %v", args["path"])
 	}
 	if args["source"] != "/srv/nginx.conf" {
 		t.Errorf("args[source] = %v, want %q", args["source"], "/srv/nginx.conf")
+	}
+}
+
+// The "path" alias still works when passed as an explicit key=value token
+// (cliargs stores it verbatim; the migrated file.managed reads it as an alias
+// of "name").
+func TestParseModuleArgs_FileManagedPathAliasExplicit(t *testing.T) {
+	// A bogus positional plus an explicit path= override: the positional binds
+	// to the primary and path= is carried through untouched for the peel's
+	// alias resolution.
+	_, args, err := parseModuleArgs("file.managed", []string{"placeholder", "path=/etc/real.conf"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if args["path"] != "/etc/real.conf" {
+		t.Errorf("args[path] = %v, want %q", args["path"], "/etc/real.conf")
 	}
 }
 
@@ -286,6 +421,95 @@ func TestParseModuleArgs_GenericFallbackNoArgs(t *testing.T) {
 	}
 }
 
+// TestParseModuleArgs_UnifiedParity pins the Phase-4 unification: after
+// replacing the hand-maintained per-module positional table with docdata-driven
+// primary-parameter lookup, EVERY module that was previously hard-coded (plus
+// the generic fallback) resolves to the same (id, args). For all of them the
+// result is byte-identical to the legacy table EXCEPT file.managed, whose
+// positional now binds to its canonical primary "name" instead of "path"
+// (decode-identical via the "path" alias + the carried ID). This table is the
+// regression guard for that equivalence.
+func TestParseModuleArgs_UnifiedParity(t *testing.T) {
+	tests := []struct {
+		name      string
+		module    string
+		remaining []string
+		wantID    string
+		wantArgs  map[string]any
+	}{
+		// Special-cased query/dispatch modules + cmd.run (unchanged path).
+		{"cmd.run", "cmd.run", []string{"hostname"}, "ad-hoc", map[string]any{"command": "hostname"}},
+		{"cmd.run kv", "cmd.run", []string{"echo hi", "env=prod"}, "ad-hoc", map[string]any{"command": "echo hi", "env": "prod"}},
+		{"test.ping", "test.ping", nil, "ping", map[string]any{}},
+		{"facts.items", "facts.items", nil, "items", map[string]any{}},
+		{"facts.get", "facts.get", []string{"os.family"}, "os.family", map[string]any{"key": "os.family"}},
+		{"facts.keys", "facts.keys", nil, "keys", map[string]any{}},
+		{"facts.set", "facts.set", []string{"region", "us-east-1"}, "region", map[string]any{"key": "region", "value": "us-east-1"}},
+		{"settings.items", "settings.items", nil, "items", map[string]any{}},
+		{"settings.get", "settings.get", []string{"db.host"}, "db.host", map[string]any{"key": "db.host"}},
+		{"settings.keys", "settings.keys", nil, "keys", map[string]any{}},
+		{"state.apply", "state.apply", []string{"webserver"}, "webserver", map[string]any{"state": "webserver"}},
+		{"state.highstate", "state.highstate", nil, "highstate", map[string]any{}},
+		{"state.highstate kv", "state.highstate", []string{"env=staging"}, "highstate", map[string]any{"env": "staging"}},
+
+		// Docdata-driven (primary == "name"): pkg.installed is byte-identical to
+		// the legacy table.
+		{"pkg.installed", "pkg.installed", []string{"nginx", "version=1.25"}, "nginx", map[string]any{"name": "nginx", "version": "1.25"}},
+		// file.managed: canonical primary "name" (was legacy "path").
+		{"file.managed", "file.managed", []string{"/etc/n.conf", "source=/srv/n.conf"}, "/etc/n.conf", map[string]any{"name": "/etc/n.conf", "source": "/srv/n.conf"}},
+
+		// Generic fallback (module absent from docdata).
+		{"generic with args", "custom.module", []string{"my-id", "key=value"}, "my-id", map[string]any{"key": "value"}},
+		{"generic no args", "custom.module", nil, "ad-hoc", map[string]any{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, args, err := parseModuleArgs(tt.module, tt.remaining)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != tt.wantID {
+				t.Errorf("id = %q, want %q", id, tt.wantID)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
+			}
+			for k, want := range tt.wantArgs {
+				if got := args[k]; got != want {
+					t.Errorf("args[%q] = %v, want %v", k, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestParseModuleArgs_DocdataDrivenModules covers self-documenting modules that
+// were NOT previously hard-coded: they now bind the positional to their primary
+// ("name") for free, and a missing positional (default-less primary) is a clear
+// usage error rather than a silent "ad-hoc" dispatch.
+func TestParseModuleArgs_DocdataDrivenModules(t *testing.T) {
+	for _, module := range []string{"pkg.removed", "pkg.latest", "pkg.purged", "service.running", "service.dead", "user.present"} {
+		t.Run(module+" positional", func(t *testing.T) {
+			id, args, err := parseModuleArgs(module, []string{"nginx"})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != "nginx" {
+				t.Errorf("id = %q, want %q", id, "nginx")
+			}
+			if args["name"] != "nginx" {
+				t.Errorf("args[name] = %v, want %q", args["name"], "nginx")
+			}
+		})
+		t.Run(module+" missing", func(t *testing.T) {
+			if _, _, err := parseModuleArgs(module, nil); err == nil {
+				t.Fatalf("expected error for missing %s primary argument", module)
+			}
+		})
+	}
+}
+
 // ---------- moduleTimeout ----------
 
 func newTimeoutCmd(setFlag bool, val time.Duration) *cobra.Command {
@@ -336,61 +560,9 @@ func TestModuleTimeout_ExplicitOverride(t *testing.T) {
 	}
 }
 
-// ---------- parseKeyValues ----------
-
-func TestParseKeyValues(t *testing.T) {
-	args := make(map[string]any)
-	parseKeyValues([]string{"env=prod", "region=us-east-1", "count=3"}, args)
-
-	if args["env"] != "prod" {
-		t.Errorf("args[env] = %v, want %q", args["env"], "prod")
-	}
-	if args["region"] != "us-east-1" {
-		t.Errorf("args[region] = %v, want %q", args["region"], "us-east-1")
-	}
-	if args["count"] != "3" {
-		t.Errorf("args[count] = %v, want %q", args["count"], "3")
-	}
-}
-
-func TestParseKeyValues_NoEquals(t *testing.T) {
-	args := make(map[string]any)
-	parseKeyValues([]string{"notapair", "key=value"}, args)
-
-	if _, ok := args["notapair"]; ok {
-		t.Error("non-key=value string should not be added to args")
-	}
-	if args["key"] != "value" {
-		t.Errorf("args[key] = %v, want %q", args["key"], "value")
-	}
-}
-
-func TestParseKeyValues_EmptyValue(t *testing.T) {
-	args := make(map[string]any)
-	parseKeyValues([]string{"flag="}, args)
-
-	if args["flag"] != "" {
-		t.Errorf("args[flag] = %v, want empty string", args["flag"])
-	}
-}
-
-func TestParseKeyValues_ValueWithEquals(t *testing.T) {
-	args := make(map[string]any)
-	parseKeyValues([]string{"conn=host=db port=5432"}, args)
-
-	// strings.Cut splits on first "=", so value is "host=db port=5432"
-	if args["conn"] != "host=db port=5432" {
-		t.Errorf("args[conn] = %v, want %q", args["conn"], "host=db port=5432")
-	}
-}
-
-func TestParseKeyValues_Empty(t *testing.T) {
-	args := make(map[string]any)
-	parseKeyValues(nil, args)
-	if len(args) != 0 {
-		t.Errorf("expected empty args, got %v", args)
-	}
-}
+// The parseKeyValues tests moved to pkg/cliargs alongside the relocated
+// ParseKeyValues function (Tranche 0B); parseModuleArgs above still exercises it
+// end-to-end here via cliargs.ParseKeyValues.
 
 // ---------- isGlob ----------
 
@@ -458,5 +630,23 @@ func TestDirectGlobMatching(t *testing.T) {
 
 	if _, err := target.NewGlobMatcher("[invalid"); err == nil {
 		t.Fatal("expected error for invalid glob pattern")
+	}
+}
+
+// TestParseModuleArgs_BareSysDocDispatchesEmptyID pins the bare-invocation
+// contract for execution functions with an OPTIONAL primary: `zester '*'
+// sys.doc` must dispatch with an empty ID and no primary argument (the peel
+// then returns the unified index) instead of erroring or falling back to the
+// generic "ad-hoc" ID. Regression: TestSysDoc_UnifiedIndex (integration).
+func TestParseModuleArgs_BareSysDocDispatchesEmptyID(t *testing.T) {
+	id, args, err := parseModuleArgs("sys.doc", nil)
+	if err != nil {
+		t.Fatalf("bare sys.doc: unexpected error: %v", err)
+	}
+	if id != "" {
+		t.Fatalf("bare sys.doc: id = %q, want empty (peel returns the unified index)", id)
+	}
+	if len(args) != 0 {
+		t.Fatalf("bare sys.doc: args = %v, want empty", args)
 	}
 }

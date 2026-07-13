@@ -1,0 +1,586 @@
+module: file.managed
+# Permanent differential contract for the file.managed migration (the BD-1
+# flagship). These cases were approved by the legacy-vs-new equivalence
+# comparison while the legacy parse still existed; after its deletion RunContract
+# replays them as the permanent regression guard. Accept cases pin the decoded
+# projection — Path (primary string), Content/Source/User/Group (strings),
+# MakeDirs (bool), Template (paramtypes.TemplateFlag), Mode (paramtypes.FileMode),
+# Context/Defaults (map passthrough); reject cases pin the error kind. A
+# TemplateFlag `want` is a bool (declared with that Enabled value) or
+# `{declared: false}` (undeclared). A FileMode `want` is an octal string/int
+# (compared on the managed facets) or `{declared: false}` (the lazy, unset
+# default). BD-tagged cases pin the flagged behavioral differences: BD-1 (a
+# msgpack-delivered sized-int mode is now applied, where the legacy string-switch
+# dropped a `mode: 0755` to 0644 — the reproduced reactor bug), BD-2 (a CLI
+# template/makedirs string is now honored), BD-6 (a wrong-typed value is coerced
+# or rejected, not silently ignored/fallback — including a float or invalid-octal
+# mode now rejected at decode where legacy handled it at apply, and an integer
+# reaching the int-rejecting TemplateFlag), and BD-7 (a boolean-typed makedirs
+# accepts the integers 1/0 and rejects any other integer with a typed error).
+# The name-empty-path-wins pair is PARITY (§2.1 source fall-through), not a BD:
+# an empty-string `name` alongside a non-empty `path` alias resolves to the path,
+# never the state ID.
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: st
+    input:
+      name: /etc/motd
+      content: hi
+    want:
+      Path: /etc/motd
+      Content: hi
+      Mode: {declared: false}
+      Template: {declared: false}
+  - label: string-name-msgpack
+    universe: msgpack
+    id: st
+    input:
+      name: /etc/motd
+      content: hi
+    want:
+      Path: /etc/motd
+      Content: hi
+  - label: string-name-cli
+    universe: cli
+    id: st
+    input:
+      name: /etc/motd
+      content: hi
+    want:
+      Path: /etc/motd
+      Content: hi
+
+  # --- parity: the `path` alias supplies the primary when `name` is absent ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: st
+    input:
+      path: /etc/nginx/nginx.conf
+      content: hi
+    want:
+      Path: /etc/nginx/nginx.conf
+  - label: path-alias-cli
+    universe: cli
+    id: st
+    input:
+      path: /etc/nginx/nginx.conf
+      content: hi
+    want:
+      Path: /etc/nginx/nginx.conf
+
+  # --- parity: no name/path key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /etc/motd
+    input:
+      content: hi
+    want:
+      Path: /etc/motd
+  - label: primary-fallback-cli
+    universe: cli
+    id: /etc/motd
+    input:
+      content: hi
+    want:
+      Path: /etc/motd
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/motd
+    input:
+      name: ""
+      content: hi
+    want:
+      Path: /etc/motd
+  - label: empty-name-falls-back-to-id-cli
+    universe: cli
+    id: /etc/motd
+    input:
+      name: ""
+      content: hi
+    want:
+      Path: /etc/motd
+
+  # --- PARITY (§2.1 source fall-through, NOT a BD): an empty-string `name`
+  # alongside a non-empty `path` alias resolves to the PATH, not the state ID.
+  # An empty value at one source falls through to the next exactly like absence
+  # (the legacy `if name == "" { name = path }` chain); only an all-sources-empty
+  # primary lands on the ID. This is the parity restoration the file.managed gate
+  # exposed — the prior decoder let an empty name shadow a set path onto the ID. ---
+  - label: name-empty-path-wins-yaml
+    universe: yaml
+    id: /the/id
+    input:
+      name: ""
+      path: /etc/nginx/nginx.conf
+      content: hi
+    want:
+      Path: /etc/nginx/nginx.conf
+  - label: name-empty-path-wins-msgpack
+    universe: msgpack
+    id: /the/id
+    input:
+      name: ""
+      path: /etc/nginx/nginx.conf
+      content: hi
+    want:
+      Path: /etc/nginx/nginx.conf
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent, falls back to
+  # the state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /etc/motd
+    input:
+      name:
+      content: hi
+    want:
+      Path: /etc/motd
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /etc/motd
+    input:
+      name:
+      content: hi
+    want:
+      Path: /etc/motd
+
+  # --- parity: an octal-STRING mode decodes to that mode (all universes; a
+  # string survives every ingress unchanged) ---
+  - label: mode-string-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      mode: "0644"
+    want:
+      Mode: "0644"
+  - label: mode-string-msgpack
+    universe: msgpack
+    id: st
+    input:
+      content: hi
+      mode: "0644"
+    want:
+      Mode: "0644"
+  - label: mode-string-cli
+    universe: cli
+    id: st
+    input:
+      content: hi
+      mode: "0644"
+    want:
+      Mode: "0644"
+
+  # --- parity: an octal-INT mode in YAML (native int) decodes to that mode, as
+  # it did under the legacy int branch ---
+  - label: mode-octal-int-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      mode: 0644
+    want:
+      Mode: "0644"
+
+  # --- parity: an omitted mode leaves the lazy, undeclared FileMode (the module
+  # applies the documented 0644 default at use time) ---
+  - label: mode-undeclared-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+    want:
+      Mode: {declared: false}
+
+  # --- BD-1 CENTERPIECE: a `mode: 0755` delivered over msgpack (a sized uint16)
+  # is now applied as 0755. The legacy `modeConfigToString` switch handled only
+  # int/int64/float64, so the msgpack-sized-int fell through to "" and the module
+  # applied the 0644 default — the reproduced reactor bug. The YAML leg (native
+  # int) already matched legacy and is pinned as parity alongside it. ---
+  - label: mode-0755-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-1
+    input:
+      content: hi
+      mode: 0755
+    want:
+      Mode: "0755"
+  - label: mode-0755-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      mode: 0755
+    want:
+      Mode: "0755"
+
+  # --- BD-1: the special (setuid) bits survive a msgpack sized-int mode too
+  # (0o4755 = 2541 -> uint16); legacy dropped it to 0644 ---
+  - label: mode-setuid-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-1
+    input:
+      content: hi
+      mode: 04755
+    want:
+      Mode: "4755"
+  # --- parity: a setuid octal STRING mode decodes with the special bit ---
+  - label: mode-setuid-string-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      mode: "4755"
+    want:
+      Mode: "4755"
+
+  # --- parity: template as a native bool is a declared TemplateFlag ---
+  - label: template-true-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      template: true
+    want:
+      Template: true
+  - label: template-true-msgpack
+    universe: msgpack
+    id: st
+    input:
+      content: hi
+      template: true
+    want:
+      Template: true
+  # --- parity: the Salt-compat spelling template: "jinja" enables rendering ---
+  - label: template-jinja-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      template: jinja
+    want:
+      Template: true
+  # --- parity: an explicit template:false is a declared-false TemplateFlag ---
+  - label: template-false-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      template: false
+    want:
+      Template: false
+  # --- parity: an omitted template is an UNDECLARED TemplateFlag (rendering off) ---
+  - label: template-undeclared-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+    want:
+      Template: {declared: false}
+
+  # --- BD-2: a CLI template=true (the string "true") now enables rendering. The
+  # legacy `v == "jinja"` string check ignored every other string, leaving
+  # rendering off. YAML/msgpack deliver a native bool (parity above); this pins
+  # the CLI string spelling. ---
+  - label: template-cli-truthy-string
+    universe: cli
+    id: st
+    bd: BD-2
+    input:
+      content: hi
+      template: true
+    want:
+      Template: true
+
+  # --- BD-6: an INTEGER template is rejected with a typed error. TemplateFlag
+  # accepts a bool, "jinja", or a truthy/falsy string but NOT a bare integer, so
+  # a `template: 1` errors at decode (the legacy `v == "jinja"` string check
+  # silently ignored a non-string and left rendering off). Pinned across the
+  # native-int (yaml) and msgpack-sized-int universes; the CLI can only deliver
+  # "1" as a STRING, which IS a truthy string (parity, covered above). ---
+  - label: template-int-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      template: 1
+    want_error: value_invalid
+  - label: template-int-rejected-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      template: 1
+    want_error: value_invalid
+
+  # --- BD-6: a non-truthy, non-"jinja" STRING template (`template: mako`) is
+  # rejected with a typed value error. TemplateFlag accepts a bool, "jinja", or a
+  # truthy/falsy string, so an arbitrary string like "mako" fails parseBoolishString
+  # at decode where the legacy `v == "jinja"` check silently left rendering off
+  # (activated but previously unpinned BD-6 instance, templateflag.go). A string
+  # survives every ingress unchanged, so — UNLIKE the integer case above, where the
+  # CLI delivers a truthy "1" — the CLI delivers the same "mako" and errors too;
+  # pinned across all three universes. ---
+  - label: template-invalid-string-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      template: mako
+    want_error: value_invalid
+  - label: template-invalid-string-rejected-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      template: mako
+    want_error: value_invalid
+  - label: template-invalid-string-rejected-cli
+    universe: cli
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      template: mako
+    want_error: value_invalid
+
+  # --- parity: makedirs as a native bool ---
+  - label: makedirs-true-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      makedirs: true
+    want:
+      MakeDirs: true
+  # --- BD-2: a CLI makedirs=true (the string "true") now applies, where the
+  # legacy .(bool) assertion dropped the string ---
+  - label: makedirs-cli-truthy-string
+    universe: cli
+    id: st
+    bd: BD-2
+    input:
+      content: hi
+      makedirs: true
+    want:
+      MakeDirs: true
+
+  # --- BD-7: a boolean-typed parameter accepts the INTEGERS 1 and 0 (1 -> true,
+  # 0 -> false) and rejects any other integer with a typed error. The legacy
+  # `makedirs, _ = config["makedirs"].(bool)` assertion dropped an int entirely
+  # (silent false). Pinned across yaml (native int) and msgpack (sized int). ---
+  - label: makedirs-int-one-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      content: hi
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-one-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      content: hi
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-zero-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      content: hi
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-zero-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      content: hi
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-invalid-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      content: hi
+      makedirs: 2
+    want_error: value_invalid
+  - label: makedirs-int-invalid-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      content: hi
+      makedirs: 2
+    want_error: value_invalid
+
+  # --- parity: a full realistic config (source + ownership + makedirs) ---
+  - label: full-config-yaml
+    universe: yaml
+    id: st
+    input:
+      path: /etc/nginx/nginx.conf
+      source: /srv/zester/files/nginx.conf
+      mode: "0640"
+      user: root
+      group: root
+      makedirs: true
+    want:
+      Path: /etc/nginx/nginx.conf
+      Source: /srv/zester/files/nginx.conf
+      Mode: "0640"
+      User: root
+      Group: root
+      MakeDirs: true
+
+  # --- parity: context/defaults pass through as map[string]any (YAML and msgpack;
+  # the CLI has no map spelling, so those keys simply do not appear there) ---
+  - label: context-defaults-yaml
+    universe: yaml
+    id: st
+    input:
+      content: hi
+      template: true
+      defaults:
+        worker_count: "4"
+      context:
+        worker_count: "8"
+    want:
+      Defaults:
+        worker_count: "4"
+      Context:
+        worker_count: "8"
+
+  # --- BD-6: a numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      content: hi
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      content: hi
+    want:
+      Path: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+      content: hi
+    want:
+      Path: "123"
+
+  # --- BD-6: a numeric content is coerced to its string form (was silent "") ---
+  - label: numeric-content-coerced-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      name: /f
+      content: 123
+    want:
+      Content: "123"
+
+  # --- BD-6: a composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # --- BD-6: a composite mode is rejected with a typed value error (legacy's
+  # modeConfigToString returned "" and the module silently applied 0644) ---
+  - label: composite-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      mode:
+        - a
+    want_error: value_invalid
+
+  # --- BD-6: a FLOAT mode is rejected at decode with a typed value error. The
+  # legacy modeConfigToString had a `case float64: return "%04o"` arm, so a
+  # YAML `mode: 493.0` was silently %04o-converted (0755) and applied at apply
+  # time; FileMode takes only octal strings/ints, so mode VALIDATION now moves
+  # to decode time. Pinned across yaml (native float) and msgpack (round-tripped
+  # float64). ---
+  - label: float-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      mode: 493.0
+    want_error: value_invalid
+  - label: float-mode-rejected-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      mode: 493.0
+    want_error: value_invalid
+
+  # --- BD-6: an INVALID-OCTAL string mode ("banana") is rejected at DECODE with
+  # a typed value error, where the legacy path carried the raw string through and
+  # only failed later at apply time. A string survives every ingress unchanged,
+  # so it is pinned on yaml and the CLI. ---
+  - label: invalid-octal-string-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      mode: "banana"
+    want_error: value_invalid
+  - label: invalid-octal-string-mode-rejected-cli
+    universe: cli
+    id: st
+    bd: BD-6
+    input:
+      content: hi
+      mode: "banana"
+    want_error: value_invalid

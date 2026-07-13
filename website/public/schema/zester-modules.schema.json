@@ -1,0 +1,3440 @@
+{
+  "$defs": {
+    "modules": {
+      "archive.extracted": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "source": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "source"
+              ]
+            }
+          }
+        ],
+        "description": "Extract a tar or zip archive (from a local path or URL) into a target directory.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "archive_format": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "archive format: tar, zip, or auto (inferred from the source name); defaults to auto"
+            },
+            "if_missing": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "path whose existence means the archive is already extracted; when set, it is the sole idempotency check (besides source_hash)"
+            },
+            "makedirs": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create the target directory (and parents, mode 0755) before extracting; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "target directory the archive is extracted into; defaults to the state ID"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "local file path, or an http/https/ftp URL to the archive; required"
+            },
+            "source_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "declared hash of the source archive (e.g. sha256=<hex>); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "cmd.run": {
+        "description": "Execute a command on the target system and capture its output.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/semanticTypes/StringList",
+              "description": "additional arguments passed to the command; when empty the command runs via the shell (sh -c), when non-empty it is executed directly with these arguments"
+            },
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "command to execute; the name and cmd aliases are accepted (Salt state and execution-module spellings); defaults to the state ID"
+            },
+            "creates": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "a file path that, if it exists, means the command has already run — provides idempotency by skipping execution when the path exists"
+            },
+            "cwd": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "working directory for the command; the dir alias (execution-module spelling) is accepted; defaults to the peel process's working directory"
+            },
+            "env": {
+              "$ref": "#/$defs/semanticTypes/StringMap",
+              "description": "environment variables to set for the command; merged with the peel process's environment"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "cron.absent": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "command": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "command"
+              ]
+            }
+          }
+        ],
+        "description": "Ensure a crontab entry does not exist for a user.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "command line whose crontab entry is removed (required)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "label for the state; defaults to the state ID"
+            },
+            "user": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "user whose crontab is managed; defaults to root"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "cron.present": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "command": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "command"
+              ]
+            }
+          }
+        ],
+        "description": "Ensure a crontab entry exists for a user with the given schedule and command.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "command line to run on the schedule (required)"
+            },
+            "daymonth": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "day-of-month field (1-31 or *); defaults to *"
+            },
+            "dayweek": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "day-of-week field (0-7 or *); defaults to *"
+            },
+            "hour": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "hour field (0-23 or *); defaults to *"
+            },
+            "minute": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "minute field (0-59 or *); defaults to *"
+            },
+            "month": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "month field (1-12 or *); defaults to *"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "identifier comment stamped on the crontab line (its Salt-identifier identity); defaults to the state ID"
+            },
+            "user": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "user whose crontab is managed; defaults to root"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.absent": {
+        "description": "Ensure a file or directory does not exist.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the file or directory to remove (defaults to the state ID)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.append": {
+        "description": "Ensure specific lines are present in a file, appending any that are missing.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target file (defaults to the state ID)"
+            },
+            "text": {
+              "$ref": "#/$defs/semanticTypes/StringList",
+              "description": "lines that must be present in the file; each line is checked independently and only missing lines are appended"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.blockreplace": {
+        "description": "Manage a block of content between marker lines in a file.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "append_if_not_found": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "append (or create) the managed block when the markers are absent; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "append_newline": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "add a trailing newline after an appended block; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "desired content placed between the marker lines"
+            },
+            "marker_end": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "line that ends the managed block"
+            },
+            "marker_start": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "line that starts the managed block"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target file; defaults to the state ID"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.comment": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "regex": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "regex"
+              ]
+            }
+          }
+        ],
+        "description": "Comment out lines matching a regular expression.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "char": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "comment prefix added (file.comment) or stripped (file.uncomment); defaults to #"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID"
+            },
+            "regex": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "Go regular expression matched against the uncommented line content"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.copy": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "source": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "source"
+              ]
+            }
+          }
+        ],
+        "description": "Copy a source file that already exists on the peel to a destination path.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "force": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "makedirs": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "destination path; the path alias is accepted for Salt compatibility (defaults to the state ID)"
+            },
+            "preserve": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "local path (on the peel) to copy from"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.directory": {
+        "description": "Ensure a directory exists with the desired permissions and ownership.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "group": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "directory group name; ownership is left unchanged when unset"
+            },
+            "makedirs": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "accepted for Salt compatibility but has NO effect — parent directories are always created via MkdirAll regardless; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "mode": {
+              "$ref": "#/$defs/semanticTypes/FileMode",
+              "description": "directory permission mode in octal (\"0755\", \"0700\"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target directory (defaults to the state ID)"
+            },
+            "user": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "directory owner username; ownership is left unchanged when unset"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.keyvalue": {
+        "description": "Ensure key/value lines are present in a file, updating values in place.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "entries": {
+              "$ref": "#/$defs/semanticTypes/StringMap",
+              "description": "map of keys to their desired values; unioned with key_values, winning a per-key collision"
+            },
+            "key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "a single key to manage (used with value); merged into the entries map"
+            },
+            "key_values": {
+              "$ref": "#/$defs/semanticTypes/StringMap",
+              "description": "map of keys to their desired values (Salt's key_values); unioned with entries, which wins a per-key collision"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID"
+            },
+            "separator": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "literal token written between key and value; defaults to ="
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "the desired value for key; required when key is set"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.line": {
+        "description": "Ensure, replace, insert, or delete a single line in a file.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "regular expression (or substring); on insert/ensure the new line is placed after the first matching line (takes precedence over before)"
+            },
+            "before": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "regular expression (or substring); on insert/ensure the new line is placed before the first matching line"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "the line content to ensure, replace, insert, or delete"
+            },
+            "match": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "regular expression (or literal substring fallback) identifying the target line; when empty, the exact Content line is matched"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "operation to perform: ensure (default), replace, insert, or delete (absent = delete); case-insensitive"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.managed": {
+        "description": "Ensure a file exists with the desired content, permissions, and ownership.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "content": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "desired inline file content; provide either content or source (source wins if both are set)"
+            },
+            "context": {
+              "description": "extra template variables, available as top-level names; override defaults; only used when template is enabled",
+              "type": "object"
+            },
+            "defaults": {
+              "description": "fallback template variables; context takes precedence; only used when template is enabled",
+              "type": "object"
+            },
+            "group": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "file group name; ownership is left unchanged when unset"
+            },
+            "makedirs": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create missing parent directories (with mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "mode": {
+              "$ref": "#/$defs/semanticTypes/FileMode",
+              "description": "file permission mode in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits honored; defaults to 0644"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "local file path to copy content from; provide either content or source (source wins if both are set)"
+            },
+            "template": {
+              "$ref": "#/$defs/semanticTypes/TemplateFlag",
+              "description": "render source/content as a Jinja2 template before writing (a bool, the string \"jinja\", or a truthy/falsy string); defaults to off"
+            },
+            "user": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "file owner username; ownership is left unchanged when unset"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.recurse": {
+        "description": "Recursively copy a source directory tree to a destination directory.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "clean": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "remove files in the destination that are not present in the source (regular files only; directories are never removed); a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "dir_mode": {
+              "$ref": "#/$defs/semanticTypes/FileMode",
+              "description": "directory permission mode for managed directories (octal); DECLARED-ONLY — undeclared, existing directory modes are left alone (used only as the creation mode for new directories, defaulting to 0755)"
+            },
+            "file_mode": {
+              "$ref": "#/$defs/semanticTypes/FileMode",
+              "description": "permission mode for copied files in octal (\"0644\"); always enforced; defaults to 0644"
+            },
+            "group": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "group name for copied files; ownership is left unchanged when unset"
+            },
+            "makedirs": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create the destination's parent directory chain if it does not exist; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "destination directory path (defaults to the state ID)"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "source directory path to copy from (required at run time)"
+            },
+            "user": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "owner username for copied files; ownership is left unchanged when unset"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.replace": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "pattern": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "pattern"
+              ]
+            }
+          }
+        ],
+        "description": "Regular-expression search-and-replace within a file.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "append_if_not_found": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "when the pattern is not found, append not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*[+-]?[0-9]+\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "maximum number of replacements to perform; 0 (the default) replaces every match"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID"
+            },
+            "not_found_content": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "text used for append_if_not_found/prepend_if_not_found; defaults to repl when empty"
+            },
+            "pattern": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "search regular expression (RE2); anchored per-line (Salt's re.MULTILINE default)"
+            },
+            "prepend_if_not_found": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "when the pattern is not found, prepend not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "repl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "replacement text; $1/${name} backreferences are expanded"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.symlink": {
+        "description": "Ensure a symbolic link exists at a path, pointing to a target.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "force": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "makedirs": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path for the symbolic link (defaults to the state ID)"
+            },
+            "target": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "destination the symlink should point to"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.touch": {
+        "description": "Create an empty file when missing, or update its modification time.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "makedirs": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create missing parent directories (mode 0755) before touching; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the file to touch; the path alias is accepted for Salt compatibility (defaults to the state ID)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "file.uncomment": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "regex": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "regex"
+              ]
+            }
+          }
+        ],
+        "description": "Uncomment lines matching a regular expression.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "char": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "comment prefix added (file.comment) or stripped (file.uncomment); defaults to #"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID"
+            },
+            "regex": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "Go regular expression matched against the uncommented line content"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "git.cloned": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "url": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "url"
+              ]
+            }
+          }
+        ],
+        "description": "Ensure a Git repository is cloned at a target path, optionally pinned to a branch or revision.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "branch or tag to checkout after cloning"
+            },
+            "depth": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*[+-]?[0-9]+\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "shallow clone depth passed to git clone --depth; 0 (the default) means a full clone"
+            },
+            "force": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "reset local changes (git reset --hard HEAD) before checkout; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "filesystem path where the repo should be cloned; defaults to the state ID (contrast with git.latest, whose name/primary is the remote URL)"
+            },
+            "rev": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "specific commit sha (full or abbreviated), tag, or any locally-resolvable rev to check out; takes precedence over branch for comparison"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "remote repository URL; required"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "git.latest": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "target": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "target"
+              ]
+            }
+          }
+        ],
+        "description": "Ensure a Git repository is cloned at a target directory and kept up to date with its remote.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "branch to track; used for git clone --branch, checkout, and the remote-tip comparison"
+            },
+            "force": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "discard local changes: update with git reset --hard (to rev, origin/<branch>, or origin/HEAD) instead of a fast-forward merge; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "remote repository URL; defaults to the state ID (contrast with git.cloned, whose name/primary is the clone path); required if the state ID is also empty"
+            },
+            "rev": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "pin to a specific commit/ref; when set, the up-to-date check is a local HEAD comparison (no network)"
+            },
+            "target": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "filesystem path for the working tree; required"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "group.absent": {
+        "description": "Ensure a group does not exist on the system.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "group name to remove; defaults to the state ID"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "group.present": {
+        "description": "Ensure a group exists with the specified attributes and membership.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "addusers": {
+              "$ref": "#/$defs/semanticTypes/StringList",
+              "description": "users to add without affecting other existing members"
+            },
+            "delusers": {
+              "$ref": "#/$defs/semanticTypes/StringList",
+              "description": "users to remove without affecting other existing members"
+            },
+            "gid": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*[+-]?[0-9]+\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "numeric group ID; only compared and set when non-zero (0 auto-assigns)"
+            },
+            "members": {
+              "$ref": "#/$defs/semanticTypes/StringList",
+              "description": "exact membership list — extra members are removed and missing members are added"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "group name; defaults to the state ID"
+            },
+            "system": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create a system group (low GID range); used only during creation; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "host.absent": {
+        "description": "Ensure a hostname is absent from the hosts file.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "config": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "hosts file path; the path alias is also accepted; defaults to /etc/hosts"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "host name to remove from the hosts file; defaults to the state ID"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "host.present": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "ip": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "ip"
+              ]
+            }
+          }
+        ],
+        "description": "Ensure a hostname maps to an IP address in the hosts file.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "config": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "hosts file path; the path alias is also accepted; defaults to /etc/hosts"
+            },
+            "ip": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "IP address the hostname should map to; required"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "host name to manage; defaults to the state ID"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "locale.present": {
+        "description": "Ensure a locale is enabled in /etc/locale.gen and generated via locale-gen.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "locale string to enable (e.g. en_US.UTF-8); defaults to the state ID"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "module.run": {
+        "description": "Invoke another registered state module by name (Salt-compatibility escape hatch).",
+        "items": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "mount.mounted": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "device": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "device"
+              ]
+            }
+          }
+        ],
+        "description": "Ensure a filesystem is mounted at a mount point and recorded in fstab.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "device": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "device or source to mount (a block device, UUID=/LABEL= alias, or NFS export); required"
+            },
+            "dump": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*[+-]?[0-9]+\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "fstab dump field (fifth column); defaults to 0"
+            },
+            "fstype": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "filesystem type (ext4, xfs, nfs, …); defaults to ext4"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "mount point path; defaults to the state ID"
+            },
+            "opts": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "mount options recorded in fstab (comma-separated); defaults to \"defaults\""
+            },
+            "pass": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*[+-]?[0-9]+\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "fstab fsck pass-order field (sixth column); defaults to 0"
+            },
+            "persist": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "record the entry in fstab so it survives a reboot; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pip.installed": {
+        "description": "Ensure a Python package is installed via pip, optionally pinned or from a requirements file.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "bin": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "path or name of the pip binary to use; defaults to pip3"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "pip package name; defaults to the state ID; ignored when requirements is set"
+            },
+            "requirements": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "path to a requirements.txt file; when set, name is ignored for install"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "optional pinned version (e.g. 1.2.3), appended as package==version"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pkg.installed": {
+        "description": "Ensure a system package is installed, optionally pinned to an exact version.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "package to install (defaults to the state ID)"
+            },
+            "refresh": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "refresh the package cache before installing"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "exact version pin; any other installed version converges via install or downgrade (format depends on the detected package manager)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pkg.latest": {
+        "description": "Ensure a package is installed and kept at the newest available version.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "package to keep at the newest available version (defaults to the state ID)"
+            },
+            "refresh": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "refresh the package cache before Check and before Apply"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pkg.purged": {
+        "description": "Ensure a package is removed along with its configuration files.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "package to purge, including its configuration files (defaults to the state ID)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pkg.removed": {
+        "description": "Ensure a system package is not installed.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "package to remove (defaults to the state ID)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pkgrepo.managed": {
+        "description": "Manage an apt or yum/dnf package repository definition.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "baseurl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "the repository line — on apt the full \"deb ...\" source line, on yum the baseurl= value"
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "the yum enabled= field (1/0), ignored on apt; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "file": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "override the default repository definition file path"
+            },
+            "gpgcheck": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "the yum gpgcheck= field (1/0), ignored on apt; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "humanname": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "descriptive display name (yum name= field / apt comment line); defaults to the repository name"
+            },
+            "key_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "signing-key URL; on apt it is fetched to /etc/apt/keyrings/zester-<name>.gpg and imported via apt-key add, on yum it becomes the gpgkey= field"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "repository identifier, used for the default filename and the yum section header; defaults to the state ID"
+            },
+            "ppa": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "apt PPA reference (e.g. \"ppa:user/name\"); when set and baseurl is empty the repo is added via add-apt-repository, and it forces the Debian code path when the OS family cannot be detected"
+            },
+            "refresh": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "refresh the package cache after writing the repo (apt-get update / <mgr> makecache); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "service.dead": {
+        "description": "Ensure a service is stopped, optionally disabling it at boot.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "enable": {
+              "$ref": "#/$defs/semanticTypes/TriState",
+              "description": "boot-enablement intent: enable:false also disables the unit; unset or true leaves it alone"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "service unit name (defaults to the state ID)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "service.enabled": {
+        "description": "Ensure a service is enabled to start at boot.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "service name to enable at boot; defaults to the state ID"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "service.running": {
+        "description": "Ensure a service is running, optionally managing its boot enablement.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "enable": {
+              "$ref": "#/$defs/semanticTypes/TriState",
+              "description": "boot-enablement intent: unset leaves it alone, true enables, false disables"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "service unit name (defaults to the state ID)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "ssh_auth.absent": {
+        "description": "Ensure an SSH public key is absent from a user's authorized_keys.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "config": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "explicit authorized_keys path; user or config is required (config takes precedence over the user's home)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "public key blob (or full key line) to remove; matched on the blob; defaults to the state ID"
+            },
+            "user": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "account whose authorized_keys is managed; user or config is required"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "ssh_auth.present": {
+        "description": "Ensure an SSH public key is present in a user's authorized_keys.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "comment": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "optional trailing comment on the key line"
+            },
+            "config": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "explicit authorized_keys path; user or config is required (config takes precedence over the user's home)"
+            },
+            "enc": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "key encoding/type (ssh-rsa, ssh-ed25519, …); defaults to ssh-rsa; ignored when name is a full key line"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "public key blob (the base64 body) or a full key line; defaults to the state ID"
+            },
+            "user": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "account whose authorized_keys is managed; user or config is required"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "sysctl.present": {
+        "allOf": [
+          {
+            "contains": {
+              "properties": {
+                "value": {
+                  "not": {
+                    "enum": [
+                      "",
+                      null
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ],
+        "description": "Ensure a kernel parameter is set to a value at runtime and, by default, persisted.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "kernel parameter name (e.g. net.ipv4.ip_forward); defaults to the state ID"
+            },
+            "persist": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "persist the value in a sysctl drop-in so it survives a reboot; defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "desired parameter value; required"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "test.configurable_test_state": {
+        "description": "Result and change reporting fully driven by config.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "changes": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "whether the state reports Changed: true (honored on both success and failure); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "comment": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "message included in the result details and, on failure, the error"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "whether the state succeeds; false makes it fail (with the comment message, or \"configured failure\"); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "test.fail_without_changes": {
+        "description": "Always fails, reporting no changes.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "comment": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "message included in the error and result details; defaults to \"failure without changes\""
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "test.nop": {
+        "description": "A no-op that always succeeds and reports no changes.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "test.ping": {
+        "description": "A simple liveness check that always succeeds.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "test.succeed_with_changes": {
+        "description": "Always succeeds and reports that changes were made.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "comment": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "optional message included in the result details"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "timezone.system": {
+        "description": "Ensure the system timezone is set to a desired value.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "desired timezone (e.g. America/New_York, UTC); defaults to the state ID"
+            },
+            "utc": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "set the hardware clock to UTC (timedatectl set-local-rtc 0); a boolean that also accepts the integers 1 (true) and 0 (false)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "user.absent": {
+        "description": "Ensure a user account does not exist on the system.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "force": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "parsed for Salt compatibility but not yet implemented in the execution layer — currently has no effect; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "username of the account to remove; defaults to the state ID"
+            },
+            "purge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "also remove the user's home directory and mail spool (userdel -r); a boolean that also accepts the integers 1 (true) and 0 (false)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "user.present": {
+        "description": "Ensure a user account exists with the specified attributes.",
+        "items": {
+          "additionalProperties": true,
+          "properties": {
+            "createhome": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create the home directory when creating the account"
+            },
+            "fullname": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "GECOS full-name field; only compared and set when non-empty"
+            },
+            "gid": {
+              "$ref": "#/$defs/semanticTypes/GroupRef",
+              "description": "primary group as a numeric GID or a group name; an integer or all-digit string is a GID, any other string is a group name (taking precedence over primary_group)"
+            },
+            "groups": {
+              "$ref": "#/$defs/semanticTypes/StringList",
+              "description": "supplementary groups the account should belong to"
+            },
+            "home": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "home directory path; only compared and set when non-empty"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "username for the account; defaults to the state ID"
+            },
+            "optional_groups": {
+              "$ref": "#/$defs/semanticTypes/StringList",
+              "description": "supplementary groups added only if the account is already a member (absent groups are skipped, never created)"
+            },
+            "password": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "pre-hashed shadow password; converged by comparing the account's current shadow hash",
+              "writeOnly": true
+            },
+            "primary_group": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "primary group name; used only when gid is not itself a group name"
+            },
+            "remove_groups": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "remove supplementary groups not listed in groups (otherwise existing groups are preserved)"
+            },
+            "shell": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "description": "login shell path; only compared and set when non-empty"
+            },
+            "system": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "create a system account (low UID range)"
+            },
+            "uid": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*[+-]?[0-9]+\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "numeric user ID; only compared and set when non-zero (0 auto-assigns)"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "semanticTypes": {
+      "FileMode": {
+        "anyOf": [
+          {
+            "pattern": "^0*[0-7]{1,4}$",
+            "type": "string"
+          },
+          {
+            "maximum": 4095,
+            "minimum": 0,
+            "type": "integer"
+          }
+        ],
+        "description": "A Unix file-permission mode. Accepts an octal string (\"0644\", \"755\", \"4755\") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored."
+      },
+      "GroupRef": {
+        "description": "A group reference, given as a non-negative integer GID or a group name. An all-digit string is treated as a numeric GID, so \"1000\" and the integer 1000 resolve identically; a negative GID is rejected.",
+        "oneOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "minLength": 1,
+            "type": "string"
+          }
+        ]
+      },
+      "StringList": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        ],
+        "description": "A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped."
+      },
+      "StringMap": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "description": "A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.",
+        "type": "object"
+      },
+      "TemplateFlag": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "pattern": "^\\s*([jJ][iI][nN][jJ][aA]|[tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+            "type": "string"
+          }
+        ],
+        "description": "A template-rendering flag. Accepts a bool, the string \"jinja\", or any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders with Jinja, so any enabling value means \"render with Jinja\"."
+      },
+      "TriState": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+            "type": "string"
+          },
+          {
+            "enum": [
+              0,
+              1
+            ],
+            "type": "integer"
+          }
+        ],
+        "description": "A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell \"not specified\" apart from an explicit false."
+      }
+    }
+  },
+  "$id": "https://zester.cc/schema/zester-modules.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "additionalProperties": true,
+    "minProperties": 1,
+    "properties": {
+      "archive.extracted": {
+        "$ref": "#/$defs/modules/archive.extracted"
+      },
+      "cmd.run": {
+        "$ref": "#/$defs/modules/cmd.run"
+      },
+      "cron.absent": {
+        "$ref": "#/$defs/modules/cron.absent"
+      },
+      "cron.present": {
+        "$ref": "#/$defs/modules/cron.present"
+      },
+      "file.absent": {
+        "$ref": "#/$defs/modules/file.absent"
+      },
+      "file.append": {
+        "$ref": "#/$defs/modules/file.append"
+      },
+      "file.blockreplace": {
+        "$ref": "#/$defs/modules/file.blockreplace"
+      },
+      "file.comment": {
+        "$ref": "#/$defs/modules/file.comment"
+      },
+      "file.copy": {
+        "$ref": "#/$defs/modules/file.copy"
+      },
+      "file.directory": {
+        "$ref": "#/$defs/modules/file.directory"
+      },
+      "file.keyvalue": {
+        "$ref": "#/$defs/modules/file.keyvalue"
+      },
+      "file.line": {
+        "$ref": "#/$defs/modules/file.line"
+      },
+      "file.managed": {
+        "$ref": "#/$defs/modules/file.managed"
+      },
+      "file.recurse": {
+        "$ref": "#/$defs/modules/file.recurse"
+      },
+      "file.replace": {
+        "$ref": "#/$defs/modules/file.replace"
+      },
+      "file.symlink": {
+        "$ref": "#/$defs/modules/file.symlink"
+      },
+      "file.touch": {
+        "$ref": "#/$defs/modules/file.touch"
+      },
+      "file.uncomment": {
+        "$ref": "#/$defs/modules/file.uncomment"
+      },
+      "git.cloned": {
+        "$ref": "#/$defs/modules/git.cloned"
+      },
+      "git.latest": {
+        "$ref": "#/$defs/modules/git.latest"
+      },
+      "group.absent": {
+        "$ref": "#/$defs/modules/group.absent"
+      },
+      "group.present": {
+        "$ref": "#/$defs/modules/group.present"
+      },
+      "host.absent": {
+        "$ref": "#/$defs/modules/host.absent"
+      },
+      "host.present": {
+        "$ref": "#/$defs/modules/host.present"
+      },
+      "locale.present": {
+        "$ref": "#/$defs/modules/locale.present"
+      },
+      "module.run": {
+        "$ref": "#/$defs/modules/module.run"
+      },
+      "mount.mounted": {
+        "$ref": "#/$defs/modules/mount.mounted"
+      },
+      "pip.installed": {
+        "$ref": "#/$defs/modules/pip.installed"
+      },
+      "pkg.installed": {
+        "$ref": "#/$defs/modules/pkg.installed"
+      },
+      "pkg.latest": {
+        "$ref": "#/$defs/modules/pkg.latest"
+      },
+      "pkg.purged": {
+        "$ref": "#/$defs/modules/pkg.purged"
+      },
+      "pkg.removed": {
+        "$ref": "#/$defs/modules/pkg.removed"
+      },
+      "pkgrepo.managed": {
+        "$ref": "#/$defs/modules/pkgrepo.managed"
+      },
+      "service.dead": {
+        "$ref": "#/$defs/modules/service.dead"
+      },
+      "service.enabled": {
+        "$ref": "#/$defs/modules/service.enabled"
+      },
+      "service.running": {
+        "$ref": "#/$defs/modules/service.running"
+      },
+      "ssh_auth.absent": {
+        "$ref": "#/$defs/modules/ssh_auth.absent"
+      },
+      "ssh_auth.present": {
+        "$ref": "#/$defs/modules/ssh_auth.present"
+      },
+      "sysctl.present": {
+        "$ref": "#/$defs/modules/sysctl.present"
+      },
+      "test.configurable_test_state": {
+        "$ref": "#/$defs/modules/test.configurable_test_state"
+      },
+      "test.fail_without_changes": {
+        "$ref": "#/$defs/modules/test.fail_without_changes"
+      },
+      "test.nop": {
+        "$ref": "#/$defs/modules/test.nop"
+      },
+      "test.ping": {
+        "$ref": "#/$defs/modules/test.ping"
+      },
+      "test.succeed_with_changes": {
+        "$ref": "#/$defs/modules/test.succeed_with_changes"
+      },
+      "timezone.system": {
+        "$ref": "#/$defs/modules/timezone.system"
+      },
+      "user.absent": {
+        "$ref": "#/$defs/modules/user.absent"
+      },
+      "user.present": {
+        "$ref": "#/$defs/modules/user.present"
+      }
+    },
+    "type": "object"
+  },
+  "description": "A Zester state file (state ID -> module name(s) -> parameter list), generated from each module's self-documenting schema (keystone spec). Known limitation (inexpressible in JSON Schema): when the same parameter key appears in MULTIPLE list items, the runtime merges last-occurrence-wins — the schema validates each item independently and cannot see the merge order, so the decoder is the final authority for duplicated keys.",
+  "properties": {
+    "extend": {
+      "type": "object"
+    },
+    "include": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "title": "Zester module parameters",
+  "type": "object"
+}

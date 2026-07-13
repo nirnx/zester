@@ -7,6 +7,9 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testPipMctx(fakeCmd *exectest.FakeCommandExec) *exec.ModuleContext {
@@ -21,7 +24,7 @@ func testPipMctx(fakeCmd *exectest.FakeCommandExec) *exec.ModuleContext {
 
 func TestPipInstalledName(t *testing.T) {
 	mctx := testPipMctx(exectest.NewFakeCommandExec())
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("requests", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +36,7 @@ func TestPipInstalledName(t *testing.T) {
 
 func TestPipInstalledPrimaryParamDefault(t *testing.T) {
 	mctx := testPipMctx(exectest.NewFakeCommandExec())
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("requests", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +52,7 @@ func TestPipInstalledPrimaryParamDefault(t *testing.T) {
 
 func TestPipInstalledRequisites(t *testing.T) {
 	mctx := testPipMctx(exectest.NewFakeCommandExec())
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("requests", map[string]any{
 		"require":   []any{"pkg.installed:python3"},
 		"onchanges": []any{"cmd.run:update-pip"},
@@ -73,7 +76,7 @@ func TestPipInstalledCheckAlreadyInstalled(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := testPipMctx(fakeCmd)
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("requests", map[string]any{})
 	if err != nil {
@@ -96,7 +99,7 @@ func TestPipInstalledCheckVersionMismatch(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := testPipMctx(fakeCmd)
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("requests", map[string]any{"version": "2.28.0"})
 	if err != nil {
@@ -116,7 +119,7 @@ func TestPipInstalledCheckNotInstalled(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetError("pip3", errors.New("package not found"))
 	mctx := testPipMctx(fakeCmd)
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("requests", map[string]any{})
 	if err != nil {
@@ -135,7 +138,7 @@ func TestPipInstalledCheckNotInstalled(t *testing.T) {
 func TestPipInstalledApply(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPipMctx(fakeCmd)
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("requests", map[string]any{})
 	if err != nil {
@@ -168,7 +171,7 @@ func TestPipInstalledApply(t *testing.T) {
 func TestPipInstalledApplyWithVersion(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPipMctx(fakeCmd)
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("requests", map[string]any{"version": "2.28.0"})
 	if err != nil {
@@ -199,7 +202,7 @@ func TestPipInstalledApplyError(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetError("pip3", errors.New("permission denied"))
 	mctx := testPipMctx(fakeCmd)
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("requests", map[string]any{})
 	if err != nil {
@@ -215,7 +218,7 @@ func TestPipInstalledApplyError(t *testing.T) {
 func TestPipInstalledRevert(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPipMctx(fakeCmd)
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("requests", map[string]any{})
 	if err != nil {
@@ -242,7 +245,7 @@ func TestPipInstalledRevert(t *testing.T) {
 func TestPipInstalledRevert_Requirements(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPipMctx(fakeCmd)
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("myapp", map[string]any{"requirements": "/app/requirements.txt"})
 	if err != nil {
@@ -264,9 +267,28 @@ func TestPipInstalledNoProvider(t *testing.T) {
 			File: exectest.NewFakeFileExec(),
 		},
 	}
-	builder := NewPipInstalledBuilder(mctx)
+	builder := NewPipInstalledBuilder(mctx, modschema.DecodeOptions{})
 	_, err := builder("requests", map[string]any{})
 	if err == nil {
 		t.Error("expected error when no command provider is set")
 	}
+}
+
+var _ state.State = (*PipInstalled)(nil)
+
+// TestPipInstalledContract replays the permanent differential contract
+// fixtures against the migrated pip.installed decoder. The cases were
+// approved by the legacy-vs-new equivalence comparison while the legacy
+// constructor still existed (see the migration changelog); after its deletion
+// this replay is the permanent regression guard for pip.installed's decode
+// behavior, including the flagged BD-6 divergence.
+func TestPipInstalledContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var p PipInstalled
+		if _, err := pipInstalledSpec.Decode(id, config, &p, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &p, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/pip.installed.yaml")
 }

@@ -1,0 +1,383 @@
+module: file.keyvalue
+# Permanent differential contract for the file.keyvalue migration. These cases
+# were approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accepting cases
+# pin the decoded Path/Separator/KeyValues/EntriesInput/Key/Value/Entries
+# projection — KeyValues/EntriesInput/Entries (all paramtypes.StringMap) are
+# compared value-by-value in string form (the schematest StringMap matcher, added
+# with this wave as the type's first migrated consumer); rejecting cases pin the
+# error kind. `key_values` and `entries` are TWO SEPARATE parameters (NOT a
+# name-wins alias): both maps are unioned, `entries` winning a per-key collision
+# (legacy merge order), and the single key/value pair overrides both for its key —
+# the merged result is the untagged `Entries` runtime field. The single key/value
+# pair keeps its legacy module-local injection (spec-sanctioned): `key` requires a
+# present, non-nil `value`, and an all-empty config is "no entries". `separator`
+# has an eager default of "=". A StringMap has no faithful CLI spelling, so the
+# map cases are yaml/msgpack only. BD-tagged cases pin the flagged behavioral
+# differences:
+#   BD-5 (PENDING sign-off) — a COMPOSITE key_values value (a nested map/list)
+#   is rejected with a typed value_invalid error, where the legacy
+#   fmt.Sprintf("%v", v) sprint'd it into Go syntax. A scalar value is unchanged
+#   (rendered to its string form by both).
+#   BD-6 (APPROVED) — a wrong-typed `name` is coerced (scalar) or rejected
+#   (composite) instead of silently falling back to the state ID; and the
+#   `.(string)`-decoded non-primary string params (separator/key) now sprint a
+#   numeric scalar to their string form, where the legacy `.(string)` assertion
+#   silently zeroed them — for `key` this is a reject-to-accept flip (legacy
+#   `key: 5` failed the `.(string)` assertion, dropped the entry, and hit the
+#   "no entries" error). A SCALAR single `value` is NOT in this coercion set: the
+#   legacy constructor already sprint'd a scalar (`fmt.Sprintf("%v", v)`), so a
+#   numeric single `value` is PARITY (pinned by the `key-value-*` cases above). A
+#   COMPOSITE single `value` (a nested map/list) IS a BD-6 rejection: the legacy
+#   Sprintf wrote Go-syntax garbage into the file, where the `value` string field
+#   now rejects it with a typed wrong_type error at decode (pinned by the
+#   `composite-single-value-rejected-*` cases).
+cases:
+  # --- parity: key_values map (yaml/msgpack; no CLI spelling for a map) ---
+  - label: key-values-map-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/os-release
+      key_values:
+        A: "1"
+        B: "2"
+    want:
+      Path: /etc/os-release
+      Separator: "="
+      KeyValues:
+        A: "1"
+        B: "2"
+  - label: key-values-map-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/os-release
+      key_values:
+        A: "1"
+        B: "2"
+    want:
+      KeyValues:
+        A: "1"
+        B: "2"
+
+  # --- parity: a scalar value is rendered to its string form (both legacy and
+  # decoded) ---
+  - label: key-values-scalar-value-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/sysctl.conf
+      key_values:
+        net.ipv4.ip_forward: 1
+    want:
+      KeyValues:
+        net.ipv4.ip_forward: "1"
+
+  # --- parity: `entries` is a SEPARATE param (not an alias of key_values); it
+  # populates EntriesInput and the merged Entries map ---
+  - label: entries-param-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/env
+      entries:
+        X: y
+    want:
+      EntriesInput:
+        X: y
+      Entries:
+        X: y
+
+  # --- parity: key_values and entries are UNIONED when both are supplied (they
+  # are separate params, not a name-wins alias — the alias would have dropped
+  # entries entirely). Legacy merged both maps. ---
+  - label: key-values-and-entries-union-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      key_values:
+        A: "1"
+        B: "2"
+      entries:
+        C: "3"
+    want:
+      Entries:
+        A: "1"
+        B: "2"
+        C: "3"
+  - label: key-values-and-entries-union-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/x
+      key_values:
+        A: "1"
+        B: "2"
+      entries:
+        C: "3"
+    want:
+      Entries:
+        A: "1"
+        B: "2"
+        C: "3"
+
+  # --- parity: on a per-key collision the entries value WINS (it merges after
+  # key_values — the legacy order). ---
+  - label: key-values-entries-collision-entries-wins-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      key_values:
+        A: kv
+        B: kv
+      entries:
+        B: entries
+    want:
+      Entries:
+        A: kv
+        B: entries
+  - label: key-values-entries-collision-entries-wins-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/x
+      key_values:
+        A: kv
+        B: kv
+      entries:
+        B: entries
+    want:
+      Entries:
+        A: kv
+        B: entries
+
+  # --- parity: single key/value form across all three universes ---
+  - label: key-value-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/os-release
+      key: NAME
+      value: 1
+      separator: ": "
+    want:
+      Path: /etc/os-release
+      Separator: ": "
+      Key: NAME
+      Value: "1"
+  - label: key-value-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /etc/os-release
+      key: NAME
+      value: 1
+    want:
+      Key: NAME
+      Value: "1"
+  - label: key-value-cli
+    universe: cli
+    id: web
+    input:
+      name: /etc/os-release
+      key: NAME
+      value: Zester
+    want:
+      Key: NAME
+      Value: Zester
+
+  # --- parity: separator defaults to = when absent ---
+  - label: separator-default-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      key: A
+      value: "1"
+    want:
+      Separator: "="
+
+  # --- parity: the `path` alias supplies the primary when `name` is absent ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: web
+    input:
+      path: /etc/x
+      key: A
+      value: "1"
+    want:
+      Path: /etc/x
+  # --- parity: primary fallback / empty-name / nil-name ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /etc/x
+    input:
+      key: A
+      value: "1"
+    want:
+      Path: /etc/x
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /etc/x
+    input:
+      name:
+      key: A
+      value: "1"
+    want:
+      Path: /etc/x
+
+  # --- parity: key requires a value (legacy and decoded both reject) ---
+  - label: key-without-value-rejected-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+      key: A
+    want_error: key_requires_value
+  # --- parity: an all-empty config is "no entries" (both reject) ---
+  - label: no-entries-rejected-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /etc/x
+    want_error: no_entries
+
+  # --- BD-5 (PENDING): a COMPOSITE key_values value is rejected with a typed
+  # error, where legacy sprint'd it. No CLI spelling for a nested map. ---
+  - label: composite-value-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/x
+      key_values:
+        A:
+          nested: v
+    want_error: value_invalid
+  - label: composite-value-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-5
+    input:
+      name: /etc/x
+      key_values:
+        A:
+          nested: v
+    want_error: value_invalid
+
+  # --- BD-6: numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      key: A
+      value: "1"
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      key: A
+      value: "1"
+    want:
+      Path: "123"
+
+  # --- BD-6: composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      key: A
+      value: "1"
+    want_error: wrong_type
+
+  # --- BD-6: `separator` sprints a numeric scalar to its string form, where the
+  # legacy `.(string)` assertion silently zeroed it (falling to the "=" default).
+  # Pinned across yaml (native int) and msgpack (sized int). ---
+  - label: numeric-separator-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      key: A
+      value: "1"
+      separator: 5
+    want:
+      Separator: "5"
+  - label: numeric-separator-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      key: A
+      value: "1"
+      separator: 5
+    want:
+      Separator: "5"
+
+  # --- BD-6: `key` sprints a numeric scalar to its string form — a
+  # reject-to-accept flip (legacy `key: 5` failed the `.(string)` assertion,
+  # dropped the entry, and hit the "no entries" error). Pinned across yaml
+  # (native int) and msgpack (sized int). ---
+  - label: numeric-key-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      key: 5
+      value: "1"
+    want:
+      Key: "5"
+  - label: numeric-key-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      key: 5
+      value: "1"
+    want:
+      Key: "5"
+
+  # --- BD-6: a COMPOSITE single `value` (a nested map/list, with `key` set) is
+  # rejected with a typed wrong_type error at DECODE (the `value` string field
+  # cannot coerce a composite), where the legacy constructor sprint'd it
+  # (`fmt.Sprintf("%v", value)`) into Go-syntax garbage and wrote that into the
+  # file. A SCALAR single `value` stays parity (pinned by the `key-value-*` cases
+  # above); only the composite arm diverges. No CLI spelling for a nested map. ---
+  - label: composite-single-value-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      key: A
+      value:
+        a: 1
+    want_error: wrong_type
+  - label: composite-single-value-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: /etc/x
+      key: A
+      value:
+        a: 1
+    want_error: wrong_type

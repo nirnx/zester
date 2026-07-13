@@ -7,6 +7,7 @@ import (
 	"io/fs"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -17,24 +18,33 @@ const fsModeDefault fs.FileMode = 0644
 // FileCopy implements the file.copy state.
 // It copies a source file to a destination path. Modeled after Salt's
 // file.copy module.
+//
+// FileCopy is also its own schema proto: the tagged exported fields ARE the
+// module's parameter declaration (one schema declaration per module). Path is
+// declared `name,primary,aliases=path` (the file_managed.go alias tag is the
+// exemplar — `path` is accepted for Salt compatibility, matching the legacy
+// fsxResolvePath helper); Source is `required` (a missing/empty source is a
+// typed MissingRequired error, matching the legacy explicit check). The
+// unexported runtime fields are untagged, so the schema compiler skips them.
 type FileCopy struct {
 	id   string
 	reqs state.Requisites
 
-	// Path is the destination path.
-	Path string
+	// Path is the destination path; it defaults to the state ID. The path
+	// alias is accepted for Salt compatibility.
+	Path string `zester:"name,primary,aliases=path" usage:"destination path; the path alias is accepted for Salt compatibility (defaults to the state ID)"`
 
 	// Source is the file to copy from.
-	Source string
+	Source string `zester:"source,required" usage:"local path (on the peel) to copy from"`
 
 	// Force overwrites the destination when it already exists.
-	Force bool
+	Force bool `zester:"force" usage:"overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
 	// Preserve copies the source file's permission mode to the destination.
-	Preserve bool
+	Preserve bool `zester:"preserve" usage:"copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
 	// MakeDirs creates parent directories of the destination if needed.
-	MakeDirs bool
+	MakeDirs bool `zester:"makedirs" usage:"create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
 	file exec.FileExec
 
@@ -47,32 +57,90 @@ type FileCopy struct {
 	wasCreated bool
 }
 
+// fileCopySpec is the compiled schema + documentation for file.copy. It is
+// compiled once at package init and executed by every decode path (the
+// builder below, and Registry.Parse). The prose is verified against the live
+// Check/Apply/Revert code.
+var fileCopySpec = mustSpec("file.copy", modschema.KindState, FileCopy{}, modschema.Doc{
+	Summary: "Copy a source file that already exists on the peel to a destination path.",
+	Description: "`file.copy` copies `source` (a path local to the peel) to the destination. The " +
+		"destination path defaults to the state ID; `path` is accepted as an alias. Without `force`, " +
+		"an existing destination is left untouched (the copy is a one-time seed); with `force`, the " +
+		"destination is kept in sync with the source by content hash.",
+	Effects: modschema.Effects{
+		Check: "Reads the source — a missing source is an error, not a reported diff. If the " +
+			"destination does not exist, a change is needed. If the destination exists and `force` is " +
+			"not set, no change is needed (the existing file wins). With `force`, source and " +
+			"destination contents are compared by SHA-256 hash; a difference needs a change, and, " +
+			"only when `preserve` is also set, a permission-mode difference needs a change too.",
+		Apply: "Reads the source file. If the destination exists and `force` is not set, Apply is a " +
+			"no-op. With `force` on an existing destination, the current content is captured for " +
+			"revert (a non-not-exist read error fails the apply rather than overwriting content it " +
+			"could not capture) before it is overwritten. Creates missing parent directories when " +
+			"`makedirs` is set, then writes the destination with mode 0644, or the source's " +
+			"permission mode (via an explicit chmod) when `preserve` is set. Reports the byte count " +
+			"in its details.",
+		Revert: "Restores what this run's Apply changed: a destination that pre-existed (and was " +
+			"overwritten under `force`) is rewritten with its captured prior content; a destination " +
+			"this instance created is removed (tolerating an already-missing file). A fresh instance " +
+			"(a standalone revert) recorded nothing and is an explicit clean no-op.",
+	},
+	Examples: []modschema.Example{
+		{
+			Title:       "Back up a config file before editing it",
+			Kind:        "state",
+			Explanation: "A one-time seed copy: without force, the backup is created once and never overwritten.",
+			Code:        "/etc/nginx/nginx.conf.bak:\n  file.copy:\n    - source: /etc/nginx/nginx.conf\n",
+		},
+		{
+			Title:       "Deploy from a staging area, keeping it in sync",
+			Kind:        "state",
+			Explanation: "force keeps the destination synced to the source; preserve copies the source's permission mode; makedirs creates missing parent directories.",
+			Code: "/opt/app/config.yaml:\n  file.copy:\n    - source: /opt/staging/config.yaml\n" +
+				"    - force: true\n    - preserve: true\n    - makedirs: true\n",
+		},
+		{
+			Title:       "Copy a file ad hoc",
+			Kind:        "cli",
+			Explanation: "The bare positional argument is the destination path; source is a key=value arg.",
+			Code:        "zester 'web-01' file.copy /etc/nginx/nginx.conf.bak source=/etc/nginx/nginx.conf",
+		},
+	},
+	Notes: []modschema.Note{
+		{
+			Title: "Only regular files are copied",
+			Body:  "Salt's recursive directory copy (`subdir`), `user`/`group` ownership, and `mode` parameters are not supported.",
+		},
+		{
+			Title: "Ownership is not preserved",
+			Body:  "Only the permission mode is copied, and only when `preserve` is set.",
+		},
+	},
+	Divergences: []string{"BD-2", "BD-6", "BD-7"},
+	SeeAlso:     []string{"file.managed", "file.touch"},
+})
+
 // NewFileCopyBuilder returns a state.Builder that creates FileCopy states.
-func NewFileCopyBuilder(mctx *exec.ModuleContext) state.Builder {
+// Decode policy (unknown-key handling, reserved keys) is threaded via opts;
+// the peel supplies it through modules.RegisterAll.
+func NewFileCopyBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions) state.Builder {
 	return func(id string, config map[string]any) (state.State, error) {
 		if mctx.File == nil {
 			return nil, fmt.Errorf("file.copy: no file provider available")
 		}
-		return newFileCopy(id, config, mctx.File)
+		// Decode the typed parameters first. Decode is transactional and commits
+		// by replacing the whole struct, so the injected provider, id, and
+		// requisites MUST be assigned AFTER it — assigning them before would be
+		// overwritten by the committed scratch value.
+		f := &FileCopy{}
+		if _, err := fileCopySpec.Decode(id, config, f, opts); err != nil {
+			return nil, fmt.Errorf("file.copy: %w", err)
+		}
+		f.id = id
+		f.file = mctx.File
+		f.reqs = state.ParseRequisites(config)
+		return f, nil
 	}
-}
-
-func newFileCopy(id string, config map[string]any, file exec.FileExec) (state.State, error) {
-	f := &FileCopy{id: id, file: file}
-
-	f.Path = fsxResolvePath(config, id)
-	f.Source, _ = config["source"].(string)
-	f.Force, _ = config["force"].(bool)
-	f.Preserve, _ = config["preserve"].(bool)
-	f.MakeDirs, _ = config["makedirs"].(bool)
-
-	if f.Source == "" {
-		return nil, fmt.Errorf("file.copy: source is required")
-	}
-
-	f.reqs = state.ParseRequisites(config)
-
-	return f, nil
 }
 
 func (f *FileCopy) Name() string           { return "file.copy:" + f.id }

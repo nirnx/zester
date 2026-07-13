@@ -11,6 +11,7 @@ import (
 	"github.com/nirnx/zester/pkg/execmod"
 	"github.com/nirnx/zester/pkg/facts"
 	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/proto"
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/state/modules"
@@ -30,7 +31,8 @@ func newTestAgent(t *testing.T) *Agent {
 	a.ps = bustest.NewFakePubSub()
 	a.execReg = execmod.DefaultRegistry()
 	a.registry = state.NewRegistry()
-	a.registry.Register("test.ping", modules.NewTestPing)
+	a.registry.Register("test.ping", modules.NewTestPingBuilder(modschema.DecodeOptions{}))
+	a.wireDocSource() // registers sys.doc + merged sys.list_functions on execReg
 	a.runner = state.NewRunner(discardLogger())
 
 	js := bustest.NewFakeJS()
@@ -49,16 +51,20 @@ func newTestAgent(t *testing.T) *Agent {
 
 // TestReadOnlyModuleClassification pins the exact read-only set: facts.*
 // EXCEPT the mutating facts.set (C7), settings.*/pillar.*, test.ping,
-// sys.list_functions, grains.* — and nothing else.
+// sys.list_functions, sys.doc, grains.* — and nothing else. The
+// facts./settings./pillar. classification is now derived from the shared
+// modules.DispatchSpecials table (IsReadOnlyDispatch).
 func TestReadOnlyModuleClassification(t *testing.T) {
 	a := newTestAgent(t)
 
 	readOnly := []string{
 		"facts.get", "facts.items", "facts.keys",
+		"facts.bogus_query", // unknown facts subfunction still routes read-only (family catch-all)
 		"settings.get", "settings.items", "settings.keys",
 		"pillar.get", "pillar.items",
 		"test.ping",
 		"sys.list_functions",
+		"sys.doc",
 		"grains.item", "grains.items",
 	}
 	for _, m := range readOnly {
@@ -85,7 +91,7 @@ func TestReadOnlyModuleClassification(t *testing.T) {
 	// A state module shadowing an exec-registry name must keep precedence:
 	// grains.items overridden by a (Starlark) state module leaves the
 	// read-only fast path.
-	a.registry.Register("grains.items", modules.NewTestPing)
+	a.registry.Register("grains.items", modules.NewTestPingBuilder(modschema.DecodeOptions{}))
 	if a.readOnlyModule("grains.items") {
 		t.Error("readOnlyModule(grains.items) = true after state module shadowed it")
 	}
@@ -288,9 +294,10 @@ func TestHandleExecRequestDuplicateJobRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Worker drains the queue synchronously for the test.
-	workerCtx, stopWorker := context.WithCancel(context.Background())
-	defer stopWorker()
+	// Worker drains the queue synchronously for the test. t.Context() is
+	// canceled automatically at test cleanup, standing in for the explicit
+	// WithCancel/defer pair (stopWorker was never called early, only deferred).
+	workerCtx := t.Context()
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)

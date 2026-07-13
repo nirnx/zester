@@ -8,6 +8,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -28,7 +30,7 @@ func testPkgPurgedMctx(fakePkg *exectest.FakePackageExec, fakeCmd *exectest.Fake
 
 func TestPkgPurgedName(t *testing.T) {
 	mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +42,7 @@ func TestPkgPurgedName(t *testing.T) {
 
 func TestPkgPurgedPrimaryParamDefault(t *testing.T) {
 	mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("remove-it", map[string]any{"name": "wget"})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +55,7 @@ func TestPkgPurgedPrimaryParamDefault(t *testing.T) {
 
 func TestPkgPurgedRequisites(t *testing.T) {
 	mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), exectest.NewFakeCommandExec(), "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"cmd.run:stop"},
 		"watch":     []any{"file.managed:/etc/conf"},
@@ -102,7 +104,7 @@ func TestPkgPurgedCheckDebianStatuses(t *testing.T) {
 			fakeCmd := exectest.NewFakeCommandExec()
 			fakeCmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: tc.stdout, ExitCode: tc.exit}, tc.err)
 			mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), fakeCmd, "debian")
-			builder := NewPkgPurgedBuilder(mctx)
+			builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 			s, err := builder("nginx", map[string]any{})
 			if err != nil {
 				t.Fatal(err)
@@ -124,7 +126,7 @@ func TestPkgPurgedCheckProbeSpawnFailureErrors(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetResult("dpkg-query", nil, errors.New("fork failed"))
 	mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), fakeCmd, "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +149,7 @@ func TestPkgPurgedCheckRedhat(t *testing.T) {
 			fakeCmd := exectest.NewFakeCommandExec()
 			fakeCmd.SetResult("rpm", tc.res, tc.err)
 			mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("dnf"), fakeCmd, "redhat")
-			builder := NewPkgPurgedBuilder(mctx)
+			builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 			s, err := builder("httpd", map[string]any{})
 			if err != nil {
 				t.Fatal(err)
@@ -170,7 +172,7 @@ func TestPkgPurgedRcStateConvergence(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: "config-files\n", ExitCode: 0}, nil)
 	mctx := testPkgPurgedMctx(exectest.NewFakePackageExec("apt"), fakeCmd, "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +215,7 @@ func TestPkgPurgedDarwinProviderFallback(t *testing.T) {
 	// residual-config concept there), mirroring Apply's provider fallback.
 	fakePkg := exectest.NewFakePackageExec("brew")
 	mctx := testPkgPurgedMctx(fakePkg, exectest.NewFakeCommandExec(), "darwin")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("wget", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +243,7 @@ func TestPkgPurgedApplyDebian(t *testing.T) {
 	fakePkg.PreInstall("nginx", "")
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgPurgedMctx(fakePkg, fakeCmd, "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +272,7 @@ func TestPkgPurgedApplyRedhat(t *testing.T) {
 	fakePkg.PreInstall("httpd", "")
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgPurgedMctx(fakePkg, fakeCmd, "redhat")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("httpd", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +295,7 @@ func TestPkgPurgedApplyError(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetError("apt-get", errors.New("dpkg locked"))
 	mctx := testPkgPurgedMctx(fakePkg, fakeCmd, "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +312,7 @@ func TestPkgPurgedRevertFreshInstanceCleanNoOp(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testPkgPurgedMctx(fakePkg, fakeCmd, "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -341,7 +343,7 @@ func TestPkgPurgedRevertAfterApplySameInstanceStillNoOp(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetResult("dpkg-query", &exec.CommandResult{Stdout: "config-files\n", ExitCode: 0}, nil)
 	mctx := testPkgPurgedMctx(fakePkg, fakeCmd, "debian")
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -368,10 +370,29 @@ func TestPkgPurgedRevertAfterApplySameInstanceStillNoOp(t *testing.T) {
 
 func TestPkgPurgedNoCommandProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Package: exectest.NewFakePackageExec("apt")}}
-	builder := NewPkgPurgedBuilder(mctx)
+	builder := NewPkgPurgedBuilder(mctx, modschema.DecodeOptions{})
 	if _, err := builder("nginx", map[string]any{}); err == nil {
 		t.Error("expected error when no command provider is set")
 	}
 }
 
 var _ state.State = (*PkgPurged)(nil)
+
+// TestPkgPurgedContract replays the permanent differential contract fixtures
+// against the migrated spec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after the legacy constructor's
+// deletion this replay is the permanent regression guard for pkg.purged's
+// decode behavior — including the flagged BD-6 divergence (a non-string
+// `name` is now coerced, or rejected for composites, instead of silently
+// falling back to the state ID).
+func TestPkgPurgedContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var p PkgPurged
+		if _, err := pkgPurgedSpec.Decode(id, config, &p, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &p, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/pkg.purged.yaml")
+}

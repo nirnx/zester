@@ -51,6 +51,7 @@
     "test-ping",
     "test-helpers",
     "query",
-    "starlark"
+    "starlark",
+    "developing"
   ]
 }

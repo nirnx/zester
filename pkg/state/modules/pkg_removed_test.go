@@ -8,6 +8,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -21,7 +23,7 @@ func testPkgRemovedMctx(fakePkg *exectest.FakePackageExec) *exec.ModuleContext {
 
 func TestPkgRemovedName(t *testing.T) {
 	mctx := testPkgRemovedMctx(exectest.NewFakePackageExec("apt"))
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +35,7 @@ func TestPkgRemovedName(t *testing.T) {
 
 func TestPkgRemovedPrimaryParamDefault(t *testing.T) {
 	mctx := testPkgRemovedMctx(exectest.NewFakePackageExec("apt"))
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("curl", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +48,7 @@ func TestPkgRemovedPrimaryParamDefault(t *testing.T) {
 
 func TestPkgRemovedNameFromConfig(t *testing.T) {
 	mctx := testPkgRemovedMctx(exectest.NewFakePackageExec("apt"))
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("remove-old-pkg", map[string]any{"name": "wget"})
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +61,7 @@ func TestPkgRemovedNameFromConfig(t *testing.T) {
 
 func TestPkgRemovedRequisites(t *testing.T) {
 	mctx := testPkgRemovedMctx(exectest.NewFakePackageExec("apt"))
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"cmd.run:stop"},
 		"watch":     []any{"file.managed:/etc/conf"},
@@ -87,7 +89,7 @@ func TestPkgRemovedRequisites(t *testing.T) {
 func TestPkgRemovedCheckNotInstalled(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	mctx := testPkgRemovedMctx(fakePkg)
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +108,7 @@ func TestPkgRemovedCheckInstalled(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "")
 	mctx := testPkgRemovedMctx(fakePkg)
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +127,7 @@ func TestPkgRemovedApply(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "")
 	mctx := testPkgRemovedMctx(fakePkg)
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +157,7 @@ func TestPkgRemovedApplyError(t *testing.T) {
 	fakePkg.PreInstall("nginx", "")
 	fakePkg.RemoveErr = fmt.Errorf("permission denied")
 	mctx := testPkgRemovedMctx(fakePkg)
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +176,7 @@ func TestPkgRemovedApplyError(t *testing.T) {
 func TestPkgRemovedRevertFreshInstanceIsCleanNoOp(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	mctx := testPkgRemovedMctx(fakePkg)
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +203,7 @@ func TestPkgRemovedRevertAfterApplyIsCleanNoOp(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "1.20.1-1")
 	mctx := testPkgRemovedMctx(fakePkg)
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +231,7 @@ func TestPkgRemovedConvergesAfterApply(t *testing.T) {
 	fakePkg := exectest.NewFakePackageExec("apt")
 	fakePkg.PreInstall("nginx", "1.20.1-1")
 	mctx := testPkgRemovedMctx(fakePkg)
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +269,7 @@ func TestPkgRemovedCheckConvergesOnDebianRcState(t *testing.T) {
 			Command: fakeCmd,
 		},
 	}
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("nginx", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +286,7 @@ func TestPkgRemovedCheckConvergesOnDebianRcState(t *testing.T) {
 
 func TestPkgRemovedNilProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Package: nil}}
-	builder := NewPkgRemovedBuilder(mctx)
+	builder := NewPkgRemovedBuilder(mctx, modschema.DecodeOptions{})
 	_, err := builder("nginx", map[string]any{})
 	if err == nil {
 		t.Error("expected error when package provider is nil")
@@ -292,3 +294,21 @@ func TestPkgRemovedNilProvider(t *testing.T) {
 }
 
 var _ state.State = (*PkgRemoved)(nil)
+
+// TestPkgRemovedContract replays the permanent differential contract fixtures
+// against the migrated spec decoder. The cases were approved by the legacy-vs-new
+// equivalence comparison while the legacy constructor still existed (see the
+// migration changelog); after the legacy constructor's deletion this replay is
+// the permanent regression guard for pkg.removed's decode behavior — including
+// the flagged BD-6 divergence (a non-string `name` is now coerced, or rejected
+// for composites, instead of silently falling back to the state ID).
+func TestPkgRemovedContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var p PkgRemoved
+		if _, err := pkgRemovedSpec.Decode(id, config, &p, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &p, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/pkg.removed.yaml")
+}

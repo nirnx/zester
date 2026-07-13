@@ -9,6 +9,8 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -22,7 +24,7 @@ func testFileAppendMctx() *exec.ModuleContext {
 
 func TestFileAppendName(t *testing.T) {
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/hosts", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +36,7 @@ func TestFileAppendName(t *testing.T) {
 
 func TestFileAppendPrimaryParamDefault(t *testing.T) {
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/etc/resolv.conf", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +49,7 @@ func TestFileAppendPrimaryParamDefault(t *testing.T) {
 
 func TestFileAppendRequisites(t *testing.T) {
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("test", map[string]any{
 		"require":   []any{"pkg.installed:bind"},
 		"watch":     []any{"file.managed:/etc/named.conf"},
@@ -77,7 +79,7 @@ func TestFileAppendCheckFileNotExists(t *testing.T) {
 	filePath := filepath.Join(tmp, "newfile.conf")
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"line1", "line2"},
 	})
@@ -102,7 +104,7 @@ func TestFileAppendCheckAllLinesPresent(t *testing.T) {
 	}
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"line1", "line2"},
 	})
@@ -127,7 +129,7 @@ func TestFileAppendCheckSomeLinesMissing(t *testing.T) {
 	}
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"line1", "line2"},
 	})
@@ -152,7 +154,7 @@ func TestFileAppendApplyToExistingFile(t *testing.T) {
 	}
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"new-line"},
 	})
@@ -183,7 +185,7 @@ func TestFileAppendApplyCreatesNewFile(t *testing.T) {
 	filePath := filepath.Join(tmp, "brand-new.conf")
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"first-line", "second-line"},
 	})
@@ -217,7 +219,7 @@ func TestFileAppendApplyIdempotent(t *testing.T) {
 	}
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 
 	// First apply: appends line2.
 	s1, err := builder(filePath, map[string]any{
@@ -259,7 +261,7 @@ func TestFileAppendRevertRestoresOriginal(t *testing.T) {
 	}
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"appended-line"},
 	})
@@ -295,7 +297,7 @@ func TestFileAppendRevertRemovesNewFile(t *testing.T) {
 	filePath := filepath.Join(tmp, "revert-new.conf")
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"new-line"},
 	})
@@ -326,7 +328,7 @@ func TestFileAppendRevertRemovesNewFile(t *testing.T) {
 func TestFileAppendRevertCreatedToleratesMissing(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "new.conf")
-	s, err := NewFileAppendBuilder(testFileAppendMctx())(path, map[string]any{
+	s, err := NewFileAppendBuilder(testFileAppendMctx(), modschema.DecodeOptions{})(path, map[string]any{
 		"text": []any{"new-line"},
 	})
 	if err != nil {
@@ -348,7 +350,7 @@ func TestFileAppendRevertCreatedToleratesMissing(t *testing.T) {
 
 func TestFileAppendNameFromConfig(t *testing.T) {
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("add-hosts", map[string]any{
 		"name": "/etc/hosts",
 	})
@@ -367,12 +369,12 @@ func TestFileAppendApplyError(t *testing.T) {
 	if err := os.MkdirAll(readOnlyDir, 0555); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(readOnlyDir, 0755)
+	defer func() { _ = os.Chmod(readOnlyDir, 0755) }()
 
 	filePath := filepath.Join(readOnlyDir, "cantwrite")
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"blocked line"},
 	})
@@ -394,7 +396,7 @@ func TestFileAppendApplyNoTrailingNewline(t *testing.T) {
 	}
 
 	mctx := testFileAppendMctx()
-	builder := NewFileAppendBuilder(mctx)
+	builder := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(filePath, map[string]any{
 		"text": []any{"line2"},
 	})
@@ -425,7 +427,7 @@ func TestFileAppendFreshInstanceRevertIsNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := NewFileAppendBuilder(testFileAppendMctx())(filePath, map[string]any{
+	s, err := NewFileAppendBuilder(testFileAppendMctx(), modschema.DecodeOptions{})(filePath, map[string]any{
 		"text": []any{"line"},
 	})
 	if err != nil {
@@ -457,7 +459,7 @@ func TestFileAppendReadErrorFailsCheckAndApply(t *testing.T) {
 	fake.PreCreate("/etc/hosts", []byte("127.0.0.1 localhost\n"), 0644)
 	fake.SetReadError("/etc/hosts", errors.New("input/output error"))
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fake}}
-	s, err := NewFileAppendBuilder(mctx)("/etc/hosts", map[string]any{
+	s, err := NewFileAppendBuilder(mctx, modschema.DecodeOptions{})("/etc/hosts", map[string]any{
 		"text": []any{"10.0.0.1 db"},
 	})
 	if err != nil {
@@ -476,3 +478,22 @@ func TestFileAppendReadErrorFailsCheckAndApply(t *testing.T) {
 
 // Verify the State interface is fully satisfied at compile time.
 var _ state.State = (*FileAppend)(nil)
+
+// TestFileAppendContract replays the permanent differential contract fixtures
+// against the migrated fileAppendSpec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is the
+// permanent regression guard for file.append's decode behavior — including the
+// flagged BD-5 (a StringList scalar element is rendered to a string, a nested
+// element is rejected, and a bare-string value activates one-line management)
+// and BD-6 (name coercion/rejection) divergences.
+func TestFileAppendContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileAppend
+		if _, err := fileAppendSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.append.yaml")
+}

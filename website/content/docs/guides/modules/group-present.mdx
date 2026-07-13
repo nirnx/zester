@@ -1,9 +1,15 @@
 ---
 title: "group.present"
-description: "Ensures a group exists with the specified attributes and membership."
+description: "Ensure a group exists with the specified attributes and membership."
 ---
 
-**Source**: `pkg/state/modules/group.go`
+{/* zester-docgen:managed module="group.present" */}
+
+**Source**: `pkg/state/modules/group_present.go`
+
+---
+
+`group.present` ensures the named group exists and converges its numeric GID and membership. The group name defaults to the state ID. `gid` is a numeric group ID, compared and set only when non-zero. `members` declares an EXACT membership (extra members are removed, missing members added), while `addusers` and `delusers` adjust membership additively without disturbing other members. `system` selects a low-GID system group and is honored only at creation time.
 
 ---
 
@@ -11,69 +17,48 @@ description: "Ensures a group exists with the specified attributes and membershi
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Group name. If omitted, the state ID is used as the group name. |
-| `gid` | `int` | No | *(auto)* | Numeric group ID. Only compared/set when non-zero. |
-| `system` | `bool` | No | `false` | If `true`, create a system group (low GID range). Used only during creation. |
-| `members` | `list` | No | `[]` | Exact membership list. When specified, the group will contain exactly these users — extra members are removed, missing members are added. |
-| `addusers` | `list` | No | `[]` | Users to add to the group without affecting other existing members. |
-| `delusers` | `list` | No | `[]` | Users to remove from the group without affecting other existing members. |
+| `name` | `string` | No | State ID | group name; defaults to the state ID |
+| `gid` | `int` | No | *(none)* | numeric group ID; only compared and set when non-zero (0 auto-assigns) |
+| `system` | `bool` | No | *(none)* | create a system group (low GID range); used only during creation; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `members` | `StringList` | No | *(none)* | exact membership list — extra members are removed and missing members are added |
+| `addusers` | `StringList` | No | *(none)* | users to add without affecting other existing members |
+| `delusers` | `StringList` | No | *(none)* | users to remove without affecting other existing members |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Parameter Types
 
-The check phase performs these comparisons in order:
+### StringList
 
-1. **Group existence** — if the group does not exist, the state needs changes.
-2. **GID** — if `gid` is specified (non-zero) and differs from the current value, the state needs changes.
-3. **Members** — if `members` is specified and the current membership does not match exactly, the state needs changes.
-4. **AddUsers** — if any user in `addusers` is not currently a member, the state needs changes.
-5. **DelUsers** — if any user in `delusers` is currently a member, the state needs changes.
+A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.
 
-If all checks pass, the state reports no changes needed.
 
 ---
 
-## Apply Behavior
+## Effects
 
-1. Looks up the group. If the group does not exist:
-   - Creates the group via `groupadd` with the specified `gid` and `system` flag.
-   - If `members` or `addusers` are specified, adds those users to the newly created group via `gpasswd -a`.
-   - Records that the group was created (for revert).
-2. If the group already exists:
-   - Stores the original group info as a backup (for revert).
-   - If `gid` is specified and differs, updates the GID.
-   - If `members` is specified, computes exact add/remove lists to match the desired membership.
-   - Processes `addusers` (add missing users via `gpasswd -a`) and `delusers` (remove unwanted users via `gpasswd -d`).
-   - GID changes are applied via `groupmod`.
+### Check
 
----
+Looks up the group. Reports a change when it does not exist; otherwise it compares, in order: `gid` (only when non-zero); the exact `members` list (when declared); every `addusers` entry (a listed user that is not a member is drift); and every `delusers` entry (a listed user that IS a member is drift).
 
-## Revert Behavior
+### Apply
 
-- If the group was created by Apply, deletes the group via `groupdel`.
-- If the group was modified by Apply, restores the original GID via `groupmod`. Membership changes (`addusers`, `delusers`, `members`) are **not** reverted.
-- If no changes were made, no-op.
+Creates the group with the declared GID and system flag when it does not exist (adding `members`/`addusers` afterward and recording the creation for revert); a create that races another state at the same DAG level re-looks-up and falls through to the modify path. For an existing group it builds a modify set from only the drifted GID and membership (arming the revert memo), and a fully converged group is a clean no-op that leaves the memo unarmed. Reports the group and the action (created/modified) in its details.
+
+### Revert
+
+Undoes only what this run's Apply recorded. A group Apply created is deleted; a group Apply modified is restored by diffing the current group against the memoized original and reverting only the still-drifted GID AND membership (so an added member is removed and a removed member restored). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
 
 ---
 
 ## Examples
 
-### Direct Execution
+### Create a system group
 
-```bash
-# Create a group with defaults
-zester 'web-01' group.present docker
-
-# Create a group with a specific GID
-zester 'db*' group.present dbadmin gid=2000
-```
-
-### State File
-
-**Basic group creation:**
+The group name defaults to the state ID; system allocates a low GID.
 
 ```yaml
 docker:
@@ -81,7 +66,9 @@ docker:
     - system: true
 ```
 
-**Group with exact membership:**
+### Group with an exact membership list
+
+members declares exact membership — users not listed are removed.
 
 ```yaml
 webadmins:
@@ -93,7 +80,9 @@ webadmins:
       - charlie
 ```
 
-**Add users without removing existing members:**
+### Add and remove members without disturbing others
+
+addusers/delusers adjust membership additively; require orders user creation first.
 
 ```yaml
 developers:
@@ -105,3 +94,42 @@ developers:
     - require:
       - "user.present:newdev"
 ```
+
+### Create a group ad hoc
+
+The bare positional argument is the group name; key=value pairs set attributes.
+
+```bash
+zester 'db*' group.present dbadmin gid=2000
+```
+
+
+---
+
+## Notes
+
+> **members is exact; addusers/delusers are additive**
+>
+> `members` enforces an EXACT membership — a user present on the system but absent from the list is removed. Use `addusers`/`delusers` to adjust membership without touching other members.
+
+> **A bare-string member list is one member**
+>
+> A scalar `members: alice` decodes as the single-element list `[alice]` (and enables exact-membership management), a mixed scalar list renders each element to a string, and a nested list/map element is rejected rather than silently dropped (BD-5).
+
+
+---
+
+## Divergences
+
+- BD-1
+- BD-2
+- BD-5
+- BD-6
+- BD-7
+
+---
+
+## See Also
+
+- [group.absent](/docs/guides/modules/group-absent)
+- [user.present](/docs/guides/modules/user-present)

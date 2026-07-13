@@ -8,6 +8,9 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testFileTouchMctx() *exec.ModuleContext {
@@ -15,7 +18,7 @@ func testFileTouchMctx() *exec.ModuleContext {
 }
 
 func TestFileTouchName(t *testing.T) {
-	s, err := NewFileTouchBuilder(testFileTouchMctx())("/var/run/app.stamp", map[string]any{})
+	s, err := NewFileTouchBuilder(testFileTouchMctx(), modschema.DecodeOptions{})("/var/run/app.stamp", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +28,7 @@ func TestFileTouchName(t *testing.T) {
 }
 
 func TestFileTouchMissingProvider(t *testing.T) {
-	_, err := NewFileTouchBuilder(&exec.ModuleContext{})("/tmp/x", map[string]any{})
+	_, err := NewFileTouchBuilder(&exec.ModuleContext{}, modschema.DecodeOptions{})("/tmp/x", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when File provider is nil")
 	}
@@ -35,7 +38,7 @@ func TestFileTouchCreatesFile(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "stamp")
 
-	s, err := NewFileTouchBuilder(testFileTouchMctx())(path, map[string]any{})
+	s, err := NewFileTouchBuilder(testFileTouchMctx(), modschema.DecodeOptions{})(path, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +83,7 @@ func TestFileTouchIdempotentWhenExists(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "existing", "content\n")
 
-	s, err := NewFileTouchBuilder(testFileTouchMctx())(path, map[string]any{})
+	s, err := NewFileTouchBuilder(testFileTouchMctx(), modschema.DecodeOptions{})(path, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +100,7 @@ func TestFileTouchMakeDirs(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "a", "b", "stamp")
 
-	s, err := NewFileTouchBuilder(testFileTouchMctx())(path, map[string]any{"makedirs": true})
+	s, err := NewFileTouchBuilder(testFileTouchMctx(), modschema.DecodeOptions{})(path, map[string]any{"makedirs": true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +116,7 @@ func TestFileTouchNoMakeDirsFails(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "missing", "stamp")
 
-	s, err := NewFileTouchBuilder(testFileTouchMctx())(path, map[string]any{})
+	s, err := NewFileTouchBuilder(testFileTouchMctx(), modschema.DecodeOptions{})(path, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,7 @@ func TestFileTouchExistingRunsTouchCommand(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: &exec.OSFileExec{}, Command: fakeCmd}}
 
-	s, err := NewFileTouchBuilder(mctx)(path, map[string]any{})
+	s, err := NewFileTouchBuilder(mctx, modschema.DecodeOptions{})(path, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +164,7 @@ func TestFileTouchExistingWithoutCommandProvider(t *testing.T) {
 	ctx := context.Background()
 	path := writeTempFile(t, "existing", "content\n")
 
-	s, err := NewFileTouchBuilder(testFileTouchMctx())(path, map[string]any{})
+	s, err := NewFileTouchBuilder(testFileTouchMctx(), modschema.DecodeOptions{})(path, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +181,7 @@ func TestFileTouchRevert(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "stamp")
 
-	s, err := NewFileTouchBuilder(testFileTouchMctx())(path, map[string]any{})
+	s, err := NewFileTouchBuilder(testFileTouchMctx(), modschema.DecodeOptions{})(path, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +206,7 @@ func TestFileTouchRevertExistingIsNoop(t *testing.T) {
 
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: &exec.OSFileExec{}, Command: fakeCmd}}
-	s, err := NewFileTouchBuilder(mctx)(path, map[string]any{})
+	s, err := NewFileTouchBuilder(mctx, modschema.DecodeOptions{})(path, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,4 +223,26 @@ func TestFileTouchRevertExistingIsNoop(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("pre-existing file must not be removed: %v", err)
 	}
+}
+
+// Verify the State interface is fully satisfied at compile time.
+var _ state.State = (*FileTouch)(nil)
+
+// TestFileTouchContract replays the permanent differential contract fixtures
+// against the migrated fileTouchSpec decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is the
+// permanent regression guard for file.touch's decode behavior — including the
+// flagged BD-2 (a CLI makedirs string is honored), BD-6 (a wrong-typed value is
+// coerced or rejected instead of silently ignored), and BD-7 (makedirs' integer
+// arm) divergences.
+func TestFileTouchContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var f FileTouch
+		if _, err := fileTouchSpec.Decode(id, config, &f, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &f, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/file.touch.yaml")
 }

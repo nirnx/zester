@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 )
 
 func TestParseFileModeSpecialBits(t *testing.T) {
@@ -47,7 +48,7 @@ func TestFileManagedSetuidConverges(t *testing.T) {
 	}
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: &exec.OSFileExec{}}}
-	builder := NewFileManagedBuilder(mctx)
+	builder := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder(path, map[string]any{"content": "#!/bin/sh\n", "mode": "4755"})
 	if err != nil {
 		t.Fatal(err)

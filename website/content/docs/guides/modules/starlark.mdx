@@ -113,6 +113,97 @@ def configured_revert(id, config):
 
 If no `_revert` function is defined, revert is a no-op.
 
+## Self-Documentation
+
+Starlark modules describe themselves the same way built-in Go modules do: the
+loader captures each module's documentation at load time and exposes it through
+`sys.doc` (and `zester doc`). There is nothing to generate — the docs come
+straight from the `.star` source.
+
+Two optional, additive conventions feed the captured documentation:
+
+1. A **function docstring** (a Google-style string literal as the function's
+   first statement).
+2. A **parameter-declaration dict** — either a per-function `<fn>_params` or a
+   module-global `PARAMS`.
+
+Neither is required. A module with neither is still self-documented (its name,
+kind, and source location) and accepts arbitrary parameters.
+
+### Docstrings
+
+The first line is the summary; the paragraph(s) before an `Args:` section become
+the description; the `Args:` section supplies per-parameter help text:
+
+```python
+def configured(id, config):
+    """Manage the nginx config file.
+
+    Renders the configuration from settings and reloads the daemon on change.
+
+    Args:
+        path: absolute path to the config file
+        mode: file mode as an octal string
+    """
+    ...
+    return {"changed": True}
+```
+
+`Returns:`, `Raises:`, and other Google-style sections end the `Args:` block and
+are not captured.
+
+### Parameter declarations (`PARAMS` / `<fn>_params`)
+
+Declaring parameters is what turns on **unknown-key validation**: a config key
+that is neither a declared parameter, nor a requisite/attribute directive
+(`require`, `watch`, `onlyif`, `order`, …), nor `name`, is reported per the
+peel's validation policy (a warning by default). Declare parameters with a dict
+whose keys are parameter names and whose values describe each one:
+
+```python
+# Applies to every action in this file that has no <fn>_params of its own.
+PARAMS = {
+    "path": {"type": "str", "required": True, "usage": "config file path"},
+    "mode": {"type": "str", "default": "0644", "usage": "file mode (octal string)"},
+    "reload": {"type": "bool", "default": True},
+    "aliases_example": {"type": "str", "aliases": ["altkey"]},
+}
+
+# A per-function declaration overrides PARAMS for that one action.
+configured_params = {
+    "path": {"type": "str", "required": True},
+}
+
+def configured(id, config):
+    """Manage the nginx config file."""
+    ...
+```
+
+Per-parameter dict keys (all optional):
+
+| Key | Meaning |
+|-----|---------|
+| `type` | `str` (default), `bool`, `int`, `float`, `list`, or `dict` |
+| `required` | `True` marks the parameter mandatory in the docs/schema |
+| `default` | a scalar default (string/bool/int/float) shown in the docs |
+| `usage` / `help` | help text (a docstring `Args:` entry fills this when omitted) |
+| `aliases` | additional accepted config keys |
+
+A shorthand form maps a name directly to its help string:
+`PARAMS = {"path": "config file path"}`.
+
+Notes and caveats:
+
+- Starlark stays **dynamically typed**: declared types drive the documentation
+  and JSON Schema, but the module still receives the raw `config` dict and reads
+  it directly. A type mismatch against a declared parameter is not fatal.
+- An **empty** `PARAMS = {}` leaves the module open (no unknown-key warnings) —
+  omit the dict, or declare the parameters you actually accept.
+- Only **scalar** defaults are rendered; a default containing a comma is skipped
+  (the tag grammar reserves commas).
+- Edits are picked up on **hot-reload**: changing a docstring or `PARAMS` and
+  bumping the file's mtime re-captures the documentation on the next load.
+
 ## Discovery and Loading
 
 ### Global Modules
