@@ -464,3 +464,99 @@ cases:
       name: systemctl daemon-reload
     want:
       Command: systemctl daemon-reload
+
+  # --- Review round 5: the `cmd` alias (the execution-module spelling) also
+  # supplies the command, so `zester '<target>' cmd.run cmd=uptime` works on
+  # the state-dispatch path the CLI actually takes (previously the CLI parsed
+  # cmd= but strict decode rejected it as an unknown parameter). Resolution
+  # order: command > name > cmd. ---
+  - label: cmd-alias-runs-command-yaml
+    universe: yaml
+    id: state-label
+    input:
+      cmd: uptime
+    want:
+      Command: uptime
+  - label: cmd-alias-runs-command-msgpack
+    universe: msgpack
+    id: state-label
+    input:
+      cmd: uptime
+    want:
+      Command: uptime
+  - label: cmd-alias-runs-command-cli
+    universe: cli
+    id: state-label
+    input:
+      cmd: uptime
+    want:
+      Command: uptime
+
+  - label: command-beats-cmd-yaml
+    universe: yaml
+    id: state-label
+    input:
+      command: echo real
+      cmd: echo execalias
+    want:
+      Command: echo real
+
+  - label: name-beats-cmd-yaml
+    universe: yaml
+    id: state-label
+    input:
+      name: echo saltalias
+      cmd: echo execalias
+    want:
+      Command: echo saltalias
+
+  - label: empty-name-falls-through-to-cmd-yaml
+    universe: yaml
+    id: state-label
+    input:
+      name: ""
+      cmd: uptime
+    want:
+      Command: uptime
+
+  # --- Review round 5 (same class as the cmd alias): `dir` is the
+  # execution-module spelling of the working directory; the state schema
+  # accepts it as an alias of `cwd` (cwd > dir, empty falls through). ---
+  - label: dir-alias-sets-cwd-yaml
+    universe: yaml
+    id: state-label
+    input:
+      command: make
+      dir: /opt/src
+    want:
+      Command: make
+      Cwd: /opt/src
+  - label: dir-alias-sets-cwd-msgpack
+    universe: msgpack
+    id: state-label
+    input:
+      command: make
+      dir: /opt/src
+    want:
+      Command: make
+      Cwd: /opt/src
+  - label: dir-alias-sets-cwd-cli
+    universe: cli
+    id: state-label
+    input:
+      command: make
+      dir: /opt/src
+    want:
+      Command: make
+      Cwd: /opt/src
+
+  - label: cwd-beats-dir-yaml
+    universe: yaml
+    id: state-label
+    input:
+      command: make
+      cwd: /real
+      dir: /alias
+    want:
+      Command: make
+      Cwd: /real

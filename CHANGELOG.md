@@ -1517,6 +1517,56 @@ All notable changes to Zester are documented here. The format follows
 
 
 ### Fixed
+- **Starlark modules survive a states-directory switch (review round 5).** When
+  the peel switches its states dir (baked tree → KV cache, or a lazy engine
+  rebuild) it replaces the Starlark loader but keeps the registry; the fresh
+  loader's empty ownership ledger then treated every previously loaded Starlark
+  name as non-Starlark and shadow-refused all reloads — freezing custom modules
+  (no hot-reload, no removal, no override) until restart. The old loader now
+  purges its registrations first (`starmod.Loader.UnloadAll`; built-ins are
+  untouched), and the new tree re-registers cleanly via LoadGlobal/LoadDir.
+- **`zester '<target>' cmd.run cmd=<command>` now works end to end.** The CLI
+  parsed `cmd=` as key=value form but dispatch routes cmd.run through the STATE
+  module, whose strict schema only accepted `command`/`name` — so the accepted
+  spelling was then rejected as an unknown parameter. The state schema now
+  accepts `cmd` as a second alias (the execution-module spelling); source
+  resolution order is `command` > `name` > `cmd`, pinned by contract fixtures
+  across YAML/CLI/msgpack and a Docker salt-compat test. The same class was
+  closed for the working directory: `cwd` gains the `dir` alias (the
+  execution-module spelling `salt['cmd.run'](dir=...)`), so `zester '<target>'
+  cmd.run 'make' dir=/opt/src` no longer fails under strict params.
+- **`key=value` first tokens now parse as key=value for EVERY self-documenting
+  module on the CLI, not just cmd.run.** `zester '*' pkg.installed name=nginx`
+  previously bound the literal string `"name=nginx"` as the package name (the
+  round-4 fix covered only the bespoke cmd.run arm). A first token assigning to
+  one of the module's DECLARED parameter keys (canonical name or alias) now
+  switches the whole invocation to key=value form — `file.managed path=/etc/motd
+  contents=hi` works, and a default-less primary missing from the assignments is
+  a usage error. Assignments to undeclared keys stay positional values, so
+  exotic positional values containing `=` keep working.
+- **`zester '<target>' pillar.get <key>` (and `pillar.items`/`pillar.keys`) now
+  work from the CLI.** pillar.* is the peel's Salt-compat alias of settings.*,
+  answered by a handler that reads only `args["key"]` — but the CLI had no
+  pillar.* argument arms, so the key fell into the request ID and every keyed
+  invocation errored `requires a key argument`. The pillar.* spellings now bind
+  identically to their settings.* counterparts.
+- **Documentation served from long-lived caches is now cloned on egress.**
+  `moduledoc.Lookup`/`All` (the embedded offline docs) and
+  `modules.DispatchInfo` (the dispatch-specials table) handed out ModuleInfo
+  values whose doc slices and schema fragments aliased process-wide state,
+  violating the returned-views-are-safe-to-vandalize contract the rest of the
+  framework pins; new exported `Doc.Clone`/`ModuleInfo.Clone` seal them.
+- **A `.star` file that fails to load is retried on the next load pass.** The
+  loader recorded the file's mtime before executing it, so a failed load was
+  skipped until the mtime changed; after a states-directory switch (old
+  registrations purged) that left the module missing — not stale-but-callable —
+  until a republish or restart. The mtime record now rolls back on failure.
+- **`modschema` input boundary sealed (review round 5).** `Compile`/`NewSpec`
+  now detach the caller's `Doc` (a registrant retaining and later mutating its
+  doc slices could taint rendered docs), and `Spec.Params` is a deep-copied
+  snapshot instead of an alias of the compiled plan's internal schema — the
+  round-4 fix had sealed the output side (`Schema()`/`Info()`) only.
+
 - **`zester '<target>' cmd.run name=<cmd>` no longer executes the literal
   assignment string.** The CLI treated a leading `name=`/`command=`/`cmd=`
   token as the positional command, so the Salt-parity form ran e.g.

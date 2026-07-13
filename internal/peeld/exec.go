@@ -281,6 +281,15 @@ func (a *Agent) execModule(execCtx context.Context, req proto.ExecRequest) (prot
 		} else {
 			a.statesEng = eng2
 			a.effectiveStatesDir = d
+			// Purge the OLD tree's Starlark modules before swapping loaders:
+			// the replacement loader's empty ownership ledger would otherwise
+			// see the old registrations as non-Starlark and shadow-refuse
+			// every reload/override of those names until restart (round 5).
+			// The new tree's modules land via LoadGlobal below and per-compile
+			// LoadDir calls.
+			if a.starLoader != nil {
+				a.starLoader.UnloadAll(a.registry)
+			}
 			a.starLoader = starmod.NewLoader(starmod.LoaderConfig{
 				StatesDir:     d,
 				ModuleContext: a.mctx,

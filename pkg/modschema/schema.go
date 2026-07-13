@@ -68,6 +68,15 @@ func cloneDoc(d Doc) Doc {
 	return d
 }
 
+// Clone returns a deep copy of the Doc: its slice fields are detached (their
+// elements are all-scalar structs). It is the exported seam for any package
+// handing out documentation derived from long-lived shared state — the
+// framework contract (pinned by TestInfoAndSchemaAreDeepCopies) is that every
+// returned documentation view is safe to vandalize.
+func (d Doc) Clone() Doc {
+	return cloneDoc(d)
+}
+
 // cloneFields deep-copies a Field slice including each JSONSchema fragment.
 func cloneFields(in []Field) []Field {
 	out := append([]Field(nil), in...)

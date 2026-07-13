@@ -17,10 +17,13 @@ type Spec struct {
 	// Kind classifies the surface (state | exec | dispatch); Effects requirements
 	// differ by kind.
 	Kind Kind
-	// Doc is the registered documentation metadata.
+	// Doc is the registered documentation metadata (a detached copy — the
+	// caller's retained slices cannot reach it).
 	Doc Doc
-	// Params is the derived, tag-free parameter view shared with docs, JSON
-	// Schema, and sys.doc renderers.
+	// Params is a detached, deep-copied snapshot of the derived, tag-free
+	// parameter view. Mutating it affects only this snapshot — never the
+	// compiled plan that Decode, Info, and the doc/schema renderers read
+	// (review round 5: it previously aliased the plan's internal schema).
 	Params *ModuleSchema
 	// NewParams returns a fresh pointer to the proto struct. Registry.Parse and
 	// the differential harness allocate a destination through it.
@@ -53,8 +56,8 @@ func NewSpec(module string, kind Kind, proto any, doc Doc) (*Spec, error) {
 	return &Spec{
 		Module:    module,
 		Kind:      kind,
-		Doc:       doc,
-		Params:    cs.schema,
+		Doc:       cloneDoc(doc),
+		Params:    cs.Schema(),
 		NewParams: func() any { return reflect.New(protoType).Interface() },
 		plan:      cs,
 	}, nil
@@ -103,6 +106,27 @@ type ModuleInfo struct {
 	// docs render through RenderText, which does not consult it, so carrying it in
 	// the embed would only churn the artifact.
 	OpenParams bool `json:"-"`
+}
+
+// Clone returns a fully detached deep copy of the ModuleInfo — Doc slices,
+// parameter fields (aliases + JSON-Schema fragments), and semantic-type
+// fragments. Callers serving ModuleInfo values from a long-lived cache (the
+// embedded docdata, the dispatch-specials table) clone on egress so the
+// framework's returned-views-are-safe-to-vandalize contract holds everywhere.
+func (mi ModuleInfo) Clone() ModuleInfo {
+	mi.Doc = cloneDoc(mi.Doc)
+	mi.Params = cloneFields(mi.Params)
+	if mi.SemTypes != nil {
+		sts := make([]SemanticTypeInfo, len(mi.SemTypes))
+		for i, st := range mi.SemTypes {
+			if st.JSONSchema != nil {
+				st.JSONSchema = cloneJSONValue(st.JSONSchema).(map[string]any)
+			}
+			sts[i] = st
+		}
+		mi.SemTypes = sts
+	}
+	return mi
 }
 
 // Info derives the ModuleInfo view of this Spec: its documentation, its ordered

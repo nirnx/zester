@@ -174,6 +174,15 @@ func (l *Loader) loadModulesDir(modulesDir string, registry *state.Registry) (in
 		if err != nil {
 			l.config.Logger.Warn("starmod: skipping file with errors",
 				"file", absPath, "error", err)
+			// Roll the mtime record back so the next load pass RETRIES the
+			// file instead of skipping it until its mtime changes. Matters
+			// most right after a states-dir switch: the old registrations were
+			// purged (UnloadAll), so a skipped failure would leave the module
+			// GONE — not stale-but-callable — until a republish or restart
+			// (round-5 verification note).
+			l.mu.Lock()
+			delete(l.loaded, absPath)
+			l.mu.Unlock()
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -284,6 +293,35 @@ func (l *Loader) loadFile(absPath string, registry *state.Registry) (int, error)
 	l.reconcileRemoved(absPath, registered, registry)
 
 	return count, nil
+}
+
+// UnloadAll unregisters every module this loader ever registered and resets
+// all of its ledgers (loaded mtimes, load() cache, specs, ownership). It
+// exists for the peel's states-directory switch: the old tree's modules are
+// superseded, and the REPLACEMENT loader starts with an empty ownership
+// ledger — without this purge it would see the old loader's registrations as
+// non-Starlark and shadow-refuse every reload, freezing the fleet's custom
+// modules until restart (review round 5). Non-loader registrations
+// (built-ins) are untouched: only loader-owned names are unregistered.
+func (l *Loader) UnloadAll(registry *state.Registry) {
+	l.mu.Lock()
+	names := make([]string, 0, len(l.owned))
+	for n := range l.owned {
+		names = append(names, n)
+	}
+	l.loaded = make(map[string]time.Time)
+	l.cache = make(map[string]starlark.StringDict)
+	l.specs = make(map[string]*modschema.Spec)
+	l.fileModules = make(map[string]map[string]bool)
+	l.owned = make(map[string]bool)
+	l.mu.Unlock()
+
+	sort.Strings(names)
+	for _, n := range names {
+		if registry.Unregister(n) {
+			l.config.Logger.Info("starmod: unregistered module (loader unload)", "module", n)
+		}
+	}
 }
 
 // unloadMissingFiles unregisters the modules of previously loaded .star files

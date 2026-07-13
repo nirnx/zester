@@ -219,10 +219,10 @@ policy's `Reserved` set so they never count as unknown parameters):
   is expanded (one state per name) BEFORE the builder is called: each name becomes
   the expanded state's ID AND is injected into the module's PRIMARY parameter's
   canonical key when it has one (schema-aware — `command` for cmd.run, `name` for
-  file.managed) — UNLESS the config already carries an EXPLICIT value at that key
-  or one of its aliases, in which case the injection is skipped so the explicit
-  value survives every expanded instance (`names: [...]` alongside an explicit
-  `command:` keeps that command, not a clobbered per-instance name). A module with
+  file.managed). Injection is UNCONDITIONAL (Salt semantics, rides BD-8): any
+  explicit value at the inject key or its aliases is cleared first, so every
+  expanded instance runs its own names entry — `names: [...]` alongside an
+  explicit `command:` runs each name, exactly as Salt does. A module with
   NO primary parameter (the `test.*` family) gets the historical literal `name`
   key injected instead — safe because `name` is reserved-tolerated everywhere a
   module declares no such field of its own (see the `name` bullet below); the

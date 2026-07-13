@@ -188,17 +188,48 @@ func TestSpec_Info_DedupesSemTypes(t *testing.T) {
 // doc slices, semantic-type fragments) must not leak into the next call's
 // result.
 func TestInfoAndSchemaAreDeepCopies(t *testing.T) {
-	spec, err := modschema.NewSpec("demo.copy", modschema.KindState, specProto{}, modschema.Doc{
+	callerDoc := modschema.Doc{
 		Summary:  "demo",
 		Examples: []modschema.Example{{Title: "t", Kind: "cli", Code: "c"}},
 		Notes:    []modschema.Note{{Level: "info", Body: "b"}},
 		SeeAlso:  []string{"other.module"},
-	})
+	}
+	spec, err := modschema.NewSpec("demo.copy", modschema.KindState, specProto{}, callerDoc)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	// Round 5: the INPUT boundary is sealed too — the caller retains its doc
+	// and mutates it after registration; the spec must not see it.
+	callerDoc.Examples[0].Title = "CALLER-VANDALIZED"
+	callerDoc.SeeAlso[0] = "CALLER-VANDALIZED"
+
+	// Round 5: Spec.Params is a detached snapshot, not an alias of the plan.
+	for i := range spec.Params.Fields {
+		spec.Params.Fields[i].Usage = "PARAMS-VANDALIZED"
+		for k := range spec.Params.Fields[i].JSONSchema {
+			spec.Params.Fields[i].JSONSchema[k] = "PARAMS-VANDALIZED"
+		}
+	}
+	spec.Params.Doc.Summary = "PARAMS-VANDALIZED"
+
 	mi := spec.Info()
+	if mi.Doc.Examples[0].Title != "t" || mi.Doc.SeeAlso[0] != "other.module" {
+		t.Fatalf("caller-retained doc mutation reached the spec: %+v", mi.Doc)
+	}
+	if mi.Doc.Summary != "demo" {
+		t.Fatalf("Params snapshot mutation reached the plan doc: %q", mi.Doc.Summary)
+	}
+	for _, f := range mi.Params {
+		if f.Usage == "PARAMS-VANDALIZED" {
+			t.Fatalf("Params snapshot mutation reached the plan (field %q)", f.Name)
+		}
+		for k, v := range f.JSONSchema {
+			if v == "PARAMS-VANDALIZED" {
+				t.Fatalf("Params snapshot mutation reached the plan (field %q key %q)", f.Name, k)
+			}
+		}
+	}
 	// Vandalize every mutable region of the returned view.
 	mi.Doc.Examples[0].Title = "VANDALIZED"
 	mi.Doc.Notes[0].Body = "VANDALIZED"

@@ -284,8 +284,8 @@
         },
         {
           "Level": "info",
-          "Title": "The name alias runs the command (Salt idiom)",
-          "Body": "For Salt compatibility the primary `command` accepts the `name` alias: `cmd.run: - name: apt-get update` runs `apt-get update`. Zester previously read only `command` and silently ran the STATE ID when only `name:` was given (quietly wrong); it now executes the named command, matching Salt (BD-8). A declared `command` wins over `name`, and an empty-string `command` falls through to `name` before the state-ID fallback."
+          "Title": "The name and cmd aliases run the command (Salt idioms)",
+          "Body": "For Salt compatibility the primary `command` accepts the `name` alias: `cmd.run: - name: apt-get update` runs `apt-get update`. Zester previously read only `command` and silently ran the STATE ID when only `name:` was given (quietly wrong); it now executes the named command, matching Salt (BD-8). The execution-module spelling `cmd` is also accepted (so `zester '<target>' cmd.run cmd=uptime` works even though the CLI dispatches through this state module). Source resolution order is `command` > `name` > `cmd`; an empty-string value falls through to the next source before the state-ID fallback."
         },
         {
           "Level": "info",
@@ -306,11 +306,12 @@
       {
         "Name": "command",
         "Aliases": [
-          "name"
+          "name",
+          "cmd"
         ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "command to execute; the name alias is accepted for Salt compatibility (cmd.run: - name: <command>); defaults to the state ID",
+        "Usage": "command to execute; the name and cmd aliases are accepted (Salt state and execution-module spellings); defaults to the state ID",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -369,10 +370,12 @@
       },
       {
         "Name": "cwd",
-        "Aliases": null,
+        "Aliases": [
+          "dir"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "working directory for the command; defaults to the peel process's working directory",
+        "Usage": "working directory for the command; the dir alias (execution-module spelling) is accepted; defaults to the peel process's working directory",
         "Required": false,
         "Primary": false,
         "Lazy": false,

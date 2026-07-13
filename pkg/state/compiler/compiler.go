@@ -232,17 +232,19 @@ func (c *Compiler) buildOne(module, id string, cfg map[string]any) (state.State,
 
 // namesInjectKey decides, for a `names:` expansion, which config key each
 // expanded name is written into, and that key's declared aliases (so the
-// caller — Compile's expansion loop — can detect an EXPLICIT value already
-// present under the key or an alias and skip the injection instead of
-// clobbering it; M2). The compiler holds the Registry, so it consults the
-// module's registered schema (Describe):
+// caller — Compile's expansion loop — can clear any explicit value at the key
+// OR an alias before injecting; injection is UNCONDITIONAL, Salt semantics —
+// each expanded instance runs its own names entry, see the loop's comment;
+// the earlier M2 skip-injection behavior was superseded by BD-8). The
+// compiler holds the Registry, so it consults the module's registered schema
+// (Describe):
 //
 //   - spec-carrying module WITH a primary parameter → (primary.Name,
 //     primary.Aliases): inject into that canonical key. file.managed's primary
 //     is `name` (so this is byte-identical to the historical literal "name"
-//     injection); cmd.run's primary is `command` (alias `name`), so a
-//     `names: [...]` list alongside an explicit `command:` keeps that command
-//     for every expanded instance instead of overwriting it with each name.
+//     injection); cmd.run's primary is `command` (aliases `name`, `cmd`), so
+//     the expansion clears all three before writing each per-instance name
+//     into `command`.
 //   - every other case — OpenParams passthrough (module.run), no registered
 //     schema at all (legacy / Starlark without a PARAMS declaration), AND a
 //     spec-carrying module with NO primary (the test.* family) — → ("name",

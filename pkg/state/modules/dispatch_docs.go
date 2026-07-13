@@ -154,9 +154,11 @@ func DispatchInfo(name string) (modschema.ModuleInfo, bool) {
 		return modschema.ModuleInfo{}, false
 	}
 	return modschema.ModuleInfo{
-		Module:  sp.Name,
-		Kind:    modschema.KindDispatch,
-		Doc:     sp.Doc,
+		Module: sp.Name,
+		Kind:   modschema.KindDispatch,
+		// Cloned on egress: the table is process-wide shared state and every
+		// returned documentation view must be safe to vandalize (round 5).
+		Doc:     sp.Doc.Clone(),
 		HasSpec: false,
 	}, true
 }

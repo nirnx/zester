@@ -36,16 +36,23 @@ type CmdRun struct {
 
 	// Command is the command to execute; it defaults to the state ID. It accepts
 	// the `name` alias so the Salt idiom `cmd.run: {name: <command>}` runs the
-	// named command (command wins if both are set — see BD-8).
-	Command string `zester:"command,primary,aliases=name" usage:"command to execute; the name alias is accepted for Salt compatibility (cmd.run: - name: <command>); defaults to the state ID"`
+	// named command (command wins if both are set — see BD-8), and the `cmd`
+	// alias so the execution-module spelling (`zester '<target>' cmd.run
+	// cmd=uptime`) works on the state-dispatch path the CLI actually takes
+	// (review round 5: the operator CLI parsed cmd= but strict decode then
+	// rejected it as unknown).
+	Command string `zester:"command,primary,aliases=name|cmd" usage:"command to execute; the name and cmd aliases are accepted (Salt state and execution-module spellings); defaults to the state ID"`
 
 	// Args are additional arguments passed to the command. When empty the command
 	// is run via the shell (sh -c); when non-empty it is executed directly with
 	// these arguments.
 	Args paramtypes.StringList `zester:"args" usage:"additional arguments passed to the command; when empty the command runs via the shell (sh -c), when non-empty it is executed directly with these arguments"`
 
-	// Cwd is the working directory for the command.
-	Cwd string `zester:"cwd" usage:"working directory for the command; defaults to the peel process's working directory"`
+	// Cwd is the working directory for the command. It accepts the `dir` alias
+	// — the execution-module spelling (`salt['cmd.run'](cmd='ls', dir='/tmp')`)
+	// — so the same key works on the state-dispatch path the CLI takes (round
+	// 5: the same class as the `cmd` alias on the primary).
+	Cwd string `zester:"cwd,aliases=dir" usage:"working directory for the command; the dir alias (execution-module spelling) is accepted; defaults to the peel process's working directory"`
 
 	// Env is a map of environment variables to set for the command; they are
 	// merged with the peel process's environment.
@@ -158,12 +165,14 @@ var cmdRunSpec = mustSpec("cmd.run", modschema.KindState, CmdRun{}, modschema.Do
 		},
 		{
 			Level: "info",
-			Title: "The name alias runs the command (Salt idiom)",
+			Title: "The name and cmd aliases run the command (Salt idioms)",
 			Body: "For Salt compatibility the primary `command` accepts the `name` alias: `cmd.run: - name: " +
 				"apt-get update` runs `apt-get update`. Zester previously read only `command` and silently ran the " +
 				"STATE ID when only `name:` was given (quietly wrong); it now executes the named command, matching " +
-				"Salt (BD-8). A declared `command` wins over `name`, and an empty-string `command` falls through to " +
-				"`name` before the state-ID fallback.",
+				"Salt (BD-8). The execution-module spelling `cmd` is also accepted (so `zester '<target>' cmd.run " +
+				"cmd=uptime` works even though the CLI dispatches through this state module). Source resolution " +
+				"order is `command` > `name` > `cmd`; an empty-string value falls through to the next source " +
+				"before the state-ID fallback.",
 		},
 		{
 			Level: "info",

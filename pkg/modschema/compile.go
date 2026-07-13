@@ -97,7 +97,10 @@ func Compile(proto any, doc Doc) (*CompiledSchema, error) {
 
 	cs := &CompiledSchema{
 		protoType: t,
-		doc:       doc,
+		// The caller may retain (and later mutate) the doc's slices; the plan is
+		// long-lived shared state, so detach at the input boundary (review round
+		// 5 — the output-side clones alone left this seam open).
+		doc:       cloneDoc(doc),
 		knownKeys: map[string]struct{}{},
 	}
 

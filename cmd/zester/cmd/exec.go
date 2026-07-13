@@ -376,19 +376,24 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		cliargs.ParseKeyValues(remaining[2:], args)
 		return remaining[0], args, nil
 
-	case "settings.items":
+	case "settings.items", "pillar.items":
 		cliargs.ParseKeyValues(remaining, args)
 		return "items", args, nil
 
-	case "settings.get":
+	case "settings.get", "pillar.get":
+		// pillar.* is the peel's Salt-compat alias for settings.* — the same
+		// handler answers both and reads only args["key"], so the keyed form
+		// must bind here for both spellings (review round 5 critic: pillar.get
+		// previously fell through to the generic fallback, leaving args empty
+		// and the peel erroring "requires a key argument").
 		if len(remaining) == 0 {
-			return "", nil, fmt.Errorf("settings.get requires a key argument")
+			return "", nil, fmt.Errorf("%s requires a key argument", module)
 		}
 		args["key"] = remaining[0]
 		cliargs.ParseKeyValues(remaining[1:], args)
 		return remaining[0], args, nil
 
-	case "settings.keys":
+	case "settings.keys", "pillar.keys":
 		cliargs.ParseKeyValues(remaining, args)
 		return "keys", args, nil
 
@@ -456,10 +461,61 @@ func docdataPositional(module string, remaining []string) (id string, args map[s
 		}
 		return "", nil, true, fmt.Errorf("%s requires a %s argument", module, primary.Name)
 	}
+	// Key=value guard (round-5 critic; generalizes the round-4 cmd.run fix):
+	// when the FIRST token is an explicit assignment to one of the module's
+	// DECLARED parameter keys (canonical name or alias), the whole invocation
+	// is key=value form — binding it verbatim to the primary would install a
+	// package literally named "name=nginx". An assignment to an undeclared key
+	// stays a positional value (only the schema's own key set switches modes,
+	// so exotic positional values containing '=' keep working).
+	if k, _, cut := strings.Cut(remaining[0], "="); cut && declaredParamKey(mi, k) {
+		args = make(map[string]any)
+		cliargs.ParseKeyValues(remaining, args)
+		id, found := primaryValue(args, primary)
+		if !found {
+			if primary.HasDefault {
+				return "ad-hoc", args, true, nil
+			}
+			if mi.Kind == modschema.KindExec && !primary.Required {
+				return "", args, true, nil
+			}
+			return "", nil, true, fmt.Errorf("%s requires a %s argument", module, primary.Name)
+		}
+		return id, args, true, nil
+	}
 	args = make(map[string]any)
 	args[primary.Name] = remaining[0]
 	cliargs.ParseKeyValues(remaining[1:], args)
 	return remaining[0], args, true, nil
+}
+
+// declaredParamKey reports whether key is a declared parameter key of the
+// module — a canonical name or a registered alias.
+func declaredParamKey(mi modschema.ModuleInfo, key string) bool {
+	for _, f := range mi.Params {
+		if f.Name == key {
+			return true
+		}
+		for _, a := range f.Aliases {
+			if a == key {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// primaryValue resolves the primary parameter's string value from parsed
+// key=value args, canonical name first then aliases in declaration order,
+// skipping empty strings (the framework's absence sentinel).
+func primaryValue(args map[string]any, primary modschema.Field) (string, bool) {
+	keys := append([]string{primary.Name}, primary.Aliases...)
+	for _, k := range keys {
+		if v, ok := args[k].(string); ok && v != "" {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // primaryParam returns the module's primary parameter field, if it has one.

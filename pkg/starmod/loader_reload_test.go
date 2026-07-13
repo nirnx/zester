@@ -277,3 +277,111 @@ def tuned(id, config):
 		t.Error("global module lost its registration")
 	}
 }
+
+// TestLoader_UnloadAllThenFreshLoaderReload pins review-round-5 item 1: when
+// the peel switches states directories it replaces the loader but keeps the
+// REGISTRY. The old loader must purge its registrations first (UnloadAll) —
+// otherwise the fresh loader's empty ownership ledger sees the old Starlark
+// names as non-Starlark and shadow-refuses every reload, freezing them until
+// restart. After the purge, a fresh loader on a new tree must register the
+// same module name without refusal, old-tree-only modules must be gone, and
+// non-loader (built-in) registrations must survive untouched.
+func TestLoader_UnloadAllThenFreshLoaderReload(t *testing.T) {
+	oldDir := t.TempDir()
+	writeStarFile(t, filepath.Join(oldDir, "_modules"), "nginx.star", `
+def configured(id, config):
+    return {"changed": False, "diff": "old-tree"}
+`)
+	writeStarFile(t, filepath.Join(oldDir, "_modules"), "legacy.star", `
+def only_in_old_tree(id, config):
+    return {"changed": True}
+`)
+	newDir := t.TempDir()
+	writeStarFile(t, filepath.Join(newDir, "_modules"), "nginx.star", `
+def configured(id, config):
+    return {"changed": False, "diff": "new-tree"}
+`)
+
+	registry := state.NewRegistry()
+	registry.Register("pkg.installed", func(id string, cfg map[string]any) (state.State, error) {
+		return nil, nil
+	})
+
+	oldLoader, _ := testLoader(t, oldDir)
+	if n, err := oldLoader.LoadGlobal(registry); err != nil || n != 2 {
+		t.Fatalf("old-tree load: n=%d err=%v, want 2/nil", n, err)
+	}
+
+	// The states-dir switch sequence: purge, then a FRESH loader on the new dir.
+	oldLoader.UnloadAll(registry)
+	if registry.Has("legacy.only_in_old_tree") {
+		t.Error("old-tree module survived UnloadAll")
+	}
+	if registry.Has("nginx.configured") {
+		t.Error("nginx.configured survived UnloadAll (must re-register from the new tree)")
+	}
+	if !registry.Has("pkg.installed") {
+		t.Fatal("UnloadAll removed a non-loader (built-in) registration")
+	}
+
+	newLoader, _ := testLoader(t, newDir)
+	if n, err := newLoader.LoadGlobal(registry); err != nil || n != 1 {
+		t.Fatalf("new-tree load: n=%d err=%v, want 1/nil — a leftover registration shadow-refused the reload", n, err)
+	}
+	s, err := registry.Build("nginx.configured", "t", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.Apply(context.Background()); err != nil || r.Diff != "new-tree" {
+		t.Errorf("post-switch: diff=%q err=%v, want new-tree", r.Diff, err)
+	}
+
+	// Regression shape without the purge: a fresh loader over a live registry
+	// refuses everything — proving the switch path NEEDS UnloadAll.
+	stale, _ := testLoader(t, newDir)
+	registryWithGhost := state.NewRegistry()
+	registryWithGhost.Register("nginx.configured", func(id string, cfg map[string]any) (state.State, error) {
+		return nil, nil
+	})
+	if n, err := stale.LoadGlobal(registryWithGhost); err != nil || n != 0 {
+		t.Fatalf("control: fresh loader over a foreign registration registered n=%d err=%v, want 0 (shadow refusal)", n, err)
+	}
+}
+
+// TestLoaderReload_FailedLoadRetriesWithoutMtimeChange pins the round-5
+// verification note: a .star that fails to execute must be RETRIED on the next
+// load pass even though its mtime is unchanged — post-switch (old
+// registrations purged) a skipped failure would leave the module gone until a
+// republish or restart. The error must surface on every pass, and a fixed file
+// (mtime bumped, as any real edit/republish produces) must then load.
+func TestLoaderReload_FailedLoadRetriesWithoutMtimeChange(t *testing.T) {
+	dir := t.TempDir()
+	modulesDir := filepath.Join(dir, "_modules")
+	path := filepath.Join(modulesDir, "app.star")
+	writeStarFile(t, modulesDir, "app.star", `
+def deployed(id, config)
+    return {"changed": True}
+`) // missing ':' — syntax error
+
+	loader, _ := testLoader(t, dir)
+	registry := state.NewRegistry()
+	if _, err := loader.LoadGlobal(registry); err == nil {
+		t.Fatal("first load of a broken file did not error")
+	}
+	// Unchanged file: the pass must RETRY (and re-report), not silently skip.
+	if _, err := loader.LoadGlobal(registry); err == nil {
+		t.Fatal("second load pass silently skipped the still-broken file")
+	}
+
+	writeStarFile(t, modulesDir, "app.star", `
+def deployed(id, config):
+    return {"changed": True}
+`)
+	bumpMtime(t, path)
+	if n, err := loader.LoadGlobal(registry); err != nil || n != 1 {
+		t.Fatalf("load after fix: n=%d err=%v, want 1/nil", n, err)
+	}
+	if !registry.Has("app.deployed") {
+		t.Error("fixed module not registered")
+	}
+}

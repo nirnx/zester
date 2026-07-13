@@ -59,7 +59,12 @@ func Lookup(module string) (modschema.ModuleInfo, bool) {
 		return modschema.ModuleInfo{}, false
 	}
 	mi, ok := byModule[module]
-	return mi, ok
+	if !ok {
+		return modschema.ModuleInfo{}, false
+	}
+	// Cloned on egress: byModule is a process-wide cache and every returned
+	// documentation view must be safe to vandalize (round 5).
+	return mi.Clone(), true
 }
 
 // All returns every embedded ModuleInfo, sorted by Module name.
@@ -67,7 +72,7 @@ func All() []modschema.ModuleInfo {
 	load()
 	out := make([]modschema.ModuleInfo, 0, len(byModule))
 	for _, mi := range byModule {
-		out = append(out, mi)
+		out = append(out, mi.Clone())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })
 	return out

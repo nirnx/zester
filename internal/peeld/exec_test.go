@@ -11,6 +11,7 @@ import (
 	"github.com/nirnx/zester/pkg/bus"
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/proto"
+	"github.com/nirnx/zester/pkg/starmod"
 )
 
 // TestResolveStatesDirWith covers the C2 retry helper: a ReadDir landing in
@@ -211,4 +212,76 @@ func TestSettingsForExec(t *testing.T) {
 			t.Errorf("got settings=%v stale=%v, want nil/false", got, stale)
 		}
 	})
+}
+
+// TestExecModule_StatesDirSwitchReloadsStarlark pins the round-5 P1 call-site
+// sequence in execModule's dir-switch branch: purge the OLD loader's
+// registrations (UnloadAll) BEFORE constructing the replacement loader, then
+// LoadGlobal the new tree. Without the purge — or with it misordered after the
+// `a.starLoader = NewLoader(...)` assignment — the fresh loader's empty
+// ownership ledger shadow-refuses every previously loaded Starlark name, so
+// the OLD builder stays live and this test's post-switch diff assertion fails.
+func TestExecModule_StatesDirSwitchReloadsStarlark(t *testing.T) {
+	a := newTestAgent(t)
+	tmp := t.TempDir()
+	baked := filepath.Join(tmp, "baked")
+	cache := filepath.Join(tmp, "cache") // empty at boot: baked wins
+	a.cfg.StatesCache = cache
+	a.bakedStatesDir = baked
+	a.client = &bus.Client{}
+	a.mctx = exec.NewModuleContext(&exec.ProviderSet{}, map[string]any{}, nil, discardLogger())
+
+	writeStar := func(root, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(root, "_modules"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "_modules", "app.star"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStar(baked, "def deployed(id, config):\n    return {\"changed\": False, \"diff\": \"old-tree\"}\n")
+
+	// Boot-equivalent sequence (agent.go local phase): engine + loader over
+	// the baked tree.
+	a.setupStatesEngine()
+	if a.effectiveStatesDir != baked {
+		t.Fatalf("effectiveStatesDir = %q, want baked %q", a.effectiveStatesDir, baked)
+	}
+	a.starLoader = starmod.NewLoader(starmod.LoaderConfig{
+		StatesDir:     a.effectiveStatesDir,
+		ModuleContext: a.mctx,
+		Logger:        discardLogger(),
+		DecodeOptions: a.decodeOpts,
+	})
+	if _, err := a.starLoader.LoadGlobal(a.registry); err != nil {
+		t.Fatal(err)
+	}
+	if !a.registry.Has("app.deployed") {
+		t.Fatal("boot loader did not register app.deployed")
+	}
+
+	// The KV cache fills (connected-phase sync) with a DIFFERENT app.star; the
+	// next execution's dir-resolution switches to it.
+	writeStar(cache, "def deployed(id, config):\n    return {\"changed\": False, \"diff\": \"new-tree\"}\n")
+
+	resp, err := a.execModule(context.Background(), proto.ExecRequest{Module: "test.echo", ID: "hi"})
+	if err != nil || resp.Error != "" {
+		t.Fatalf("switch-triggering exec: err=%v respErr=%q", err, resp.Error)
+	}
+	if a.effectiveStatesDir != cache {
+		t.Fatalf("effectiveStatesDir = %q, want cache %q — switch did not happen", a.effectiveStatesDir, cache)
+	}
+
+	s, err := a.registry.Build("app.deployed", "x", map[string]any{})
+	if err != nil {
+		t.Fatalf("app.deployed unregistered after the switch (shadow refusal — UnloadAll missing/misordered): %v", err)
+	}
+	r, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Diff != "new-tree" {
+		t.Errorf("post-switch diff = %q, want new-tree (the NEW tree's builder must be live)", r.Diff)
+	}
 }

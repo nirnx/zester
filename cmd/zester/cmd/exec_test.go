@@ -93,6 +93,71 @@ func TestParseModuleArgs_CmdRunKeyValueForms(t *testing.T) {
 	}
 }
 
+// TestParseModuleArgs_PillarAliases pins the round-5 critic fix: pillar.* is
+// the peel's Salt-compat alias of settings.*, answered by the same handler
+// that reads only args["key"] — so the CLI must bind the keyed form for both
+// spellings (pillar.get previously fell through to the generic fallback with
+// empty args and the peel errored).
+func TestParseModuleArgs_PillarAliases(t *testing.T) {
+	id, args, err := parseModuleArgs("pillar.get", []string{"app.port"})
+	if err != nil {
+		t.Fatalf("pillar.get: %v", err)
+	}
+	if id != "app.port" || args["key"] != "app.port" {
+		t.Errorf("pillar.get: id=%q args=%v, want key bound", id, args)
+	}
+	if _, _, err := parseModuleArgs("pillar.get", nil); err == nil {
+		t.Error("pillar.get without a key must be a usage error")
+	}
+	if id, _, err := parseModuleArgs("pillar.items", nil); err != nil || id != "items" {
+		t.Errorf("pillar.items: id=%q err=%v", id, err)
+	}
+	if id, _, err := parseModuleArgs("pillar.keys", nil); err != nil || id != "keys" {
+		t.Errorf("pillar.keys: id=%q err=%v", id, err)
+	}
+}
+
+// TestParseModuleArgs_DocdataKeyValueGuard pins the generalized round-4 fix
+// (round-5 critic): a first token assigning to a DECLARED parameter key makes
+// the whole invocation key=value form for every docdata module — previously
+// `pkg.installed name=nginx` bound the literal string "name=nginx" as the
+// package name. An assignment to an UNDECLARED key stays positional.
+func TestParseModuleArgs_DocdataKeyValueGuard(t *testing.T) {
+	// Primary via its canonical key.
+	id, args, err := parseModuleArgs("pkg.installed", []string{"name=nginx"})
+	if err != nil {
+		t.Fatalf("pkg.installed name=: %v", err)
+	}
+	if id != "nginx" || args["name"] != "nginx" {
+		t.Errorf("pkg.installed name=: id=%q args=%v, want nginx/name:nginx", id, args)
+	}
+
+	// Primary via a registered ALIAS; the ID follows the alias value.
+	id, args, err = parseModuleArgs("file.managed", []string{"path=/etc/motd", "contents=hi"})
+	if err != nil {
+		t.Fatalf("file.managed path=: %v", err)
+	}
+	if id != "/etc/motd" || args["path"] != "/etc/motd" || args["contents"] != "hi" {
+		t.Errorf("file.managed path=: id=%q args=%v", id, args)
+	}
+
+	// Declared non-primary key with a default-less primary absent: usage error,
+	// not a state named "ad-hoc".
+	if _, _, err := parseModuleArgs("pkg.installed", []string{"version=1.2"}); err == nil {
+		t.Error("pkg.installed version= without a name must be a usage error")
+	}
+
+	// Undeclared key stays a positional value (only the schema's own key set
+	// switches modes).
+	id, args, err = parseModuleArgs("pkg.installed", []string{"foo=bar"})
+	if err != nil {
+		t.Fatalf("pkg.installed foo=: %v", err)
+	}
+	if id != "foo=bar" || args["name"] != "foo=bar" {
+		t.Errorf("pkg.installed foo=: id=%q args=%v, want verbatim positional", id, args)
+	}
+}
+
 func TestParseModuleArgs_TestPing(t *testing.T) {
 	id, args, err := parseModuleArgs("test.ping", nil)
 	if err != nil {
