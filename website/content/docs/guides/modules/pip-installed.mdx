@@ -1,63 +1,116 @@
 ---
 title: "pip.installed"
-description: "Ensures a Python package is installed via pip. Supports version pinning and requirements files."
+description: "Ensure a Python package is installed via pip, optionally pinned or from a requirements file."
+---
+
+{/* zester-docgen:managed module="pip.installed" */}
+
+**Source**: `pkg/state/modules/pip_installed.go`
+
+---
+
+`pip.installed` ensures a Python package (`name`, defaulting to the state ID) is installed via `bin` (defaulting to `pip3`). Declaring `requirements` switches to installing from a requirements.txt file instead — `name`/`version` are then ignored for the install itself, though `name` still names the state.
+
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Package name to install (mutually exclusive with `requirements`) |
-| `version` | string | — | Pin to a specific version (e.g. `"2.28.0"`) |
-| `requirements` | string | — | Path to a requirements.txt file; when set, `name` is ignored for install |
-| `bin` | string | `pip3` | Path or name of the pip binary to use |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | pip package name; defaults to the state ID; ignored when requirements is set |
+| `version` | `string` | No | *(none)* | optional pinned version (e.g. 1.2.3), appended as package==version |
+| `requirements` | `string` | No | *(none)* | path to a requirements.txt file; when set, name is ignored for install |
+| `bin` | `string` | No | `pip3` | path or name of the pip binary to use; defaults to pip3 |
 
-## Behavior
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
-**Check**
+---
 
-- If `requirements` is set: always returns `NeedsChange: true` (cannot verify a requirements file without installing).
-- Otherwise: runs `<bin> show <package>`. Exit code non-zero → `NeedsChange: true`.
-- If `version` is set, parses the `Version:` line from `pip show` output and compares. Mismatch → `NeedsChange: true`.
+## Effects
 
-**Apply**
+### Check
 
-- Package mode: `<bin> install <package>[==version]`.
-- Requirements mode: `<bin> install -r <requirements>`.
+With `requirements` set, ALWAYS reports a change: a requirements file cannot be verified without actually running the install. Otherwise runs `<bin> show <name>`; a non-zero exit means the package needs installing. When `version` is declared and the package is present, parses the `Version:` line from `pip show` output and reports a change on any mismatch (compared as strings, so pre-release suffixes matter).
 
-**Revert**
+### Apply
 
-- Package mode: `<bin> uninstall -y <package>`.
-- Requirements mode: returns `Changed: false` (cannot determine which packages to remove from a requirements file).
+Package mode: `<bin> install <name>[==version]`. Requirements mode: `<bin> install -r <requirements>`. Reports the package and bin in its details.
+
+### Revert
+
+Package mode: `<bin> uninstall -y <name>`. Requirements mode: an explicit no-op (`Changed: false`) — there is no record of which packages a requirements file installed, so there is nothing safe to uninstall.
+
+
+---
 
 ## Examples
 
+### Install the latest version
+
+The package name defaults to the state ID.
+
 ```yaml
-# Install latest requests
 requests:
   pip.installed: []
+```
 
-# Pin to a specific version
+### Pin to a specific version
+
+version makes exact version equality part of the desired state.
+
+```yaml
 requests:
   pip.installed:
     - version: "2.28.0"
+```
 
-# Install from requirements file
+### Install from a requirements file
+
+requirements installs every dependency listed in the file; name is ignored for install.
+
+```yaml
 myapp-dependencies:
   pip.installed:
     - requirements: /opt/myapp/requirements.txt
     - require:
       - pkg.installed:python3-pip
+```
 
-# Use a virtual environment's pip
+### Use a virtual environment's pip
+
+bin overrides the pip binary, e.g. to target a venv.
+
+```yaml
 myapp-venv-requests:
   pip.installed:
     - name: requests
     - bin: /opt/myapp/venv/bin/pip
 ```
 
+### Install a package ad hoc
+
+The bare positional argument is the package name.
+
+```bash
+zester '*' pip.installed requests
+```
+
+
+---
+
 ## Notes
 
-- The module requires `pip3` (or the configured `bin`) to be available on `PATH`.
-- There is no cache refresh step; run `pip install --upgrade pip` separately if needed.
-- Version comparison uses the `Version:` field from `pip show` output. Pre-release suffixes are compared as strings.
+> **bin must be on PATH (or an absolute path)**
+>
+> The module requires `pip3` (or the configured `bin`) to be resolvable. There is no cache refresh step; run `pip install --upgrade pip` separately if needed.
+
+> **Version comparison is string-based**
+>
+> Version comparison uses the `Version:` field from `pip show` output, compared as a string. Pre-release suffixes (e.g. `2.28.0rc1`) are compared literally, not semantically.
+
+
+---
+
+## Divergences
+
+- BD-6

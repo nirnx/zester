@@ -8,6 +8,9 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testLocaleMctx(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileExec) *exec.ModuleContext {
@@ -22,7 +25,7 @@ func testLocaleMctx(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFi
 
 func TestLocalePresentName(t *testing.T) {
 	mctx := testLocaleMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("en_US.UTF-8", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +37,7 @@ func TestLocalePresentName(t *testing.T) {
 
 func TestLocalePresentPrimaryParamDefault(t *testing.T) {
 	mctx := testLocaleMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("en_US.UTF-8", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +50,7 @@ func TestLocalePresentPrimaryParamDefault(t *testing.T) {
 
 func TestLocalePresentRequisites(t *testing.T) {
 	mctx := testLocaleMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("en_US.UTF-8", map[string]any{
 		"require": []any{"pkg.installed:locales"},
 		"watch":   []any{"file.managed:/etc/locale.gen"},
@@ -75,7 +78,7 @@ func TestLocalePresentCheckNoChange(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate(localeGenPath, []byte("# comment\nen_US.UTF-8 UTF-8\n"), 0644)
 	mctx := testLocaleMctx(fakeCmd, fakeFile)
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("en_US.UTF-8", map[string]any{})
 	if err != nil {
@@ -101,7 +104,7 @@ func TestLocalePresentCheckGeneratedButNotEnabled(t *testing.T) {
 	t.Run("line commented out", func(t *testing.T) {
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
-		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile))("en_US.UTF-8", map[string]any{})
+		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +121,7 @@ func TestLocalePresentCheckGeneratedButNotEnabled(t *testing.T) {
 		// No /etc/locale.gen (glibc-langpack, musl): the facet does not
 		// apply — a generated locale is compliant from `locale -a` alone,
 		// and Apply never creates the file on such systems.
-		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, exectest.NewFakeFileExec()))("en_US.UTF-8", map[string]any{})
+		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, exectest.NewFakeFileExec()), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -135,7 +138,7 @@ func TestLocalePresentCheckGeneratedButNotEnabled(t *testing.T) {
 	t.Run("apply converges", func(t *testing.T) {
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
-		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile))("en_US.UTF-8", map[string]any{})
+		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -161,7 +164,7 @@ func TestLocalePresentCheckNoFileProvider(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd}}
-	s, err := NewLocalePresentBuilder(mctx)("en_US.UTF-8", map[string]any{})
+	s, err := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +187,7 @@ func TestLocalePresentReadErrorFailsPhases(t *testing.T) {
 	fakeFile.PreCreate(localeGenPath, []byte("en_US.UTF-8 UTF-8\nde_DE.UTF-8 UTF-8\n"), 0644)
 	fakeFile.SetReadError(localeGenPath, errors.New("input/output error"))
 
-	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile))("en_US.UTF-8", map[string]any{})
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +212,7 @@ func TestLocalePresentCheckNeedsChange(t *testing.T) {
 		ExitCode: 0,
 	}, nil)
 	mctx := testLocaleMctx(fakeCmd, exectest.NewFakeFileExec())
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("en_US.UTF-8", map[string]any{})
 	if err != nil {
@@ -229,7 +232,7 @@ func TestLocalePresentCheckError(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetError("locale", errors.New("command not found"))
 	mctx := testLocaleMctx(fakeCmd, exectest.NewFakeFileExec())
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("en_US.UTF-8", map[string]any{})
 	if err != nil {
@@ -248,7 +251,7 @@ func TestLocalePresentApply(t *testing.T) {
 	fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
 
 	mctx := testLocaleMctx(fakeCmd, fakeFile)
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("en_US.UTF-8", map[string]any{})
 	if err != nil {
@@ -282,7 +285,7 @@ func TestLocalePresentApplyError(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 
 	mctx := testLocaleMctx(fakeCmd, fakeFile)
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 
 	s, err := builder("en_US.UTF-8", map[string]any{})
 	if err != nil {
@@ -304,7 +307,7 @@ func TestLocalePresentRevertFreshInstanceNoOp(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate(localeGenPath, []byte("en_US.UTF-8 UTF-8\n"), 0644)
 
-	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile))("en_US.UTF-8", map[string]any{})
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +338,7 @@ func TestLocalePresentRevertAfterApply(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
 
-	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile))("en_US.UTF-8", map[string]any{})
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +370,7 @@ func TestLocalePresentRevertNotArmedWithoutFileDrift(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate(localeGenPath, []byte("en_US.UTF-8 UTF-8\n"), 0644)
 
-	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile))("en_US.UTF-8", map[string]any{})
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +403,7 @@ func TestLocalePresentNoLocaleGenNeverCreatesIt(t *testing.T) {
 	}, nil)
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile))("en_US.UTF-8", map[string]any{})
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +451,7 @@ func TestLocalePresentCharmapSpellingConverges(t *testing.T) {
 	t.Run("enabled canonical line is compliant", func(t *testing.T) {
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate(localeGenPath, []byte("en_US.UTF-8 UTF-8\n"), 0644)
-		s, err := NewLocalePresentBuilder(testLocaleMctx(newCmd(), fakeFile))("en_US.utf8", map[string]any{})
+		s, err := NewLocalePresentBuilder(testLocaleMctx(newCmd(), fakeFile), modschema.DecodeOptions{})("en_US.utf8", map[string]any{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -464,7 +467,7 @@ func TestLocalePresentCharmapSpellingConverges(t *testing.T) {
 	t.Run("check-apply-check on commented canonical line", func(t *testing.T) {
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
-		s, err := NewLocalePresentBuilder(testLocaleMctx(newCmd(), fakeFile))("en_US.utf8", map[string]any{})
+		s, err := NewLocalePresentBuilder(testLocaleMctx(newCmd(), fakeFile), modschema.DecodeOptions{})("en_US.utf8", map[string]any{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -502,9 +505,29 @@ func TestLocalePresentNoProvider(t *testing.T) {
 			File: exectest.NewFakeFileExec(),
 		},
 	}
-	builder := NewLocalePresentBuilder(mctx)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
 	_, err := builder("en_US.UTF-8", map[string]any{})
 	if err == nil {
 		t.Error("expected error when no command provider is set")
 	}
+}
+
+var _ state.State = (*LocalePresent)(nil)
+
+// TestLocalePresentContract replays the permanent differential contract fixtures
+// against the migrated locale.present decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is the
+// permanent regression guard for locale.present's decode behavior — including
+// the flagged BD-6 divergence (a non-string `name` is now coerced, or rejected
+// for composites, instead of silently falling back to the state ID).
+func TestLocalePresentContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var l LocalePresent
+		if _, err := localePresentSpec.Decode(id, config, &l, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &l, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/locale.present.yaml")
 }

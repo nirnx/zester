@@ -1,0 +1,347 @@
+module: git.latest
+# Permanent differential contract for the git.latest migration. `name` is the
+# primary and means the REMOTE URL (the opposite of git.cloned, whose primary
+# is the clone path); `target` is `required`; `branch`/`rev` are plain
+# strings; `force` is a primitive bool. There is no int field here (no BD-1
+# surface). These cases were approved by the legacy-vs-new equivalence
+# comparison while the legacy constructor still existed (see the migration
+# changelog); after its deletion RunContract replays them as the permanent
+# regression guard. Accept cases pin the decoded exported-field projection;
+# reject cases pin the error kind.
+#   BD-2 — an ORIGIN-INDEPENDENT truthy/falsy-string force is honored (was
+#          silently dropped);
+#   BD-6 — a wrong-typed name/target/branch/rev is coerced (scalar) or
+#          rejected (composite); the numeric target accept is an
+#          ERROR->ACCEPT flip on the REQUIRED param;
+#   BD-7 — an integer force is 1=true / 0=false, any other integer a typed
+#          error;
+#   §2.1/§3 empty-string (PARITY, not a BD) — an empty-string name falls back
+#          to the state ID; when BOTH name and the state ID are empty, the
+#          builder tail restores the legacy
+#          "git.latest: <id>: url (name) is required" error (parity
+#          restoration, not a BD). Like every other builder-tail cross-field
+#          rule in this package (ssh_auth's user-or-config, sysctl's
+#          persist-needs-file-provider), this is exercised by the
+#          TestGitLatestMissingURL unit test, not this decoder contract —
+#          RunContract replays only `gitLatestSpec.Decode`, which never sees
+#          builder-tail logic.
+cases:
+  # ============================ name (primary = URL) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: https://github.com/example/app.git
+      target: /opt/app
+    want:
+      URL: https://github.com/example/app.git
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: https://github.com/example/app.git
+      target: /opt/app
+    want:
+      URL: https://github.com/example/app.git
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: https://github.com/example/app.git
+      target: /opt/app
+    want:
+      URL: https://github.com/example/app.git
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      target: /opt/app
+    want:
+      URL: https://github.com/example/app.git
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      name: ""
+      target: /opt/app
+    want:
+      URL: https://github.com/example/app.git
+  # BD-6: a numeric name is coerced to its string form (was fallback-to-id).
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      target: /opt/app
+    want:
+      URL: "123"
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      target: /opt/app
+    want_error: wrong_type
+
+  # ============================ target (required) ============================
+  - label: target-string-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      target: /opt/app
+    want:
+      Target: /opt/app
+  - label: target-missing-rejected-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input: {}
+    want_error: missing_required
+  - label: target-empty-rejected-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      target: ""
+    want_error: missing_required
+  - label: target-missing-rejected-msgpack
+    universe: msgpack
+    id: https://github.com/example/app.git
+    input: {}
+    want_error: missing_required
+  # BD-6 (ERROR->ACCEPT flip on a REQUIRED param): a numeric target is coerced
+  # to its string form and ACCEPTED, where legacy config["target"].(string)
+  # missed the non-string and hard-errored 'target is required'.
+  - label: target-numeric-accepted-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target: 123
+    want:
+      Target: "123"
+  - label: target-numeric-accepted-msgpack
+    universe: msgpack
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target: 123
+    want:
+      Target: "123"
+  - label: target-composite-rejected-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== branch / rev ==============================
+  - label: branch-string-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      target: /opt/app
+      branch: main
+    want:
+      Branch: main
+  - label: rev-string-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      target: /opt/app
+      rev: a1b2c3d
+    want:
+      Rev: a1b2c3d
+  - label: branch-numeric-coerced-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target: /opt/app
+      branch: 5
+    want:
+      Branch: "5"
+  - label: branch-numeric-coerced-msgpack
+    universe: msgpack
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target: /opt/app
+      branch: 5
+    want:
+      Branch: "5"
+  - label: branch-composite-rejected-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target: /opt/app
+      branch:
+        - a
+        - b
+    want_error: wrong_type
+  - label: rev-numeric-coerced-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target: /opt/app
+      rev: 7
+    want:
+      Rev: "7"
+  - label: rev-numeric-coerced-msgpack
+    universe: msgpack
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target: /opt/app
+      rev: 7
+    want:
+      Rev: "7"
+  - label: rev-composite-rejected-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-6
+    input:
+      target: /opt/app
+      rev:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== force (bool) ==============================
+  - label: force-true-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      target: /opt/app
+      force: true
+    want:
+      Force: true
+  - label: force-true-msgpack
+    universe: msgpack
+    id: https://github.com/example/app.git
+    input:
+      target: /opt/app
+      force: true
+    want:
+      Force: true
+  - label: force-absent-defaults-false-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      target: /opt/app
+    want:
+      Force: false
+  # BD-2: a CLI force=true (the string "true") is honored (was dropped to false).
+  - label: force-truthy-string-cli
+    universe: cli
+    id: https://github.com/example/app.git
+    bd: BD-2
+    input:
+      target: /opt/app
+      force: true
+    want:
+      Force: true
+  # BD-2 is ORIGIN-INDEPENDENT: a YAML-quoted "yes" is honored too.
+  - label: force-truthy-string-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-2
+    input:
+      target: /opt/app
+      force: "yes"
+    want:
+      Force: true
+  # BD-2: a falsy string (CLI and YAML-quoted) is honored (was dropped to
+  # false, indistinguishable from the default — but the point is it is now an
+  # EXPLICIT, honored false rather than an accidental one).
+  - label: force-falsy-string-cli
+    universe: cli
+    id: https://github.com/example/app.git
+    bd: BD-2
+    input:
+      target: /opt/app
+      force: false
+    want:
+      Force: false
+  - label: force-falsy-string-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-2
+    input:
+      target: /opt/app
+      force: "no"
+    want:
+      Force: false
+  # BD-7: an integer force is 1=true / 0=false across every int kind.
+  - label: force-int-one-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-7
+    input:
+      target: /opt/app
+      force: 1
+    want:
+      Force: true
+  - label: force-int-one-msgpack
+    universe: msgpack
+    id: https://github.com/example/app.git
+    bd: BD-7
+    input:
+      target: /opt/app
+      force: 1
+    want:
+      Force: true
+  - label: force-int-zero-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-7
+    input:
+      target: /opt/app
+      force: 0
+    want:
+      Force: false
+  - label: force-int-zero-msgpack
+    universe: msgpack
+    id: https://github.com/example/app.git
+    bd: BD-7
+    input:
+      target: /opt/app
+      force: 0
+    want:
+      Force: false
+  # BD-7 (rejection arm): any integer other than 0/1 is a typed value error.
+  - label: force-invalid-int-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    bd: BD-7
+    input:
+      target: /opt/app
+      force: 2
+    want_error: value_invalid
+  - label: force-invalid-int-msgpack
+    universe: msgpack
+    id: https://github.com/example/app.git
+    bd: BD-7
+    input:
+      target: /opt/app
+      force: 2
+    want_error: value_invalid
+
+  # ============================== misc ==============================
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: https://github.com/example/app.git
+    input:
+      target: /opt/app
+      require:
+        - pkg.installed:git
+    want:
+      URL: https://github.com/example/app.git
+      Target: /opt/app

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
 )
 
@@ -23,12 +24,21 @@ const localeGenPath = "/etc/locale.gen"
 // is never created. Both halves compare locale names with the same
 // normalisation (`locale -a` prints "en_US.utf8" for "en_US.UTF-8"), so
 // Check and Apply agree on exactly which line enables the locale.
+//
+// LocalePresent is also its own schema proto: the single tagged exported
+// Locale field IS the module's parameter declaration (one schema declaration
+// per module) — `name` is the ONLY parameter, a primitive string primary, so
+// no semantic type is needed. Under the uniform decoder a numeric `name`
+// coerces to its string form and a composite is rejected (BD-6). The
+// unexported runtime fields (id, reqs, cmd, file, revert memo) are untagged,
+// so the schema compiler skips them.
 type LocalePresent struct {
 	id   string
 	reqs state.Requisites
 
-	// Locale is the locale string to enable (e.g. "en_US.UTF-8").
-	Locale string
+	// Locale is the locale string to enable (e.g. "en_US.UTF-8"); it defaults
+	// to the state ID.
+	Locale string `zester:"name,primary" usage:"locale string to enable (e.g. en_US.UTF-8); defaults to the state ID"`
 
 	cmd  exec.CommandExec
 	file exec.FileExec
@@ -43,27 +53,99 @@ type LocalePresent struct {
 	enabledByApply bool
 }
 
-// NewLocalePresentBuilder returns a state.Builder that creates LocalePresent states
-// using the given ModuleContext's command and file providers.
-func NewLocalePresentBuilder(mctx *exec.ModuleContext) state.Builder {
+// localePresentSpec is the compiled schema + documentation for locale.present.
+// It is compiled once at package init and executed by every decode path (the
+// builder below, and Registry.Parse). The prose is drift-corrected against the
+// live Check/Apply/Revert behavior — notably that /etc/locale.gen is NEVER
+// created on a system that lacks it (the hand page wrongly claimed Apply
+// creates the file).
+var localePresentSpec = mustSpec("locale.present", modschema.KindState, LocalePresent{}, modschema.Doc{
+	Summary: "Ensure a locale is enabled in /etc/locale.gen and generated via locale-gen.",
+	Description: "`locale.present` ensures a locale (`name`, defaulting to the state ID) is enabled and " +
+		"generated. It verifies two independent halves: that `locale -a` lists the locale, and — only on " +
+		"systems that have `/etc/locale.gen` (the Debian family) — that the locale's line in that file is " +
+		"present and uncommented. Both halves compare locale names case-insensitively with dashes stripped, " +
+		"so `en_US.UTF-8` matches the `locale -a` spelling `en_US.utf8`.",
+	Effects: modschema.Effects{
+		Check: "Runs `locale -a` and reports a change when the locale is absent from its output. When " +
+			"present, and only when `/etc/locale.gen` exists, it ALSO verifies the locale's line in that " +
+			"file is present and uncommented — a locale generated out-of-band (localedef, image bakery) or " +
+			"whose line was later commented out is reported as needing a change, so the next Apply " +
+			"re-enables it. On a system without `/etc/locale.gen` (non-Debian: glibc langpacks, musl), " +
+			"`locale -a` membership alone satisfies the state.",
+		Apply: "On systems with `/etc/locale.gen`: uncomments the locale's existing line, or appends a new " +
+			"`<locale> UTF-8` line when none matches — the file itself is NEVER created if it does not " +
+			"already exist (a system without it is left without it). Then runs `locale-gen` to regenerate " +
+			"the locale database. Reports Changed with the locale in its details.",
+		Revert: "Undoes only what this run's Apply actually changed in `/etc/locale.gen` (re-commenting the " +
+			"line it uncommented or appended) and re-runs `locale-gen`. A fresh instance (a standalone " +
+			"revert) recorded nothing and is an explicit clean no-op — a locale.gen line enabled by the " +
+			"distro installer or an admin is never safe to comment out.",
+	},
+	Examples: []modschema.Example{
+		{
+			Title:       "Enable a locale",
+			Kind:        "state",
+			Explanation: "The locale defaults to the state ID.",
+			Code:        "en_US.UTF-8:\n  locale.present:\n    - require:\n      - pkg.installed:locales\n",
+		},
+		{
+			Title:       "Enable a second locale in order",
+			Kind:        "state",
+			Explanation: "require orders one locale.gen edit after another (here, de_DE.UTF-8) to avoid concurrent rewrites.",
+			Code:        "fr_FR.UTF-8:\n  locale.present:\n    - require:\n      - \"locale.present:de_DE.UTF-8\"\n",
+		},
+		{
+			Title:       "Enable a locale ad hoc",
+			Kind:        "cli",
+			Explanation: "The bare positional argument is the locale string.",
+			Code:        "zester '*' locale.present en_US.UTF-8",
+		},
+	},
+	Notes: []modschema.Note{
+		{
+			Level: "info",
+			Title: "Debian/Ubuntu only for the locale.gen facet",
+			Body: "This module targets systems that use `/etc/locale.gen` and `locale-gen` (Debian, " +
+				"Ubuntu). On Red Hat-based systems, locale management uses `localectl` instead — use " +
+				"`cmd.run` with `localectl set-locale` there. The `locale` binary and `locale-gen` must be " +
+				"available on the target (the `locales` package on Debian/Ubuntu).",
+		},
+		{
+			Level: "info",
+			Title: "locale.gen is never created from scratch",
+			Body: "On a system that already has `/etc/locale.gen`, a missing locale line is APPENDED " +
+				"(with a default `UTF-8` encoding suffix). On a system without the file at all, it is " +
+				"never created — the locale.gen facet simply does not apply there, and the state is " +
+				"satisfied by `locale -a` membership alone.",
+		},
+	},
+	Divergences: []string{"BD-6"},
+})
+
+// NewLocalePresentBuilder returns a state.Builder that creates LocalePresent
+// states using the given ModuleContext's command and file providers. Decode
+// policy (unknown-key handling, reserved keys) is threaded via opts; the peel
+// supplies it through modules.RegisterAll.
+func NewLocalePresentBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions) state.Builder {
 	return func(id string, config map[string]any) (state.State, error) {
 		if mctx.Command == nil {
 			return nil, fmt.Errorf("locale.present: no command provider available")
 		}
-		return newLocalePresent(id, config, mctx.Command, mctx.File)
+		// Decode the typed parameters first. Decode is transactional and commits
+		// by replacing the whole struct, so the injected providers, id, and
+		// requisites MUST be assigned AFTER it — assigning them before would be
+		// overwritten by the committed scratch value.
+		l := &LocalePresent{}
+		if _, err := localePresentSpec.Decode(id, config, l, opts); err != nil {
+			return nil, fmt.Errorf("locale.present: %w", err)
+		}
+		l.id = id
+		l.cmd = mctx.Command
+		l.file = mctx.File
+		l.reqs = state.ParseRequisites(config)
+		return l, nil
 	}
-}
-
-func newLocalePresent(id string, config map[string]any, cmd exec.CommandExec, file exec.FileExec) (state.State, error) {
-	l := &LocalePresent{id: id, cmd: cmd, file: file}
-
-	l.Locale, _ = config["name"].(string)
-	if l.Locale == "" {
-		l.Locale = id
-	}
-
-	l.reqs = state.ParseRequisites(config)
-	return l, nil
 }
 
 func (l *LocalePresent) Name() string           { return "locale.present:" + l.id }

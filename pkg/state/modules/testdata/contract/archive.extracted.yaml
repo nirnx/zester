@@ -1,0 +1,438 @@
+module: archive.extracted
+# Permanent differential contract for the archive.extracted migration. `name`
+# is the primary (defaulting to the state ID); `source` is `required`;
+# `archive_format` carries an eager `default=auto`; `if_missing`/`source_hash`
+# are plain strings (source_hash is TrimSpace'd in the builder tail — a
+# decoder never trims); `makedirs` is a primitive bool. These cases were
+# approved by the legacy-vs-new equivalence comparison while the legacy
+# constructor still existed (see the migration changelog); after its deletion
+# RunContract replays them as the permanent regression guard. Accept cases pin
+# the decoded exported-field projection; reject cases pin the error kind.
+#   BD-2 — an ORIGIN-INDEPENDENT truthy/falsy-string makedirs (in EITHER the
+#          CLI or a YAML-quoted value) is honored (was silently dropped);
+#   BD-6 — a wrong-typed name/source/archive_format/if_missing/source_hash is
+#          coerced (scalar) or rejected (composite) instead of silently
+#          falling back / hard-erroring; the numeric `source` accept is an
+#          ERROR->ACCEPT flip on the REQUIRED param;
+#   BD-7 — an integer makedirs is 1=true / 0=false, any other integer a typed
+#          error (was silently dropped);
+#   §2.1/§3 empty-string (PARITY, not a BD) — an empty-string name falls back
+#          to the state ID; an empty-string archive_format falls back to auto;
+#          an empty/whitespace-only source_hash TrimSpace's to "".
+cases:
+  # ============================ name (primary) ============================
+  - label: string-name-yaml
+    universe: yaml
+    id: web
+    input:
+      name: /opt/app
+      source: /tmp/app.tar.gz
+    want:
+      Dir: /opt/app
+      Format: auto
+  - label: string-name-msgpack
+    universe: msgpack
+    id: web
+    input:
+      name: /opt/app
+      source: /tmp/app.tar.gz
+    want:
+      Dir: /opt/app
+  - label: string-name-cli
+    universe: cli
+    id: web
+    input:
+      name: /opt/app
+      source: /tmp/app.tar.gz
+    want:
+      Dir: /opt/app
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+    want:
+      Dir: /opt/app
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      name: ""
+      source: /tmp/app.tar.gz
+    want:
+      Dir: /opt/app
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /opt/app
+    input:
+      name:
+      source: /tmp/app.tar.gz
+    want:
+      Dir: /opt/app
+  # BD-6: a numeric name is coerced to its string form (was fallback-to-id).
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      source: /tmp/app.tar.gz
+    want:
+      Dir: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+      source: /tmp/app.tar.gz
+    want:
+      Dir: "123"
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+      source: /tmp/app.tar.gz
+    want_error: wrong_type
+
+  # ============================ source (required) ============================
+  - label: source-string-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+    want:
+      Source: /tmp/app.tar.gz
+  - label: source-missing-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    input: {}
+    want_error: missing_required
+  - label: source-empty-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: ""
+    want_error: missing_required
+  - label: source-missing-rejected-msgpack
+    universe: msgpack
+    id: /opt/app
+    input: {}
+    want_error: missing_required
+  # BD-6 (ERROR->ACCEPT flip on a REQUIRED param): a numeric source is coerced
+  # to its string form and ACCEPTED, where legacy config["source"].(string)
+  # missed the non-string and hard-errored 'source is required'.
+  - label: source-numeric-accepted-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: 123
+    want:
+      Source: "123"
+  - label: source-numeric-accepted-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: 123
+    want:
+      Source: "123"
+  - label: source-composite-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-6
+    input:
+      source:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ==================== archive_format (eager default=auto) ====================
+  - label: format-explicit-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.zip
+      archive_format: zip
+    want:
+      Format: zip
+  - label: format-default-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+    want:
+      Format: auto
+  # PARITY (§2.1/§3 empty-string, not a BD): an empty-string archive_format
+  # falls THROUGH like absence to the auto default.
+  - label: format-empty-string-defaults-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      archive_format: ""
+    want:
+      Format: auto
+  - label: format-empty-string-defaults-msgpack
+    universe: msgpack
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      archive_format: ""
+    want:
+      Format: auto
+  # BD-6: a numeric archive_format is coerced to its string form (was dropped
+  # to the auto default).
+  - label: format-numeric-coerced-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      archive_format: 7
+    want:
+      Format: "7"
+  - label: format-numeric-coerced-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      archive_format: 7
+    want:
+      Format: "7"
+  - label: format-composite-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      archive_format:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== if_missing ==============================
+  - label: if-missing-string-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      if_missing: /opt/app/marker
+    want:
+      IfMissing: /opt/app/marker
+  # BD-6: a numeric if_missing is coerced to its string form (was dropped to "").
+  - label: if-missing-numeric-coerced-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      if_missing: 42
+    want:
+      IfMissing: "42"
+  - label: if-missing-numeric-coerced-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      if_missing: 42
+    want:
+      IfMissing: "42"
+  - label: if-missing-composite-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      if_missing:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== source_hash ==============================
+  # PARITY (not a BD): source_hash is TrimSpace'd in the builder tail — a
+  # decoder never trims, so this is builder-tail module logic, not schema.
+  - label: source-hash-trimmed-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: "  sha256=abc123  "
+    want:
+      SourceHash: "sha256=abc123"
+  - label: source-hash-whitespace-only-trims-to-empty-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: "   "
+    want:
+      SourceHash: ""
+  # BD-6: a numeric source_hash is coerced to its string form (then
+  # TrimSpace'd, a no-op on a digit-only string) where legacy
+  # `config["source_hash"].(string)` dropped it to "".
+  - label: source-hash-numeric-coerced-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: 12345
+    want:
+      SourceHash: "12345"
+  - label: source-hash-numeric-coerced-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: 12345
+    want:
+      SourceHash: "12345"
+  - label: source-hash-composite-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-6
+    input:
+      source: /tmp/app.tar.gz
+      source_hash:
+        - a
+        - b
+    want_error: wrong_type
+
+  # ============================== makedirs (bool) ==============================
+  - label: makedirs-true-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: true
+    want:
+      MakeDirs: true
+  - label: makedirs-true-msgpack
+    universe: msgpack
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: true
+    want:
+      MakeDirs: true
+  - label: makedirs-absent-defaults-false-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+    want:
+      MakeDirs: false
+  # BD-2: a CLI makedirs=true (the string "true") is honored (was dropped to false).
+  - label: makedirs-truthy-string-cli
+    universe: cli
+    id: /opt/app
+    bd: BD-2
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: true
+    want:
+      MakeDirs: true
+  # BD-2 is ORIGIN-INDEPENDENT: a YAML-quoted "yes" is honored too.
+  - label: makedirs-truthy-string-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-2
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: "yes"
+    want:
+      MakeDirs: true
+  # BD-2: a falsy string (CLI and YAML-quoted) is honored.
+  - label: makedirs-falsy-string-cli
+    universe: cli
+    id: /opt/app
+    bd: BD-2
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: false
+    want:
+      MakeDirs: false
+  - label: makedirs-falsy-string-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-2
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: "no"
+    want:
+      MakeDirs: false
+  # BD-7: an integer makedirs is 1=true / 0=false across every int kind.
+  - label: makedirs-int-one-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-one-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-zero-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-zero-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: 0
+    want:
+      MakeDirs: false
+  # BD-7 (rejection arm): any integer other than 0/1 is a typed value error.
+  - label: makedirs-invalid-int-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: 2
+    want_error: value_invalid
+  - label: makedirs-invalid-int-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      makedirs: 2
+    want_error: value_invalid
+
+  # ============================== misc ==============================
+  - label: reserved-key-ignored-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      require:
+        - pkg.installed:tar
+    want:
+      Dir: /opt/app
+      Source: /tmp/app.tar.gz

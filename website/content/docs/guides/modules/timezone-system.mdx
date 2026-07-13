@@ -1,56 +1,109 @@
 ---
 title: "timezone.system"
-description: "Ensures the system timezone is set to a desired value. Uses timedatectl as the primary mechanism with a fallback to /etc/timezone + dpkg-reconfigure."
+description: "Ensure the system timezone is set to a desired value."
+---
+
+{/* zester-docgen:managed module="timezone.system" */}
+
+**Source**: `pkg/state/modules/timezone_system.go`
+
+---
+
+`timezone.system` ensures the system timezone (`name`, defaulting to the state ID) is set. It uses `timedatectl` as the primary mechanism, falling back to writing `/etc/timezone` and invoking `dpkg-reconfigure` on systems without it (non-systemd). `utc` additionally sets the hardware clock to UTC.
+
 ---
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-|-|-|-|
-| `name` | string | state ID | Timezone string (e.g. `"America/New_York"`, `"UTC"`) |
-| `utc` | bool | false | Set the hardware clock to UTC (`timedatectl set-local-rtc 0`) |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | desired timezone (e.g. America/New_York, UTC); defaults to the state ID |
+| `utc` | `bool` | No | *(none)* | set the hardware clock to UTC (timedatectl set-local-rtc 0); a boolean that also accepts the integers 1 (true) and 0 (false) |
 
-## Behavior
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
-**Check**
+---
 
-1. Runs `timedatectl show --property=Timezone --value` and trims whitespace.
-2. If `timedatectl` fails (not available), falls back to reading `/etc/timezone`.
-3. Compares to the desired timezone. Match → `NeedsChange: false`; otherwise `NeedsChange: true`.
+## Effects
 
-**Apply**
+### Check
 
-1. Reads current timezone before making changes (stored for Revert).
-2. Runs `timedatectl set-timezone <timezone>`.
-3. If `timedatectl` fails, writes `<timezone>` to `/etc/timezone` and runs `dpkg-reconfigure -f noninteractive tzdata`.
-4. If `utc: true`, additionally runs `timedatectl set-local-rtc 0`.
+Reads the current timezone via `timedatectl show --property=Timezone --value`, falling back to `/etc/timezone` when `timedatectl` fails or is unavailable. Reports a change when the current value does not match `name`.
 
-**Revert**
+### Apply
 
-Restores the timezone that was active before Apply ran by calling `timedatectl set-timezone <previousTZ>`. If Apply was never called, Revert is a no-op (previous timezone is unknown).
+Reads and remembers the current timezone (for Revert), then runs `timedatectl set-timezone <name>`. If that fails, it writes `<name>` to `/etc/timezone` and runs `dpkg-reconfigure -f noninteractive tzdata` instead. When `utc` is set, it additionally runs `timedatectl set-local-rtc 0`. Reports the timezone and its previous value in its details.
+
+### Revert
+
+Restores the timezone that was active immediately before this run's Apply, via `timedatectl set-timezone <previous>`. If Apply was never called on this instance the previous timezone is unknown, and Revert is an explicit no-op rather than a guess.
+
+
+---
 
 ## Examples
 
+### Set the timezone to UTC
+
+The timezone defaults to the state ID.
+
 ```yaml
-# Set timezone to UTC
 UTC:
   timezone.system: []
+```
 
-# Set a regional timezone and sync hardware clock
+### Set a regional timezone and sync the hardware clock
+
+utc: true additionally sets the hardware clock to UTC.
+
+```yaml
 America/Chicago:
   timezone.system:
     - utc: true
     - require:
       - pkg.installed:tzdata
+```
 
-# Use explicit name parameter
+### Use an explicit name parameter
+
+name overrides the state ID as the desired timezone.
+
+```yaml
 system-timezone:
   timezone.system:
     - name: Europe/Berlin
 ```
 
+### Set the timezone ad hoc
+
+The bare positional argument is the timezone string.
+
+```bash
+zester '*' timezone.system America/New_York
+```
+
+
+---
+
 ## Notes
 
-- Timezone strings must match entries in the IANA Time Zone Database (e.g. `America/New_York`, not `EST`).
-- On systems without `timedatectl` (non-systemd), the fallback writes `/etc/timezone` and invokes `dpkg-reconfigure tzdata`. The `dpkg-reconfigure` binary must be available.
-- The `utc` parameter only affects the hardware clock setting, not the timezone string itself.
+> **Timezone strings are IANA names**
+>
+> `name` must match an entry in the IANA Time Zone Database (e.g. `America/New_York`, not `EST`).
+
+> **Non-systemd fallback**
+>
+> On systems without `timedatectl` (non-systemd), Apply falls back to writing `/etc/timezone` and invoking `dpkg-reconfigure -f noninteractive tzdata`; the `dpkg-reconfigure` binary must be available there.
+
+> **utc only affects the hardware clock**
+>
+> The `utc` parameter only controls whether the hardware clock is set to UTC (`timedatectl set-local-rtc 0`); it does not change the timezone string itself.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7

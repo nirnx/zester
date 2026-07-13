@@ -1,9 +1,15 @@
 ---
 title: "archive.extracted"
-description: "Extracts a tar or zip archive from a local path or URL into a target directory. Idempotency is path-based: set if_missing to a file or directory the extraction creates."
+description: "Extract a tar or zip archive (from a local path or URL) into a target directory."
 ---
 
-**Source**: `pkg/state/modules/archive.go`
+{/* zester-docgen:managed module="archive.extracted" */}
+
+**Source**: `pkg/state/modules/archive_extracted.go`
+
+---
+
+`archive.extracted` extracts `source` (a local file path or an http/https/ftp URL) into `name` (the target directory, defaulting to the state ID). Idempotency has three independent strengths, weakest to strongest: without `if_missing` or `source_hash`, a PRE-EXISTING target directory alone counts as "already extracted" (declare one of them for anything beyond throwaway use); `if_missing` names a path whose existence is the sole extraction marker (Salt parity), replacing the weak directory check; `source_hash` records the declared value in a marker file after a successful extraction and re-extracts when the declaration no longer matches — it is an OPAQUE string comparison, never a checksum verified against the archive bytes.
 
 ---
 
@@ -11,47 +17,39 @@ description: "Extracts a tar or zip archive from a local path or URL into a targ
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | Target directory the archive is extracted into. |
-| `source` | `string` | **Yes** | — | Local file path, or an `http://` / `https://` / `ftp://` URL. Remote sources are downloaded with `curl` (falling back to `wget`). |
-| `archive_format` | `string` | No | `auto` | `tar`, `zip`, or `auto`. With `auto`, the format is inferred from the source name: `.zip` → zip, everything else (`.tar*`, `.tgz`, `.tbz2`, `.txz`, unknown) → tar. |
-| `if_missing` | `string` | No | `""` | A path whose existence means the archive is already extracted. When set, it is the **sole** idempotency check. |
-| `makedirs` | `bool` | No | `false` | Create the target directory (and parents, mode `0755`) before extracting. |
+| `name` | `string` | No | State ID | target directory the archive is extracted into; defaults to the state ID |
+| `source` | `string` | Yes | *(none)* | local file path, or an http/https/ftp URL to the archive; required |
+| `archive_format` | `string` | No | `auto` | archive format: tar, zip, or auto (inferred from the source name); defaults to auto |
+| `if_missing` | `string` | No | *(none)* | path whose existence means the archive is already extracted; when set, it is the sole idempotency check (besides source_hash) |
+| `source_hash` | `string` | No | *(none)* | declared hash of the source archive (e.g. sha256=<hex>); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes |
+| `makedirs` | `bool` | No | *(none)* | create the target directory (and parents, mode 0755) before extracting; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## Check Behavior
+## Effects
 
-- With `if_missing` set: no changes needed if that path exists, changes needed otherwise.
-- Without `if_missing` (weak fallback): no changes needed if the target directory exists, changes needed otherwise.
+### Check
 
-<Callout type="warn" title="Set `if_missing`">
-Without `if_missing`, an existing target directory is considered "already extracted" — even if it is empty. Point `if_missing` at a file the archive actually creates.
-</Callout>
+With `if_missing` set: reports a change unless that path exists (the target-directory fallback is not consulted). Without it: reports a change unless the target directory exists — and a directory this run's `makedirs` created ahead of a FAILED extraction attempt does not count (a retried Apply proceeds rather than latching on its own directory). When `source_hash` is declared, ALSO requires a marker file recording that exact value to exist inside the target — an unset or mismatched marker reports a change even if the directory/`if_missing` guard passed, so bumping `source`/`source_hash` re-extracts.
 
----
+### Apply
 
-## Apply Behavior
+Re-evaluates the same guard as Check (a watch-forced apply bypasses Check entirely, and an already-extracted archive must be a clean no-op — never a re-download/re-extract over local modifications). When extraction is needed: creates the target directory (mode 0755) when `makedirs` is set and it does not already exist; downloads a remote `source` (http/https/ftp) to a temp file via `curl -fSL`, falling back to `wget` when curl is unavailable; extracts with `unzip -o <archive> -d <dir>` (zip) or `tar -xf <archive> -C <dir>` (tar), inferring the format from the source name when `archive_format` is `auto` (`.zip` → zip; `.tgz`/`.tbz2`/`.txz`/anything containing `.tar` → tar; anything else defaults to tar); a non-zero exit fails the state. Only AFTER a successful extraction does it write the `source_hash` marker (a failed attempt never latches the state as done). Reports the source, target, and resolved format in its details.
 
-1. Creates the target directory when `makedirs` is set (recorded so Revert knows it may remove it).
-2. Remote sources are downloaded to a temp file via `curl -fSL` (or `wget` when curl is unavailable).
-3. Extraction: `unzip -o <archive> -d <dir>` for zip, `tar -xf <archive> -C <dir>` for tar. A non-zero exit code fails the state.
+### Revert
 
----
+If Apply created the target directory (via `makedirs`), removes it recursively. Otherwise an explicit no-op (`Changed: false`) — individual extracted files are not tracked, so there is nothing else safe to remove.
 
-## Revert Behavior
-
-- If Apply created the target directory (via `makedirs`), Revert removes it recursively.
-- Otherwise Revert is a no-op (`Changed: false`) — extracted files are not tracked individually.
 
 ---
 
 ## Examples
 
-### State File
+### Extract a release tarball once
 
-**Extract a release tarball once:**
+if_missing points at a file the archive actually creates, the real extraction marker.
 
 ```yaml
 /opt/prometheus:
@@ -61,7 +59,9 @@ Without `if_missing`, an existing target directory is considered "already extrac
     - makedirs: true
 ```
 
-**Local zip archive:**
+### Extract a local zip archive
+
+archive_format overrides auto-detection; if_missing avoids re-extracting.
 
 ```yaml
 /srv/webapp:
@@ -71,10 +71,48 @@ Without `if_missing`, an existing target directory is considered "already extrac
     - if_missing: /srv/webapp/index.html
 ```
 
+### Re-extract on a version bump with source_hash
+
+Changing source_hash (or source) triggers re-extraction on the next run; the value is an opaque declaration, not a verified checksum.
+
+```yaml
+/opt/myapp:
+  archive.extracted:
+    - source: /srv/releases/myapp-2.0.0.tar.gz
+    - source_hash: "sha256=<hex-of-2.0.0>"
+    - makedirs: true
+```
+
+### Extract an archive ad hoc
+
+The bare positional argument is the target directory; source is a key=value.
+
+```bash
+zester '*' archive.extracted /opt/tool source=/tmp/tool.tar.gz
+```
+
+
 ---
 
-## Divergences from Salt
+## Notes
 
-- Idempotency is purely path-based (`if_missing` / target-dir existence). Salt's `source_hash` verification is not supported — the download is not checksummed.
-- Salt's `enforce_toplevel`, `options`, `user`/`group`, `clean`, and `trim_output` parameters are not supported.
-- Requires `tar`/`unzip` (and `curl` or `wget` for remote sources) to be present on the peel.
+> **Set if_missing or source_hash**
+>
+> Without `if_missing` or `source_hash`, an existing target directory is considered "already extracted" — even if it is empty. Point `if_missing` at a file the archive actually creates, or declare `source_hash` to force re-extraction on a version bump.
+
+> **source_hash is an opaque declaration, not a checksum**
+>
+> `source_hash` is compared as a plain string against a marker recorded after the LAST successful extraction — it is never verified against the actual archive bytes. It exists purely to detect "the declared version changed since last time", not to authenticate the download.
+
+> **Divergences from Salt**
+>
+> Idempotency is purely path/marker-based (`if_missing`, the `source_hash` marker, or target-directory existence, per the note above) — Salt's `enforce_toplevel`, `options`, `user`/`group`, `clean`, and `trim_output` parameters are not supported. Extraction requires `tar`/`unzip` (and `curl` or `wget` for remote sources) to be present on the peel.
+
+
+---
+
+## Divergences
+
+- BD-2
+- BD-6
+- BD-7

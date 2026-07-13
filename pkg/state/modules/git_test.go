@@ -8,6 +8,9 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testGitMctx(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileExec) *exec.ModuleContext {
@@ -22,7 +25,7 @@ func testGitMctx(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileE
 
 func TestGitClonedName(t *testing.T) {
 	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +37,7 @@ func TestGitClonedName(t *testing.T) {
 
 func TestGitClonedPrimaryParamDefault(t *testing.T) {
 	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/myrepo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +50,7 @@ func TestGitClonedPrimaryParamDefault(t *testing.T) {
 
 func TestGitClonedRequisites(t *testing.T) {
 	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/repo", map[string]any{
 		"url":       "https://github.com/example/repo",
 		"require":   []any{"pkg.installed:git"},
@@ -70,7 +73,7 @@ func TestGitClonedCheckNeedsChange_DirMissing(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	// Directory does not exist in fakeFile.
 	mctx := testGitMctx(fakeCmd, fakeFile)
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +97,7 @@ func TestGitClonedCheckNoChange_CorrectURL(t *testing.T) {
 	fakeCmd.SetResult("git", &exec.CommandResult{Stdout: "https://github.com/example/repo\n", ExitCode: 0}, nil)
 
 	mctx := testGitMctx(fakeCmd, fakeFile)
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +117,7 @@ func TestGitClonedApply_Clone(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	// Directory does not exist.
 	mctx := testGitMctx(fakeCmd, fakeFile)
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +150,7 @@ func TestGitClonedApplyError(t *testing.T) {
 	fakeCmd.SetError("git", errors.New("repository not found"))
 
 	mctx := testGitMctx(fakeCmd, fakeFile)
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +166,7 @@ func TestGitClonedRevert_CreatedByApply(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeFile := exectest.NewFakeFileExec()
 	mctx := testGitMctx(fakeCmd, fakeFile)
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +194,7 @@ func TestGitClonedRevert_NotCreatedByApply(t *testing.T) {
 	fakeCmd.SetResult("git", &exec.CommandResult{Stdout: "https://github.com/example/repo\n", ExitCode: 0}, nil)
 
 	mctx := testGitMctx(fakeCmd, fakeFile)
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +257,7 @@ func TestGitClonedCheckTagRevConverges(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+	s, err := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})("/opt/repo", map[string]any{
 		"url": url,
 		"rev": "v1.2.3",
 	})
@@ -286,7 +289,7 @@ func TestGitClonedCheckTagRevNeedsChangeWhenDifferent(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+	s, err := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})("/opt/repo", map[string]any{
 		"url": url,
 		"rev": "v1.2.3",
 	})
@@ -311,7 +314,7 @@ func TestGitClonedCheckUnresolvableRevNeedsChange(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+	s, err := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})("/opt/repo", map[string]any{
 		"url": url,
 		"rev": "v9.9.9",
 	})
@@ -334,7 +337,7 @@ func TestGitClonedCheckShaPrefixRev(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+	s, err := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})("/opt/repo", map[string]any{
 		"url": url,
 		"rev": gitTestHead[:7],
 	})
@@ -368,7 +371,7 @@ func TestGitClonedCheckTagInBranchConverges(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+	s, err := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})("/opt/repo", map[string]any{
 		"url":    url,
 		"branch": "v1.2.3",
 	})
@@ -393,7 +396,7 @@ func TestGitClonedCheckBranchStillMatchesLocalRef(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{
+	s, err := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})("/opt/repo", map[string]any{
 		"url":    url,
 		"branch": "main",
 	})
@@ -420,7 +423,7 @@ func TestGitClonedStatErrorFailsPhases(t *testing.T) {
 		err:          errors.New("stale NFS file handle"),
 	}
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: file}}
-	s, err := NewGitClonedBuilder(mctx)("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
+	s, err := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})("/opt/repo", map[string]any{"url": "https://github.com/example/repo"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +454,7 @@ func TestGitClonedNoProvider(t *testing.T) {
 			File: exectest.NewFakeFileExec(),
 		},
 	}
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	_, err := builder("/opt/repo", map[string]any{"url": "https://example.com/repo"})
 	if err == nil {
 		t.Error("expected error when no command provider is set")
@@ -460,9 +463,28 @@ func TestGitClonedNoProvider(t *testing.T) {
 
 func TestGitClonedMissingURL(t *testing.T) {
 	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	builder := NewGitClonedBuilder(mctx)
+	builder := NewGitClonedBuilder(mctx, modschema.DecodeOptions{})
 	_, err := builder("/opt/repo", map[string]any{})
 	if err == nil {
 		t.Error("expected error when url is missing")
 	}
+}
+
+var _ state.State = (*GitCloned)(nil)
+
+// TestGitClonedContract replays the permanent differential contract fixtures
+// against the migrated git.cloned decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is
+// the permanent regression guard for git.cloned's decode behavior, including
+// the flagged BD-1/BD-2/BD-6/BD-7 divergences.
+func TestGitClonedContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var g GitCloned
+		if _, err := gitClonedSpec.Decode(id, config, &g, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &g, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/git.cloned.yaml")
 }

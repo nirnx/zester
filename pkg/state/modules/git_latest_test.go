@@ -9,6 +9,9 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 // gitLatestScriptCmd is a CommandExec fake that dispatches results per git
@@ -71,7 +74,7 @@ func gitLatestHasCall(calls []exec.CommandOpts, sub string) bool {
 
 func TestGitLatestName(t *testing.T) {
 	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 	})
 	if err != nil {
@@ -87,15 +90,35 @@ func TestGitLatestName(t *testing.T) {
 
 func TestGitLatestMissingTarget(t *testing.T) {
 	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	_, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{})
+	_, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when target is missing")
 	}
 }
 
+// TestGitLatestMissingURL pins the parity-restoration fix (J2): `name` is
+// `primary`, not `required` — it legitimately falls back to the state ID —
+// but when BOTH are empty there is no URL at all, so the builder tail
+// restores the legacy required-error rather than silently proceeding with an
+// empty URL. This is NOT a BD: the empty-primary fallback rule is unchanged,
+// only the fully-empty combination is (still) rejected, matching the legacy
+// `git.latest: <id>: url (name) is required` text.
+func TestGitLatestMissingURL(t *testing.T) {
+	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
+	_, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("", map[string]any{
+		"target": "/opt/repo",
+	})
+	if err == nil {
+		t.Fatal("expected error when both name and the state ID are empty")
+	}
+	if !strings.Contains(err.Error(), "url (name) is required") {
+		t.Errorf("error = %q, want it to mention %q", err.Error(), "url (name) is required")
+	}
+}
+
 func TestGitLatestMissingProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: exectest.NewFakeFileExec()}}
-	_, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	_, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 	})
 	if err == nil {
@@ -114,7 +137,7 @@ func TestGitLatestStatErrorFailsPhases(t *testing.T) {
 		err:          errors.New("permission denied"),
 	}
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: file}}
-	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 	})
 	if err != nil {
@@ -143,7 +166,7 @@ func TestGitLatestStatErrorFailsPhases(t *testing.T) {
 
 func TestGitLatestCheckNeedsChangeWhenMissing(t *testing.T) {
 	mctx := testGitMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 	})
 	if err != nil {
@@ -162,7 +185,7 @@ func TestGitLatestCloneWhenMissing(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeFile := exectest.NewFakeFileExec()
 	mctx := testGitMctx(fakeCmd, fakeFile)
-	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 		"branch": "main",
 	})
@@ -198,7 +221,7 @@ func TestGitLatestCloneWhenMissing(t *testing.T) {
 func TestGitLatestCloneWithRevChecksOut(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	mctx := testGitMctx(fakeCmd, exectest.NewFakeFileExec())
-	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 		"rev":    "abc123",
 	})
@@ -225,7 +248,7 @@ func TestGitLatestCheckIdempotentWhenUpToDate(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{"target": "/opt/repo"})
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})(url, map[string]any{"target": "/opt/repo"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +275,7 @@ func TestGitLatestCheckNeedsChangeWhenBehind(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{"target": "/opt/repo"})
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})(url, map[string]any{"target": "/opt/repo"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +295,7 @@ func TestGitLatestCheckPinnedRev(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})(url, map[string]any{
 		"target": "/opt/repo",
 		"rev":    "abc123",
 	})
@@ -306,7 +329,7 @@ func TestGitLatestCheckPinnedTagRevConverges(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})(url, map[string]any{
 		"target": "/opt/repo",
 		"rev":    "v2.0",
 	})
@@ -340,7 +363,7 @@ func TestGitLatestCheckPinnedTagRevBehind(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})(url, map[string]any{
 		"target": "/opt/repo",
 		"rev":    "v2.0",
 	})
@@ -364,7 +387,7 @@ func TestGitLatestRevertFreshInstanceNoOp(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 	})
 	if err != nil {
@@ -395,7 +418,7 @@ func TestGitLatestUpdateFetchResetWhenBehind(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})(url, map[string]any{
 		"target": "/opt/repo",
 		"branch": "main",
 		"force":  true,
@@ -432,7 +455,7 @@ func TestGitLatestUpdateFastForwardDefault(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{"target": "/opt/repo"})
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})(url, map[string]any{"target": "/opt/repo"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +477,7 @@ func TestGitLatestUpdateFixesRemoteURL(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)("https://new.example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://new.example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 	})
 	if err != nil {
@@ -472,7 +495,7 @@ func TestGitLatestApplyCloneError(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeCmd.SetError("git", errors.New("repository not found"))
 	mctx := testGitMctx(fakeCmd, exectest.NewFakeFileExec())
-	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 	})
 	if err != nil {
@@ -487,7 +510,7 @@ func TestGitLatestRevertRemovesClone(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeFile := exectest.NewFakeFileExec()
 	mctx := testGitMctx(fakeCmd, fakeFile)
-	s, err := NewGitLatestBuilder(mctx)("https://example.com/repo.git", map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})("https://example.com/repo.git", map[string]any{
 		"target": "/opt/repo",
 	})
 	if err != nil {
@@ -512,7 +535,7 @@ func TestGitLatestRevertResetsToPrevHead(t *testing.T) {
 	fakeFile.PreCreate("/opt/repo", []byte{}, 0755)
 
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: cmd, File: fakeFile}}
-	s, err := NewGitLatestBuilder(mctx)(url, map[string]any{
+	s, err := NewGitLatestBuilder(mctx, modschema.DecodeOptions{})(url, map[string]any{
 		"target": "/opt/repo",
 		"force":  true,
 	})
@@ -536,4 +559,23 @@ func TestGitLatestRevertResetsToPrevHead(t *testing.T) {
 	if !strings.Contains(joined, "reset") || !strings.Contains(joined, "oldsha") {
 		t.Errorf("expected reset --hard to previous HEAD, got %v", last.Args)
 	}
+}
+
+var _ state.State = (*GitLatest)(nil)
+
+// TestGitLatestContract replays the permanent differential contract fixtures
+// against the migrated git.latest decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is
+// the permanent regression guard for git.latest's decode behavior, including
+// the flagged BD-2/BD-6/BD-7 divergences.
+func TestGitLatestContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var g GitLatest
+		if _, err := gitLatestSpec.Decode(id, config, &g, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &g, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/git.latest.yaml")
 }

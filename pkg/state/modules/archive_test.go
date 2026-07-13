@@ -8,6 +8,9 @@ import (
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
 )
 
 func testArchiveMctx(cmd *exectest.FakeCommandExec, file *exectest.FakeFileExec) *exec.ModuleContext {
@@ -16,7 +19,7 @@ func testArchiveMctx(cmd *exectest.FakeCommandExec, file *exectest.FakeFileExec)
 
 func TestArchiveExtractedName(t *testing.T) {
 	mctx := testArchiveMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	s, err := NewArchiveExtractedBuilder(mctx)("/opt/app", map[string]any{
+	s, err := NewArchiveExtractedBuilder(mctx, modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source": "/tmp/app.tar.gz",
 	})
 	if err != nil {
@@ -29,7 +32,7 @@ func TestArchiveExtractedName(t *testing.T) {
 
 func TestArchiveExtractedMissingSource(t *testing.T) {
 	mctx := testArchiveMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
-	_, err := NewArchiveExtractedBuilder(mctx)("/opt/app", map[string]any{})
+	_, err := NewArchiveExtractedBuilder(mctx, modschema.DecodeOptions{})("/opt/app", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when source is missing")
 	}
@@ -37,7 +40,7 @@ func TestArchiveExtractedMissingSource(t *testing.T) {
 
 func TestArchiveExtractedMissingProvider(t *testing.T) {
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: exectest.NewFakeFileExec()}}
-	_, err := NewArchiveExtractedBuilder(mctx)("/opt/app", map[string]any{
+	_, err := NewArchiveExtractedBuilder(mctx, modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source": "/tmp/app.tar.gz",
 	})
 	if err == nil {
@@ -51,7 +54,7 @@ func TestArchiveExtractedIfMissingShortCircuit(t *testing.T) {
 	fakeFile := exectest.NewFakeFileExec()
 	fakeFile.PreCreate("/opt/app/bin/app", []byte("binary"), 0755)
 
-	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source":     "/tmp/app.tar.gz",
 		"if_missing": "/opt/app/bin/app",
 	})
@@ -78,7 +81,7 @@ func TestArchiveExtractedIfMissingAbsentNeedsChange(t *testing.T) {
 	// directory does: if_missing is the sole idempotency check.
 	fakeFile.PreCreate("/opt/app", []byte{}, 0755)
 
-	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source":     "/tmp/app.tar.gz",
 		"if_missing": "/opt/app/bin/app",
 	})
@@ -99,7 +102,7 @@ func TestArchiveExtractedApplyTar(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source":   "/tmp/app.tar.gz",
 		"makedirs": true,
 	})
@@ -144,7 +147,7 @@ func TestArchiveExtractedApplyZip(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source": "/tmp/app.zip",
 	})
 	if err != nil {
@@ -170,7 +173,7 @@ func TestArchiveExtractedRemoteSourceDownloads(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source": "https://example.com/app.tar.gz",
 	})
 	if err != nil {
@@ -196,7 +199,7 @@ func TestArchiveExtractedIdempotentAfterApply(t *testing.T) {
 	fakeCmd := exectest.NewFakeCommandExec()
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source":   "/tmp/app.tar.gz",
 		"makedirs": true,
 	})
@@ -229,7 +232,7 @@ func TestArchiveExtractedSourceHash(t *testing.T) {
 
 	build := func(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileExec, hash string) *ArchiveExtracted {
 		t.Helper()
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app-" + hash + ".tar.gz",
 			"source_hash": hash,
 			"makedirs":    true,
@@ -324,7 +327,7 @@ func TestArchiveExtractedSourceHash(t *testing.T) {
 		fakeCmd := exectest.NewFakeCommandExec()
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate("/opt/app/bin/app", []byte("binary"), 0755)
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=bbb222",
 			"if_missing":  "/opt/app/bin/app",
@@ -389,7 +392,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate("/opt/app/bin/app", []byte("binary"), 0755)
 
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":     "https://example.com/app.tar.gz",
 			"if_missing": "/opt/app/bin/app",
 		})
@@ -416,7 +419,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate("/opt/app", []byte{}, 0755)
 
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source": "/tmp/app.tar.gz",
 		})
 		if err != nil {
@@ -438,7 +441,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		fakeCmd := exectest.NewFakeCommandExec()
 		fakeFile := exectest.NewFakeFileExec()
 		// Prior run: extracted and recorded the marker.
-		prior, err := NewArchiveExtractedBuilder(testArchiveMctx(exectest.NewFakeCommandExec(), fakeFile))("/opt/app", map[string]any{
+		prior, err := NewArchiveExtractedBuilder(testArchiveMctx(exectest.NewFakeCommandExec(), fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=aaa111",
 			"makedirs":    true,
@@ -451,7 +454,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		}
 
 		// Fresh instance, watch-forced: marker matches → no-op.
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=aaa111",
 			"makedirs":    true,
@@ -475,7 +478,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		fakeCmd := exectest.NewFakeCommandExec()
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate("/opt/app", []byte{}, 0755)
-		prior, err := NewArchiveExtractedBuilder(testArchiveMctx(exectest.NewFakeCommandExec(), fakeFile))("/opt/app", map[string]any{
+		prior, err := NewArchiveExtractedBuilder(testArchiveMctx(exectest.NewFakeCommandExec(), fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=aaa111",
 		})
@@ -487,7 +490,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		}
 
 		// Version bump on a fresh watch-forced instance: guard unsatisfied.
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=bbb222",
 		})
@@ -514,7 +517,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 			err:          errors.New("input/output error"),
 		}
 		mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd, File: file}}
-		s, err := NewArchiveExtractedBuilder(mctx)("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(mctx, modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":     "/tmp/app.tar.gz",
 			"if_missing": "/opt/app/bin/app",
 		})
@@ -539,7 +542,7 @@ func TestArchiveExtractedRetryAfterFailedApplyProceeds(t *testing.T) {
 	fakeCmd.SetResult("tar", &exec.CommandResult{ExitCode: 2, Stderr: "corrupt archive"}, nil)
 	fakeFile := exectest.NewFakeFileExec()
 
-	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+	s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 		"source":   "/tmp/app.tar.gz",
 		"makedirs": true,
 	})
@@ -580,7 +583,7 @@ func TestArchiveExtractedExtractFailure(t *testing.T) {
 	t.Run("command error", func(t *testing.T) {
 		fakeCmd := exectest.NewFakeCommandExec()
 		fakeCmd.SetError("tar", errors.New("tar: not found"))
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, exectest.NewFakeFileExec()))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, exectest.NewFakeFileExec()), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source": "/tmp/app.tar.gz",
 		})
 		if err != nil {
@@ -594,7 +597,7 @@ func TestArchiveExtractedExtractFailure(t *testing.T) {
 	t.Run("nonzero exit", func(t *testing.T) {
 		fakeCmd := exectest.NewFakeCommandExec()
 		fakeCmd.SetResult("tar", &exec.CommandResult{ExitCode: 2, Stderr: "corrupt archive"}, nil)
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, exectest.NewFakeFileExec()))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, exectest.NewFakeFileExec()), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source": "/tmp/app.tar.gz",
 		})
 		if err != nil {
@@ -612,7 +615,7 @@ func TestArchiveExtractedRevert(t *testing.T) {
 	t.Run("removes dir created by apply", func(t *testing.T) {
 		fakeCmd := exectest.NewFakeCommandExec()
 		fakeFile := exectest.NewFakeFileExec()
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":   "/tmp/app.tar.gz",
 			"makedirs": true,
 		})
@@ -638,7 +641,7 @@ func TestArchiveExtractedRevert(t *testing.T) {
 		fakeCmd := exectest.NewFakeCommandExec()
 		fakeFile := exectest.NewFakeFileExec()
 		fakeFile.PreCreate("/opt/app", []byte{}, 0755)
-		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile))("/opt/app", map[string]any{
+		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":   "/tmp/app.tar.gz",
 			"makedirs": true,
 		})
@@ -659,4 +662,26 @@ func TestArchiveExtractedRevert(t *testing.T) {
 			t.Error("pre-existing directory must not be removed")
 		}
 	})
+}
+
+var _ state.State = (*ArchiveExtracted)(nil)
+
+// TestArchiveExtractedContract replays the permanent differential contract
+// fixtures against the migrated archive.extracted decoder. The cases were
+// approved by the legacy-vs-new equivalence comparison while the legacy
+// constructor still existed (see the migration changelog); after its deletion
+// this replay is the permanent regression guard for archive.extracted's
+// decode behavior, including the flagged BD-2/BD-6/BD-7 divergences and the
+// source_hash TrimSpace (builder-tail module logic, exercised here since it
+// runs on every decode path).
+func TestArchiveExtractedContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var a ArchiveExtracted
+		if _, err := archiveExtractedSpec.Decode(id, config, &a, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		a.SourceHash = strings.TrimSpace(a.SourceHash)
+		return &a, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/archive.extracted.yaml")
 }
