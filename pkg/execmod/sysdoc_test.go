@@ -102,3 +102,40 @@ func TestSysListFunctions_Merged(t *testing.T) {
 		t.Error("SysListFunctions(nil source) should error")
 	}
 }
+
+// TestSysDoc_FamilyLookup pins the Salt-parity family form: `sys.doc ssh_auth`
+// renders every documented ssh_auth.* surface (sorted, one document via
+// RenderTextAll) instead of erroring — the exact-name miss falls through to a
+// prefix scan over Names().
+func TestSysDoc_FamilyLookup(t *testing.T) {
+	src := fakeDocSource{
+		names: []string{"ssh_auth.absent", "ssh_auth.present", "user.present"},
+		infos: map[string]modschema.ModuleInfo{
+			"ssh_auth.absent":  {Module: "ssh_auth.absent", Kind: modschema.KindState, Doc: modschema.Doc{Summary: "absent sum"}},
+			"ssh_auth.present": {Module: "ssh_auth.present", Kind: modschema.KindState, Doc: modschema.Doc{Summary: "present sum"}},
+			"user.present":     {Module: "user.present", Kind: modschema.KindState, Doc: modschema.Doc{Summary: "user sum"}},
+		},
+	}
+	fn := execmod.SysDoc(src)
+	out, err := fn(context.Background(), nil, map[string]any{"name": "ssh_auth"})
+	if err != nil {
+		t.Fatalf("family lookup: %v", err)
+	}
+	iAbs := strings.Index(out, "ssh_auth.absent (state)")
+	iPre := strings.Index(out, "ssh_auth.present (state)")
+	if iAbs < 0 || iPre < 0 || iAbs > iPre {
+		t.Fatalf("family doc missing/misordered members: abs=%d pre=%d\n%s", iAbs, iPre, out)
+	}
+	if strings.Contains(out, "user.present (state)") {
+		t.Error("family doc leaked a non-family module")
+	}
+
+	// A name that is neither a module nor a family still errors.
+	if _, err := fn(context.Background(), nil, map[string]any{"name": "nope"}); err == nil {
+		t.Error("unknown name did not error")
+	}
+	// Prefix matching is on the DOT boundary: "ssh" is not a family here.
+	if _, err := fn(context.Background(), nil, map[string]any{"name": "ssh_auth.presen"}); err == nil {
+		t.Error("partial function name must not match as a family")
+	}
+}

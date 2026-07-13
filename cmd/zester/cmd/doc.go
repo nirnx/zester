@@ -26,11 +26,13 @@ var docCmd = &cobra.Command{
 
 With no argument, lists every documented module grouped by family. With a
 module name, renders that module's full documentation — parameters, effects,
-examples, and notes — identically to the peel-side 'sys.doc'. Add --json to
-emit the structured ModuleInfo instead of rendered text.
+examples, and notes — identically to the peel-side 'sys.doc'. A bare family
+name renders every member (Salt parity). Add --json to emit the structured
+ModuleInfo instead of rendered text (an array for a family).
 
   zester doc                # list documented modules
   zester doc file.managed   # full docs for one module
+  zester doc ssh_auth       # full docs for every ssh_auth.* module
   zester doc pkg.installed --json`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeModuleNames,
@@ -68,6 +70,17 @@ func runDoc(cmd *cobra.Command, args []string) error {
 	module := args[0]
 	mi, ok := moduledoc.Lookup(module)
 	if !ok {
+		// FAMILY form (Salt parity): `zester doc ssh_auth` renders every
+		// documented ssh_auth.* module. moduledoc.All() is sorted by module
+		// name, so the family document is deterministic and byte-shaped like
+		// the live `sys.doc <family>` (both go through RenderTextAll).
+		if infos := familyModules(module); len(infos) > 0 {
+			if jsonOut {
+				return writeDocJSON(out, infos)
+			}
+			_, err := fmt.Fprintln(out, modschema.RenderTextAll(infos))
+			return err
+		}
 		return unknownModuleError(module)
 	}
 	if jsonOut {
@@ -75,6 +88,19 @@ func runDoc(cmd *cobra.Command, args []string) error {
 	}
 	_, err := fmt.Fprintln(out, modschema.RenderText(mi))
 	return err
+}
+
+// familyModules returns every documented module in the named family
+// (`<family>.*`), in moduledoc's sorted order.
+func familyModules(family string) []modschema.ModuleInfo {
+	prefix := family + "."
+	var out []modschema.ModuleInfo
+	for _, mi := range moduledoc.All() {
+		if strings.HasPrefix(mi.Module, prefix) {
+			out = append(out, mi)
+		}
+	}
+	return out
 }
 
 // renderModuleIndex renders the documented modules grouped by family (the
@@ -155,9 +181,18 @@ func suggestModules(module string) []string {
 		dist int
 	}
 	var cands []cand
+	seen := map[string]bool{}
 	for _, mi := range moduledoc.All() {
 		if d := editDistance(module, mi.Module); d <= 2 {
 			cands = append(cands, cand{mi.Module, d})
+		}
+		// Family names are valid queries too (`zester doc ssh_auth`), so a
+		// typo'd family gets family suggestions.
+		if fam := moduleFamily(mi.Module); fam != mi.Module && !seen[fam] {
+			seen[fam] = true
+			if d := editDistance(module, fam); d <= 2 {
+				cands = append(cands, cand{fam, d})
+			}
 		}
 	}
 	sort.Slice(cands, func(i, j int) bool {
@@ -244,13 +279,20 @@ func completeExecModule(cmd *cobra.Command, args []string, toComplete string) ([
 	return moduleNameCandidates(toComplete), cobra.ShellCompDirectiveNoFileComp
 }
 
-// moduleNameCandidates returns documented module names with the given prefix.
+// moduleNameCandidates returns documented module names (and family names —
+// `zester doc ssh_auth` is valid) with the given prefix.
 func moduleNameCandidates(prefix string) []string {
 	var out []string
+	seenFam := map[string]bool{}
 	for _, mi := range moduledoc.All() {
 		if strings.HasPrefix(mi.Module, prefix) {
 			out = append(out, mi.Module)
 		}
+		if fam := moduleFamily(mi.Module); fam != mi.Module && !seenFam[fam] && strings.HasPrefix(fam, prefix) {
+			seenFam[fam] = true
+			out = append(out, fam)
+		}
 	}
+	sort.Strings(out)
 	return out
 }

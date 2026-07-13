@@ -70,6 +70,15 @@ Two hard rules:
 - **Never define a polymorphic type inline.** Semantic types live only in the
   controlled package (they are sealed) so that decoding, validation,
   documentation, and JSON Schema always come from one implementation.
+- **Respect the parameter vocabulary.** The same key must mean the same shape
+  in every module — `mode` is a `FileMode` wherever it means permissions,
+  `user` is always a string account name, and so on. A test gate
+  (`TestParameterVocabularyConsistency` in `cmd/zester-docgen`) compares every
+  parameter key — canonical names AND aliases — across all state and exec
+  modules and fails on a schema mismatch. If your new parameter collides with
+  an existing key, reuse the existing semantic type, pick a different name, or
+  (for a deliberate Salt-parity reuse like `file.line`'s action-selector
+  `mode`) add a justified entry to the gate's exception table.
 
 ## Step 2 — Polymorphic parameters: semantic types
 
@@ -310,6 +319,8 @@ accepted key sets compatible (that is why the state `cmd.run` also accepts
       clean no-op; no reserved-key parsing; wrapped errors.
 - [ ] Row in `register.go`'s table with the `Spec` set; bump the coverage
       gate's module-count pin.
+- [ ] Parameter names pass the vocabulary gate (same key = same schema
+      everywhere, or a justified exception).
 - [ ] Unit tests incl. convergence; permanent contract fixture +
       `RunContract`; per-param BD fixtures + CHANGELOG for any divergence.
 - [ ] Integration test in `integration/`.

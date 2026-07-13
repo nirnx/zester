@@ -14,6 +14,19 @@ import (
 // Sensitive fields never expose a value: Field.Default is already redacted to
 // empty at the schema layer (§2.5), and RenderText additionally never renders
 // anything else about a sensitive field beyond its name, type, and flags.
+// RenderTextAll renders several modules' documentation as ONE document — each
+// through RenderText, joined by a blank line and a rule — in the given order.
+// It backs the FAMILY form of the doc surfaces (`sys.doc ssh_auth` /
+// `zester doc ssh_auth` render every ssh_auth.* module), so the live and
+// offline family views share one shape.
+func RenderTextAll(infos []ModuleInfo) string {
+	parts := make([]string, 0, len(infos))
+	for _, mi := range infos {
+		parts = append(parts, strings.TrimRight(RenderText(mi), "\n"))
+	}
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
 func RenderText(mi ModuleInfo) string {
 	var b strings.Builder
 

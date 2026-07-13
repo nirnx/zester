@@ -4,6 +4,27 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Added
+- **Family form for the doc surfaces (Salt parity).** `zester '<target>'
+  sys.doc ssh_auth` and the offline `zester doc ssh_auth` now render every
+  documented `ssh_auth.*` module as one document (sorted, shared
+  `RenderTextAll` shape on both surfaces) instead of erroring
+  `no documentation for "ssh_auth"`. Works for any family — `file`, `pkg`,
+  `facts` (dispatch specials included); `--json` returns an array for a
+  family. Family names also join `zester doc`'s did-you-mean suggestions and
+  shell completion.
+- **Parameter vocabulary gate.** A conformance test
+  (`TestParameterVocabularyConsistency`) now compares every parameter key —
+  canonical names and aliases — across ALL state and exec modules and fails
+  when the same key carries different schemas ("`mode` must always behave the
+  same"). The fleet passes with exactly three documented Salt-parity
+  exceptions (`mode` in file.line = action selector; `gid` in group.present =
+  numeric-only create id; `text` in test.echo = scalar echo string), each
+  justified in the exception table, which also refuses stale entries. The
+  developing guide documents the rule.
+
 ## [0.6.0] - 2026-07-13
 
 ### Added

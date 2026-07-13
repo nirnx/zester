@@ -200,9 +200,20 @@ func TestSuggestModules(t *testing.T) {
 }
 
 func TestModuleNameCandidates(t *testing.T) {
+	// Candidates = every documented module PLUS each family name (the family
+	// form 'zester doc ssh_auth' is a valid query), deduplicated.
 	all := moduleNameCandidates("")
-	if len(all) != len(moduledoc.All()) {
-		t.Errorf("empty prefix returned %d, want %d", len(all), len(moduledoc.All()))
+	fams := map[string]bool{}
+	for _, mi := range moduledoc.All() {
+		if fam := moduleFamily(mi.Module); fam != mi.Module {
+			fams[fam] = true
+		}
+	}
+	if want := len(moduledoc.All()) + len(fams); len(all) != want {
+		t.Errorf("empty prefix returned %d, want %d (modules + families)", len(all), want)
+	}
+	if !contains(all, "ssh_auth") {
+		t.Errorf("candidates missing the ssh_auth family name")
 	}
 	pkgs := moduleNameCandidates("pkg.")
 	if len(pkgs) == 0 {
@@ -256,4 +267,46 @@ func TestCompleteModuleNames(t *testing.T) {
 
 func contains(s []string, want string) bool {
 	return slices.Contains(s, want)
+}
+
+// TestRunDoc_FamilyForm pins the Salt-parity family form of the OFFLINE doc
+// command: `zester doc ssh_auth` renders every documented ssh_auth.* module
+// (through the same RenderTextAll the live sys.doc family form uses) instead
+// of erroring with "unknown module".
+func TestRunDoc_FamilyForm(t *testing.T) {
+	out, err := runDocForTest(t, false, "ssh_auth")
+	if err != nil {
+		t.Fatalf("family form: %v", err)
+	}
+	iAbs := strings.Index(out, "ssh_auth.absent (state)")
+	iPre := strings.Index(out, "ssh_auth.present (state)")
+	if iAbs < 0 || iPre < 0 || iAbs > iPre {
+		t.Fatalf("family doc missing/misordered members: abs=%d pre=%d", iAbs, iPre)
+	}
+	if strings.Contains(out, "user.present (state)") {
+		t.Error("family doc leaked a non-family module")
+	}
+}
+
+// TestRunDoc_FamilyJSON pins the --json family form: an ARRAY of ModuleInfo.
+func TestRunDoc_FamilyJSON(t *testing.T) {
+	out, err := runDocForTest(t, true, "ssh_auth")
+	if err != nil {
+		t.Fatalf("family --json: %v", err)
+	}
+	var infos []map[string]any
+	if err := json.Unmarshal([]byte(out), &infos); err != nil {
+		t.Fatalf("family --json is not a JSON array: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("family --json: %d entries, want 2", len(infos))
+	}
+}
+
+// TestRunDoc_FamilyUnknownStillErrors keeps the miss behavior: a name that is
+// neither a module nor a family errors.
+func TestRunDoc_FamilyUnknownStillErrors(t *testing.T) {
+	if _, err := runDocForTest(t, false, "totally-bogus"); err == nil {
+		t.Fatal("unknown non-family name did not error")
+	}
 }
