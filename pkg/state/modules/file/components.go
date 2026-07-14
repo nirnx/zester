@@ -11,7 +11,7 @@ import (
 	"github.com/nirnx/zester/pkg/modschema/paramtypes"
 )
 
-// family_file.go — the file.* FAMILY PARAMETER COMPONENTS and canonical
+// components.go — the file.* FAMILY PARAMETER COMPONENTS and canonical
 // runtime contracts (keystone spec §13, Amendment A1).
 //
 // A component is the single declaration of a family-canonical parameter
@@ -89,17 +89,33 @@ func requireParentDirs(ctx context.Context, file exec.FileExec, module, target s
 	if makedirs {
 		return nil
 	}
-	parent := filepath.Dir(target)
-	if parent == "" || parent == "." || parent == "/" {
+	parent := targetParent(target)
+	if parent == "" {
 		return nil
 	}
-	if _, err := file.Stat(ctx, parent); err != nil {
+	info, err := file.Stat(ctx, parent)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("%s: parent directory %s does not exist (set makedirs: true to create it)", module, parent)
 		}
 		return fmt.Errorf("%s: stat parent %s: %w", module, parent, err)
 	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s: parent path %s exists but is not a directory", module, parent)
+	}
 	return nil
+}
+
+// targetParent resolves the target's parent directory with the path CLEANED
+// first — a trailing-slash target must not become its own parent
+// (filepath.Dir("/opt/app/") is "/opt/app"; review finding). Empty return
+// means "no meaningful parent" (root/relative-top).
+func targetParent(target string) string {
+	parent := filepath.Dir(filepath.Clean(target))
+	if parent == "" || parent == "." || parent == "/" {
+		return ""
+	}
+	return parent
 }
 
 // ensureParentDirs is the APPLY-side arm of the canonical makedirs contract:
@@ -110,8 +126,8 @@ func ensureParentDirs(ctx context.Context, file exec.FileExec, module, target st
 	if !makedirs {
 		return requireParentDirs(ctx, file, module, target, makedirs)
 	}
-	parent := filepath.Dir(target)
-	if parent == "" || parent == "." || parent == "/" {
+	parent := targetParent(target)
+	if parent == "" {
 		return nil
 	}
 	if _, err := file.Stat(ctx, parent); err == nil {

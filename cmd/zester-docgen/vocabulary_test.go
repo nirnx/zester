@@ -63,6 +63,16 @@ var inFamilyExceptions = map[string]vocabException{
 		participants: []string{"file.directory(mode)", "file.line(mode)", "file.managed(mode)"},
 		distinct:     2,
 	},
+
+	"state/pkg/refresh": {
+		reason: "PERMANENT (§13, per-operation runtime semantics — the git.* precedent): pkg.installed " +
+			"refreshes in Apply only and treats a refresh failure as fatal, while pkg.latest refreshes in " +
+			"BOTH Check and Apply and only warns — plus deliberately different defaults (false/true). One " +
+			"spelling, two operation-shaped contracts; componentizing it would make the shared usage line " +
+			"lie uniformly.",
+		participants: []string{"pkg.installed(refresh)", "pkg.latest(refresh)"},
+		distinct:     2,
+	},
 }
 
 // crossFamilyExceptions is TIER 2's table, keyed on the bare parameter key.
@@ -88,6 +98,49 @@ var crossFamilyExceptions = map[string]vocabException{
 		participants: []string{"file.directory(mode)", "file.line(mode)", "file.managed(mode)"},
 		distinct:     2,
 	},
+}
+
+// declaredMeaningVariances documents same-signature in-family keys whose
+// RUNTIME MEANINGS legitimately differ per member (§13: one runtime meaning
+// per key unless explicitly declared otherwise). Signatures agree, so the
+// conflict tiers cannot see these — this registry is the gate-visible
+// declaration; participants are pinned so a NEW member adopting the key must
+// update the entry deliberately.
+var declaredMeaningVariances = map[string]vocabException{
+	"state/file/dir_mode": {
+		reason: "file.directory: fallback SOURCE for the managed directory's mode (builder tail; mode " +
+			"wins); file.recurse: creation mode for directories the recurse creates. One signature " +
+			"(FileMode, lazy 0755), two member meanings — both Salt parity.",
+		participants: []string{"file.directory(dir_mode)", "file.recurse(dir_mode)"},
+		distinct:     1,
+	},
+}
+
+// TestDeclaredMeaningVariances pins the registry's participant sets against
+// the live tree, so it can neither rot nor silently absorb new members.
+func TestDeclaredMeaningVariances(t *testing.T) {
+	uses := collectParamUses(t)
+	byKey := map[string]map[string]bool{}
+	for _, u := range uses {
+		k := u.kind + "/" + u.family + "/" + u.key
+		if byKey[k] == nil {
+			byKey[k] = map[string]bool{}
+		}
+		byKey[k][fmt.Sprintf("%s(%s)", u.module, u.canon)] = true
+	}
+	for k, exc := range declaredMeaningVariances {
+		got := make([]string, 0)
+		for who := range byKey[k] {
+			got = append(got, who)
+		}
+		sort.Strings(got)
+		want := append([]string(nil), exc.participants...)
+		sort.Strings(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("meaning-variance %q: participants changed — got %v, pinned %v; a new member adopting "+
+				"this key must update the declaration deliberately", k, got, want)
+		}
+	}
 }
 
 // paramUse is one module's exposure of a parameter KEY (canonical name or
@@ -144,17 +197,17 @@ func TestParameterVocabularyConsistency(t *testing.T) {
 				declModules[u.declaredBy][u.module] = true
 			}
 
-			// §13 component ratchet: a declaring type shared by >=2 distinct
-			// modules IS a family component (module protos are never shared
-			// across members except via components — file.comment/uncomment's
-			// shared proto included, deliberately). Once a component exists
-			// for a key, every member exposing that key must embed it; a
-			// private redeclaration — even with an identical contract — fails.
+			// §13 component ratchet: ANY embedded declarer ("" = declared on
+			// the module's own proto root, incl. N:1 shared protos) IS a
+			// family component — single-embedder components included (review
+			// finding: the old >=2 threshold let one member defect from a
+			// 2-member component unnoticed). Once a component exists for a
+			// key, every member exposing that key must embed THAT component;
+			// a private redeclaration or a second component — even with an
+			// identical contract — fails.
 			if len(declModules) > 1 {
 				for decl, mods := range declModules {
-					// Only EMBEDDED declarers are components ("" = declared on
-					// the module's own proto root, incl. N:1 shared protos).
-					if decl != "" && len(mods) >= 2 {
+					if decl != "" && len(mods) >= 1 {
 						exKey := scope + "/" + k
 						tier1Conflicting[exKey] = true
 						if exc, ok := inFamilyExceptions[exKey]; ok {

@@ -45,8 +45,8 @@ func stateModuleNames(reg *state.Registry) []string {
 // buildExecmodRegistry wires every built-in execution-module function
 // (execmod.DefaultRegistry) — §1's import graph names execmod as a docgen
 // dependency alongside state/modules, for the exec-kind Specs Phase 1+ waves
-// will register (RegisterSpec exists today; nothing has migrated yet, so
-// SpecNames() is empty until then). Registration never invokes a function, so
+// will register (RegisterSpec exists today; all 16 built-in functions carry specs
+// (registerBuiltinSpecs)). Registration never invokes a function, so
 // no ModuleContext/providers are needed here at all.
 func buildExecmodRegistry() *execmod.Registry {
 	return execmod.DefaultRegistry()

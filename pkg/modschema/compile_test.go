@@ -268,10 +268,29 @@ func TestCompileValidNonLazyDefaultDecodedThroughFieldDecoder(t *testing.T) {
 
 // ---- Member-supplied dimensions (keystone spec §13, Amendment A1) ----
 
-type memberDimProto struct {
-	Name string              `zester:"name,primary" usage:"the name"`
+// memberDimComponent models a family parameter component (§13): member-
+// supplied dimensions are only legal on an EMBEDDED declarer.
+type memberDimComponent struct {
 	Mode paramtypes.FileMode `zester:"mode,lazy,memberdefault" usage:"canonical mode"`
 	Src  string              `zester:"source,memberrequired" usage:"canonical source"`
+}
+
+type memberDimProto struct {
+	Name string `zester:"name,primary" usage:"the name"`
+	memberDimComponent
+}
+
+// rootMemberDimProto declares a member-supplied dimension on the proto ROOT —
+// illegal (§13): without a shared declaration there is nothing "member" about it.
+type rootMemberDimProto struct {
+	Mode paramtypes.FileMode `zester:"mode,lazy,memberdefault" usage:"mode"`
+}
+
+// ptrEmbedProto embeds a component by POINTER — rejected loudly (it would
+// otherwise be silently skipped, losing the whole component).
+type ptrEmbedProto struct {
+	Name string `zester:"name,primary" usage:"the name"`
+	*memberDimComponent
 }
 
 // TestMemberSuppliedDimensions pins the §13 member-supplied rule end to end:
@@ -342,6 +361,64 @@ func TestMemberSuppliedDimensions(t *testing.T) {
 	if _, err := Compile(memberDimProto{}, Doc{Summary: "d"},
 		WithDefault("mode", "banana"), WithRequired("source", true)); err == nil {
 		t.Fatal("invalid member default literal compiled")
+	}
+}
+
+// TestMemberDimensionPlacementAndStamping pins the §13 hardening from the
+// final review: member-supplied dimensions are embedded-declarer-only,
+// pointer embedding is rejected, and the declaring-type stamp is "" for root
+// fields, the component type for embedded fields, and the INNERMOST type for
+// double-nested embedding.
+func TestMemberDimensionPlacementAndStamping(t *testing.T) {
+	if _, err := Compile(rootMemberDimProto{}, Doc{Summary: "d"}, WithDefault("mode", "0644")); err == nil {
+		t.Fatal("memberdefault on a root proto field compiled")
+	}
+	if _, err := Compile(ptrEmbedProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0644"), WithRequired("source", false)); err == nil {
+		t.Fatal("untagged pointer-to-struct embed compiled (would silently drop the component)")
+	}
+
+	cs, err := Compile(memberDimProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0644"), WithRequired("source", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range cs.schema.Fields {
+		switch f.Name {
+		case "name":
+			if f.DeclaredBy != "" {
+				t.Errorf("root field stamped %q, want empty", f.DeclaredBy)
+			}
+		case "mode", "source":
+			if f.DeclaredBy != "modschema.memberDimComponent" {
+				t.Errorf("component field %q stamped %q, want modschema.memberDimComponent", f.Name, f.DeclaredBy)
+			}
+			if f.Name == "mode" && !f.DefaultMemberSupplied {
+				t.Error("mode not marked DefaultMemberSupplied")
+			}
+			if f.Name == "source" && !f.RequiredMemberSupplied {
+				t.Error("source not marked RequiredMemberSupplied")
+			}
+		}
+	}
+
+	// Double nesting: the INNERMOST declaring type is stamped.
+	type outerWrap struct {
+		memberDimComponent
+	}
+	type doubleNested struct {
+		Name string `zester:"name,primary" usage:"n"`
+		outerWrap
+	}
+	cs2, err := Compile(doubleNested{}, Doc{Summary: "d"},
+		WithDefault("mode", "0700"), WithRequired("source", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range cs2.schema.Fields {
+		if f.Name == "mode" && f.DeclaredBy != "modschema.memberDimComponent" {
+			t.Errorf("double-nested mode stamped %q, want the innermost component type", f.DeclaredBy)
+		}
 	}
 }
 

@@ -93,7 +93,8 @@ var fileManagedDoc = modschema.Doc{
 		"an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0755` " +
 		"applies 0755. `user`/`group` converge ownership only when declared.",
 	Effects: modschema.Effects{
-		Check: "Resolves the desired content (reading `source` or using `content`, rendering the " +
+		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+			"Resolves the desired content (reading `source` or using `content`, rendering the " +
 			"template when enabled) and compares, in order: file existence (a genuine not-exist means " +
 			"the file must be created, while any other read error fails the check rather than risking a " +
 			"blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed " +
@@ -199,7 +200,7 @@ var fileManagedDoc = modschema.Doc{
 				"as a sized integer; setuid/setgid/sticky bits are preserved.",
 		},
 	},
-	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7"},
+	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7", "BD-9"},
 	SeeAlso:     []string{"file.directory", "file.copy", "file.absent"},
 }
 

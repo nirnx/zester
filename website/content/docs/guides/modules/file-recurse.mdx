@@ -43,7 +43,7 @@ A Unix file-permission mode. Accepts an octal string ("0644", "755", "4755") or 
 
 ### Check
 
-Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.
+Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.
 
 ### Apply
 
@@ -125,6 +125,7 @@ zester 'web*' file.recurse /etc/app source=/srv/config/app clean=true
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

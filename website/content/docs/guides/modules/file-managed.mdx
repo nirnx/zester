@@ -49,7 +49,7 @@ A Unix file-permission mode. Accepts an octal string ("0644", "755", "4755") or 
 
 ### Check
 
-Resolves the desired content (reading `source` or using `content`, rendering the template when enabled) and compares, in order: file existence (a genuine not-exist means the file must be created, while any other read error fails the check rather than risking a blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed facets — permission bits plus setuid/setgid/sticky); and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.
+Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). Resolves the desired content (reading `source` or using `content`, rendering the template when enabled) and compares, in order: file existence (a genuine not-exist means the file must be created, while any other read error fails the check rather than risking a blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed facets — permission bits plus setuid/setgid/sticky); and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.
 
 ### Apply
 
@@ -186,6 +186,7 @@ zester 'web*' file.managed /etc/motd content="Welcome to Zester" mode=0644
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

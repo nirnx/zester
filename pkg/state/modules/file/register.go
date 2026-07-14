@@ -13,7 +13,7 @@ var Rows = []regdef.Registration{
 	// spec.Decode), so no providerBuild adapter.
 	{Name: "file.managed", Spec: fileManagedSpec, Build: NewFileManagedBuilder},
 	// file.directory — self-documenting schema (the declared-facet exemplar:
-	// mode on a lazy paramtypes.FileMode with a dir_mode fallback alias).
+	// mode via the family component (member default 0755) with a standalone dir_mode fallback field).
 	// NewFileDirectoryBuilder is itself a BuildFunc, so no providerBuild adapter.
 	{Name: "file.directory", Spec: fileDirectorySpec, Build: NewFileDirectoryBuilder},
 	// file.absent / file.append — self-documenting schema (all-primitives /

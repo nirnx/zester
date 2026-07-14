@@ -39,38 +39,6 @@ All notable changes to Zester are documented here. The format follows
   and Revert never removes created parents. A four-case behavior suite
   (false/true × parents present/missing) runs against every embedding member.
 
-### Changed
-- **Family-oriented package layout (A1 step 8).** `pkg/state/modules` is now
-  one package per module family (`modules/file/`, `modules/cron/`, …; package
-  names `filemod`, `cronmod`, …), each holding its members, its parameter
-  components (`components.go`), its behavior suites, its contract fixtures,
-  and its registration rows; shared plumbing lives in `modules/regdef`
-  (registration types + `MustSpec`) and `modules/internal/famshared`
-  (cross-family helpers). The aggregator `pkg/state/modules` keeps its import
-  path and public API (`RegisterAll`, the dispatch specials) unchanged — no
-  consumer changes; file history follows the moves.
-
-### Fixed
-- **`file.directory` `makedirs` was accepted but inert — deliberate
-  compatibility fix (A1).** The module previously always created the full
-  parent chain (`MkdirAll`), silently masking typos in deep paths, and
-  ignored the flag. It now follows the canonical contract: a missing parent
-  without `makedirs: true` fails Check and Apply. Behavioral difference from
-  0.6.0, maintainer-ruled; pinned by the shared behavior suite and the
-  makedirs contract fixtures across YAML/CLI/msgpack.
-- **The other five `makedirs` members failed missing-parent cases with raw
-  OS errors and reported phantom applicable changes in Check.** All now fail
-  both phases with the canonical contract error. `file.recurse` previously
-  created missing parents with `dir_mode` instead of the canonical 0755.
-- **`file.directory`'s `dir_mode` is now a standalone parameter** (was an
-  alias of `mode`): decode lands on its own field and the mode fallback
-  (mode wins; `dir_mode` fills in when `mode` is undeclared) moved to the
-  builder — behavior is byte-identical to the alias era, pinned by
-  `TestFileDirectoryDirModeFallback` and updated contract fixtures; its
-  contract signature now matches `file.recurse`'s `dir_mode`, retiring that
-  vocabulary-ratchet entry (along with the `source` one).
-
-### Added
 - **`path` alias unified across the whole file family.** All 13 `file.*`
   modules now accept `path` as an alias of their primary — previously 7 did
   and 6 (absent, append, blockreplace, directory, recurse, symlink) rejected
@@ -111,6 +79,60 @@ All notable changes to Zester are documented here. The format follows
   "also reachable as an execution module" header in the OFFLINE docs too —
   the embedded docdata gains the same AlsoExecmod overlay live sys.doc
   renders, and the docdata↔live parity test covers it.
+
+### Changed
+- **Family-oriented package layout (A1 step 8).** `pkg/state/modules` is now
+  one package per module family (`modules/file/`, `modules/cron/`, …; package
+  names `filemod`, `cronmod`, …), each holding its members, its parameter
+  components (`components.go`), its behavior suites, its contract fixtures,
+  and its registration rows; shared plumbing lives in `modules/regdef`
+  (registration types + `MustSpec`) and `modules/internal/famshared`
+  (cross-family helpers). The aggregator `pkg/state/modules` keeps its import
+  path and public API (`RegisterAll`, the dispatch specials) unchanged — no
+  consumer changes; file history follows the moves.
+
+### Fixed
+- **A1 final-verification round.** `file.directory`'s documentation was
+  drift-corrected (it still described the pre-fix inert `makedirs`; the
+  published page contradicted its own parameter table) and the five other
+  members' Check effects now document the missing-parent failure; the fix is
+  minted as **BD-9** in the spec and each member's Divergences. The makedirs
+  helpers now `Clean` the target path first (a trailing-slash target no
+  longer gates on itself) and report a parent that exists as a regular file
+  with a clear not-a-directory error. `pkg.*`'s `refresh` was
+  UN-componentized: its two members genuinely differ in phase coverage and
+  error semantics (installed: Apply-only, fatal; latest: Check+Apply,
+  warn-only), so per §13 it is member-declared with a permanent pinned
+  exception — the git.* precedent. Gate hardening: the component ratchet now
+  fires for single-embedder components (a member defecting from a 2-member
+  component was previously invisible); member-supplied dimensions are only
+  legal on embedded component fields; untagged pointer-to-struct embeds are
+  compile errors (previously silently dropped the whole component); the
+  declaring-type stamp gained direct tests; same-signature keys with
+  per-member runtime meanings (`dir_mode`) are declared in a participant-
+  pinned meaning-variance registry. The behavior suite now asserts the 0755
+  creation mode, that errors name the missing parent, revert-never-removes-
+  parents, trailing-slash handling, and pins suite completeness against the
+  live embedder set.
+
+- **`file.directory` `makedirs` was accepted but inert — deliberate
+  compatibility fix (A1).** The module previously always created the full
+  parent chain (`MkdirAll`), silently masking typos in deep paths, and
+  ignored the flag. It now follows the canonical contract: a missing parent
+  without `makedirs: true` fails Check and Apply. Behavioral difference from
+  0.6.0, maintainer-ruled; pinned by the shared behavior suite and the
+  makedirs contract fixtures across YAML/CLI/msgpack.
+- **The other five `makedirs` members failed missing-parent cases with raw
+  OS errors and reported phantom applicable changes in Check.** All now fail
+  both phases with the canonical contract error. `file.recurse` previously
+  created missing parents with `dir_mode` instead of the canonical 0755.
+- **`file.directory`'s `dir_mode` is now a standalone parameter** (was an
+  alias of `mode`): decode lands on its own field and the mode fallback
+  (mode wins; `dir_mode` fills in when `mode` is undeclared) moved to the
+  builder — behavior is byte-identical to the alias era, pinned by
+  `TestFileDirectoryDirModeFallback` and updated contract fixtures; its
+  contract signature now matches `file.recurse`'s `dir_mode`, retiring that
+  vocabulary-ratchet entry (along with the `source` one).
 
 ## [0.6.0] - 2026-07-13
 

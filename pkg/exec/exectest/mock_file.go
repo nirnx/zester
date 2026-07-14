@@ -85,6 +85,11 @@ func (f *FakeFileExec) Stat(_ context.Context, path string) (fs.FileInfo, error)
 				return &fakeFileInfo{name: path, mode: 0o755 | fs.ModeDir}, nil
 			}
 		}
+		for k := range f.symlinks {
+			if strings.HasPrefix(k, prefix) {
+				return &fakeFileInfo{name: path, mode: 0o755 | fs.ModeDir}, nil
+			}
+		}
 		return nil, fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
 	return &fakeFileInfo{name: path, size: int64(len(ff.data)), mode: ff.mode}, nil

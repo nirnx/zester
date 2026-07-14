@@ -21,7 +21,7 @@ import (
 //
 // PkgLatest is also its own schema proto: the tagged exported Package and
 // Refresh fields ARE the module's parameter declaration — both primitives, no
-// semantic types needed. Refresh carries an EAGER `default=true` (Salt parity:
+// semantic types needed. Refresh carries an eager member-declared `default=true` (Salt parity:
 // pkg.latest refreshes before deciding unless told not to) — the runtime
 // fields (family, mgr, pkg, cmd, log) are untagged, so the schema compiler
 // skips them.
@@ -32,8 +32,12 @@ type PkgLatest struct {
 	// Package is the name of the package to keep up to date.
 	Package string `zester:"name,primary" usage:"package to keep at the newest available version (defaults to the state ID)"`
 
-	// Refresh: pkg.* family component (member-supplied default true).
-	pkgRefreshParam
+	// Refresh runs a package-database refresh in BOTH Check and Apply, and a
+	// refresh failure only WARNS and proceeds — divergent from pkg.installed's
+	// Apply-only, fatal semantics, which is why refresh is member-declared,
+	// not a family component (§13; the git.* precedent). Pinned in the
+	// vocabulary gate's in-family exception table.
+	Refresh bool `zester:"refresh,default=true" usage:"refresh the package database at the start of both Check and Apply (a failure warns and proceeds on possibly-stale indexes); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
 	// family is the detected OS family ("debian", "redhat", "darwin", "").
 	family string
@@ -55,8 +59,7 @@ type PkgLatest struct {
 // compiled once at package init and executed by every decode path (the
 // builder below, and Registry.Parse). The prose is verified against the live
 // Check/Apply/Revert behavior and the detectPkgSystem/provider logic below.
-var pkgLatestSpec = regdef.MustSpec("pkg.latest", modschema.KindState, PkgLatest{}, pkgLatestDoc,
-	modschema.WithDefault("refresh", "true"))
+var pkgLatestSpec = regdef.MustSpec("pkg.latest", modschema.KindState, PkgLatest{}, pkgLatestDoc)
 
 var pkgLatestDoc = modschema.Doc{
 	Summary: "Ensure a package is installed and kept at the newest available version.",

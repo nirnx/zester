@@ -30,7 +30,7 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ### Check
 
-Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.
+Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.
 
 ### Apply
 
@@ -102,6 +102,7 @@ zester 'web-01' file.symlink /usr/local/bin/python target=/usr/bin/python3
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

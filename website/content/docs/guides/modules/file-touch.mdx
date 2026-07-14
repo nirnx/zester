@@ -28,7 +28,7 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ### Check
 
-Stats the path. An existing file (any content) needs no change; a missing path needs a change.
+Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). Stats the path. An existing file (any content) needs no change; a missing path needs a change.
 
 ### Apply
 
@@ -93,6 +93,7 @@ zester 'web-01' file.touch /var/run/myapp/.initialized
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

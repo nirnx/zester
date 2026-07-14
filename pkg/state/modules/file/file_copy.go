@@ -72,7 +72,8 @@ var fileCopyDoc = modschema.Doc{
 		"an existing destination is left untouched (the copy is a one-time seed); with `force`, the " +
 		"destination is kept in sync with the source by content hash.",
 	Effects: modschema.Effects{
-		Check: "Reads the source — a missing source is an error, not a reported diff. If the " +
+		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+			"Reads the source — a missing source is an error, not a reported diff. If the " +
 			"destination does not exist, a change is needed. If the destination exists and `force` is " +
 			"not set, no change is needed (the existing file wins). With `force`, source and " +
 			"destination contents are compared by SHA-256 hash; a difference needs a change, and, " +
@@ -120,7 +121,7 @@ var fileCopyDoc = modschema.Doc{
 			Body:  "Only the permission mode is copied, and only when `preserve` is set.",
 		},
 	},
-	Divergences: []string{"BD-2", "BD-6", "BD-7"},
+	Divergences: []string{"BD-2", "BD-6", "BD-7", "BD-9"},
 	SeeAlso:     []string{"file.managed", "file.touch"},
 }
 

@@ -1,7 +1,7 @@
 package hostmod
 
-// family_host.go — the host.* FAMILY PARAMETER COMPONENT (keystone spec §13).
-// Strictly scoped to host.*; see family_file.go for the model.
+// components.go — the host.* FAMILY PARAMETER COMPONENT (keystone spec §13).
+// Strictly scoped to host.*; see modules/file/components.go for the model.
 
 // hostFileParam selects the managed hosts file. `config` is canonical with a
 // Salt-compat `path` alias and the /etc/hosts default.

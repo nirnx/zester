@@ -49,7 +49,8 @@ var fileTouchSpec = regdef.MustSpec("file.touch", modschema.KindState, FileTouch
 		"modification-time update only runs when the state is force-applied (for example by a " +
 		"`watch` requisite).",
 	Effects: modschema.Effects{
-		Check: "Stats the path. An existing file (any content) needs no change; a missing path " +
+		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+			"Stats the path. An existing file (any content) needs no change; a missing path " +
 			"needs a change.",
 		Apply: "Creates missing parent directories first when `makedirs` is set. If the file is " +
 			"missing, creates it empty with the default file mode. If the file already exists (only " +
@@ -93,7 +94,7 @@ var fileTouchSpec = regdef.MustSpec("file.touch", modschema.KindState, FileTouch
 			Body:  "Salt's `atime`/`mtime` parameters (setting explicit timestamps) have no equivalent here.",
 		},
 	},
-	Divergences: []string{"BD-2", "BD-6", "BD-7"},
+	Divergences: []string{"BD-2", "BD-6", "BD-7", "BD-9"},
 	SeeAlso:     []string{"file.managed", "file.absent"},
 })
 

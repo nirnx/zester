@@ -237,6 +237,12 @@ func (cs *CompiledSchema) walk(t reflect.Type, prefix []int) error {
 		}
 
 		if !tagged {
+			// An untagged POINTER-to-struct would be silently skipped, losing
+			// an entire embedded component with no error (review finding) —
+			// reject it so the mistake is loud at compile time.
+			if sf.Type.Kind() == reflect.Pointer && sf.Type.Elem().Kind() == reflect.Struct {
+				return fmt.Errorf("modschema: compile: field %s: untagged pointer-to-struct is not supported — embed the struct by value", sf.Name)
+			}
 			// Untagged struct (not a registered semantic type) recurses;
 			// untagged non-struct is skipped.
 			if sf.Type.Kind() == reflect.Struct {
@@ -258,6 +264,13 @@ func (cs *CompiledSchema) walk(t reflect.Type, prefix []int) error {
 		// gate uses it to enforce that a componentized key is never privately
 		// redeclared beside the component.
 		fp.declaredBy = declaredBy
+		// Member-supplied dimensions are a COMPONENT concept (§13): only a
+		// field declared by an embedded component may carry them — on a root
+		// proto they would let two modules hide divergent contracts behind
+		// per-module "member" values with no shared declaration at all.
+		if (fp.memberDefault || fp.memberRequired) && t == cs.protoType {
+			return fmt.Errorf("modschema: compile: param %q: memberdefault/memberrequired are only valid on a family component's field (an embedded struct), not on the module proto itself (§13)", fp.name)
+		}
 		cs.fields = append(cs.fields, fp)
 	}
 	return nil

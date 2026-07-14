@@ -30,8 +30,13 @@ type PkgInstalled struct {
 	// installed version needs a change (upgrades AND downgrades converge).
 	Version string `zester:"version" usage:"exact version pin; any other installed version converges via install or downgrade (format depends on the detected package manager)"`
 
-	// Refresh: pkg.* family component (member-supplied default false).
-	pkgRefreshParam
+	// Refresh runs a package-database refresh in APPLY ONLY, and a refresh
+	// failure is FATAL here — divergent from pkg.latest's Check+Apply,
+	// warn-only semantics, which is why refresh is member-declared, not a
+	// family component (§13: a component fixes the runtime contract; these
+	// two contracts differ per operation — the git.* precedent). Pinned in
+	// the vocabulary gate's in-family exception table.
+	Refresh bool `zester:"refresh,default=false" usage:"refresh the package database before installing (in Apply; a refresh failure fails the state); defaults to false; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
 	// pkg is the injected package execution provider.
 	pkg exec.PackageExec
@@ -42,8 +47,7 @@ type PkgInstalled struct {
 // builder below, and Registry.Parse). The prose is verified against the live
 // Check/Apply/Revert behavior and the apt/dnf/yum/brew provider implementations
 // (pkg/exec/pkg_*.go).
-var pkgInstalledSpec = regdef.MustSpec("pkg.installed", modschema.KindState, PkgInstalled{}, pkgInstalledDoc,
-	modschema.WithDefault("refresh", "false"))
+var pkgInstalledSpec = regdef.MustSpec("pkg.installed", modschema.KindState, PkgInstalled{}, pkgInstalledDoc)
 
 var pkgInstalledDoc = modschema.Doc{
 	Summary: "Ensure a system package is installed, optionally pinned to an exact version.",

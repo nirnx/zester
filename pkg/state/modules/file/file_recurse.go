@@ -95,7 +95,8 @@ var fileRecurseDoc = modschema.Doc{
 		"destination's parent chain. Both mode parameters honor an octal string or an octal integer " +
 		"of any kind.",
 	Effects: modschema.Effects{
-		Check: "Requires a source (an empty source is an error). Walks the source tree: a missing " +
+		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+			"Requires a source (an empty source is an error). Walks the source tree: a missing " +
 			"destination entry, a non-directory where a directory is expected, a content-hash " +
 			"difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are " +
 			"declared — a file-ownership difference each count as drift. Directory modes are compared " +
@@ -167,7 +168,7 @@ var fileRecurseDoc = modschema.Doc{
 				"and a standalone revert is a clean no-op.",
 		},
 	},
-	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7"},
+	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7", "BD-9"},
 	SeeAlso:     []string{"file.managed", "file.directory", "file.copy"},
 }
 

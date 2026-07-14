@@ -45,7 +45,6 @@ type FileDirectory struct {
 	DirMode paramtypes.FileMode `zester:"dir_mode,lazy,default=0755" usage:"fallback source for mode (Salt compatibility): applied as the directory's permission mode when mode is not declared; defaults to 0755"`
 	// User/Group: file.* family ownership component.
 	fileOwnershipParam
-	// MakeDirs is accepted for Salt compatibility but has NO effect: the Apply
 	// MakeDirs: file.* family component. FIXED to the canonical contract in
 	// this migration (previously accepted-but-inert — see the CHANGELOG BD).
 	fileMakeDirsParam
@@ -62,8 +61,8 @@ type FileDirectory struct {
 // fileDirectorySpec is the compiled schema + documentation for file.directory. It
 // is compiled once at package init and executed by every decode path (the builder
 // below, and Registry.Parse). The prose is drift-corrected against the live
-// Check/Apply/Revert behavior — notably that `makedirs` has no effect (MkdirAll is
-// unconditional) and that the mode is set (Chmod) BEFORE ownership is converged
+// Check/Apply/Revert behavior — notably the canonical makedirs contract (parents fail when missing unless
+// makedirs is set) and that the mode is set (Chmod) BEFORE ownership is converged
 // (Chown), the order the legacy code has always used.
 var fileDirectorySpec = regdef.MustSpec("file.directory", modschema.KindState, FileDirectory{}, fileDirectoryDoc,
 	modschema.WithDefault("mode", "0755"))
@@ -72,24 +71,30 @@ var fileDirectoryDoc = modschema.Doc{
 	Summary: "Ensure a directory exists with the desired permissions and ownership.",
 	Description: "`file.directory` ensures a directory exists at its path with the desired permission " +
 		"mode and ownership. The path defaults to the state ID. The `mode` parameter sets the " +
-		"directory's permission bits and defaults to `0755`; `dir_mode` is accepted as an alias — a " +
-		"fallback source for the same mode, with `mode` winning when both are given. It honors an " +
+		"directory's permission bits and defaults to `0755`; `dir_mode` is a standalone fallback " +
+		"source for the same mode, with `mode` winning when both are given. It honors an " +
 		"octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0700` applies " +
-		"0700. `user`/`group` converge ownership only when declared. The `makedirs` parameter is " +
-		"accepted for Salt compatibility but has no effect — the parent chain is always created.",
+		"0700. `user`/`group` converge ownership only when declared. `makedirs` follows the file.* " +
+		"family's canonical contract: it governs missing PARENTS of the managed directory (created at " +
+		"0755 when true); when false — the default — a missing parent fails the state instead of " +
+		"being silently created (a deliberate compatibility fix; see the changelog).",
 	Effects: modschema.Effects{
-		Check: "Compares, in order: path existence (a genuine not-exist means the directory must be " +
+		Check: "Fails first when a parent directory is missing and `makedirs` is unset (the canonical " +
+			"file.* contract — a dry run reports the failure rather than a phantom applicable change). " +
+			"Then compares, in order: path existence (a genuine not-exist means the directory must be " +
 			"created, while any other stat error fails the check rather than reporting phantom drift); " +
 			"that the path is a directory (an existing non-directory needs a change); the permission " +
 			"mode (the managed facets — permission bits plus setuid/setgid/sticky) against the desired " +
 			"mode, defaulting to 0755; and, only when `user`/`group` are declared, ownership drift. " +
 			"Reports a change on the first mismatch.",
-		Apply: "Probes existence for the revert memo — a non-not-exist stat error fails the apply " +
+		Apply: "Ensures parents per the canonical makedirs contract (missing parents are created at " +
+			"0755 only when `makedirs` is true; otherwise a missing parent fails before anything is " +
+			"created). Probes existence for the revert memo — a non-not-exist stat error fails the apply " +
 			"rather than poisoning the memo, since a pre-existing tree must never be recorded as " +
-			"created (a same-instance Revert would RemoveAll it). Creates the directory and any missing " +
-			"parents with MkdirAll (unconditionally — `makedirs` is inert), records the created memo " +
-			"only when the directory did not pre-exist, sets the mode via Chmod, and — when `user`/" +
-			"`group` is declared — converges ownership via Chown. Reports the applied mode.",
+			"created (a same-instance Revert would RemoveAll it). Creates the directory itself, records " +
+			"the created memo only when it did not pre-exist, sets the mode via Chmod, and — when " +
+			"`user`/`group` is declared — converges ownership via Chown. Reports the applied mode. " +
+			"Revert removes only the managed directory, never parents makedirs created.",
 		Revert: "Removes a directory this run's Apply created (RemoveAll). A directory that pre-existed " +
 			"(only its mode or ownership changed) is left untouched, and a fresh instance (a standalone " +
 			"revert) recorded nothing and is a no-op — it never removes a directory it did not create.",
@@ -117,10 +122,11 @@ var fileDirectoryDoc = modschema.Doc{
 	},
 	Notes: []modschema.Note{
 		{
-			Level: "info",
-			Title: "makedirs has no effect",
-			Body: "The makedirs parameter is accepted for Salt compatibility but is inert: file.directory " +
-				"always creates the full parent chain via MkdirAll, whether or not makedirs is set.",
+			Level: "warning",
+			Title: "makedirs now follows the canonical contract (compatibility fix)",
+			Body: "Before 0.7.0 makedirs was accepted but inert — file.directory always created the full " +
+				"parent chain, silently masking typos in deep paths. It now follows the file.* family " +
+				"contract: a missing parent without `makedirs: true` fails both Check and Apply (BD-9).",
 		},
 		{
 			Title: "Mode defaults to 0755 and honors integer modes",
@@ -136,7 +142,7 @@ var fileDirectoryDoc = modschema.Doc{
 				"peel must run with sufficient privileges to set ownership.",
 		},
 	},
-	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7"},
+	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7", "BD-9"},
 	SeeAlso:     []string{"file.managed", "file.recurse", "file.absent"},
 }
 

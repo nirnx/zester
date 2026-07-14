@@ -18,7 +18,7 @@ description: "Ensure a package is installed and kept at the newest available ver
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | package to keep at the newest available version (defaults to the state ID) |
-| `refresh` | `bool` | No | `true` | refresh the package database before the operation; the default is member-specific; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `refresh` | `bool` | No | `true` | refresh the package database at the start of both Check and Apply (a failure warns and proceeds on possibly-stale indexes); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

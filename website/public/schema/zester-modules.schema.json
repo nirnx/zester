@@ -2214,7 +2214,7 @@
                   "type": "string"
                 }
               ],
-              "description": "refresh the package database before the operation; the default is member-specific; a boolean that also accepts the integers 1 (true) and 0 (false)"
+              "description": "refresh the package database before installing (in Apply; a refresh failure fails the state); defaults to false; a boolean that also accepts the integers 1 (true) and 0 (false)"
             },
             "version": {
               "anyOf": [
@@ -2271,7 +2271,7 @@
                   "type": "string"
                 }
               ],
-              "description": "refresh the package database before the operation; the default is member-specific; a boolean that also accepts the integers 1 (true) and 0 (false)"
+              "description": "refresh the package database at the start of both Check and Apply (a failure warns and proceeds on possibly-stale indexes); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)"
             }
           },
           "type": "object"

@@ -47,7 +47,8 @@ var fileSymlinkSpec = regdef.MustSpec("file.symlink", modschema.KindState, FileS
 		"state ID) pointing to `target`. Without `force`, a pre-existing file or wrong-target " +
 		"symlink at the path is an error rather than being replaced.",
 	Effects: modschema.Effects{
-		Check: "Reads the link at the path. A missing link, or one whose current target differs " +
+		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+			"Reads the link at the path. A missing link, or one whose current target differs " +
 			"from the declared `target`, needs a change; a matching link needs none.",
 		Apply: "Creates missing parent directories first when `makedirs` is set. If a symlink " +
 			"already points to `target`, Apply is a no-op. If something else exists at the path (a " +
@@ -93,7 +94,7 @@ var fileSymlinkSpec = regdef.MustSpec("file.symlink", modschema.KindState, FileS
 			Body:  "Revert removes the symlink but does not restore any file that was replaced when force: true was used.",
 		},
 	},
-	Divergences: []string{"BD-2", "BD-6", "BD-7"},
+	Divergences: []string{"BD-2", "BD-6", "BD-7", "BD-9"},
 	SeeAlso:     []string{"file.managed", "file.absent"},
 })
 

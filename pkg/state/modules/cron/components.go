@@ -1,7 +1,7 @@
 package cronmod
 
-// family_cron.go — the cron.* FAMILY PARAMETER COMPONENTS (keystone spec
-// §13). Strictly scoped to cron.*; see family_file.go for the model. The
+// components.go — the cron.* FAMILY PARAMETER COMPONENTS (keystone spec
+// §13). Strictly scoped to cron.*; see modules/file/components.go for the model. The
 // primary (`name`, the identifier comment) stays member-declared.
 
 // cronTargetParam identifies the managed crontab entry: whose crontab, and

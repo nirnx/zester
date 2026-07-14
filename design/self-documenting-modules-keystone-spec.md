@@ -348,6 +348,17 @@ GID · BD-5 StringList sprints scalars / errors on nested (was silent drop) · B
 wrong-typed values produce typed errors (was silent zero) · BD-7 boolean integer
 coercion: `1` = true, `0` = false, any other integer a typed error (was: ints silently
 ignored) · BD-8 `cmd.run` `command` gains the `name` alias, so the Salt idiom
+- **BD-9 (APPROVED 2026-07-13, maintainer-ruled — A1):** the canonical
+  `file.*` `makedirs` runtime contract. `file.directory` previously accepted
+  `makedirs` but always created the full parent chain (inert flag); the five
+  other members created parents only with `makedirs: true` but failed the
+  missing-parent case with raw OS errors and reported phantom would-change in
+  Check. All six now share ONE contract: parents-only, created at 0755 when
+  true; when false a missing parent fails BOTH Check and Apply with an error
+  naming the parent and the remedy; no partial creation; revert never removes
+  created parents. Pinned by the per-member four-case behavior suite
+  (TestFileFamily_MakeDirsContract + completeness pin) — a runtime-class BD,
+  so the pin is behavioral, not a decode fixture.
 `cmd.run: - name: <command>` RUNS the named command (was: `name:` silently ignored,
 the STATE ID executed instead); precedence is command-beats-name, empty `command`
 falls through to `name` (Salt-parity ruling 2026-07-13, standing grant). SCOPE (orchestrator ruling 2026-07-12, under the maintainer's TriState 1/0
@@ -475,8 +486,14 @@ activations, my gate review before the next tranche builds on it.
   keyed on (module kind, family, parameter name):
   - WITHIN a (kind, family) scope: full-contract comparison — declaring type
     must be the family component for keys a component claims; defaults,
-    requiredness, alias sets, and usage must be identical for shared keys
-    with no component. Divergence = failure unless a participant-pinned
+    requiredness, and alias sets must be identical for shared keys with no
+    component. USAGE text is enforced STRUCTURALLY through components (one
+    embedded declaration = one usage string); on member-declared keys usage
+    is contextual prose by design (the primary's usage describes each
+    member's own target) and is deliberately not text-compared —
+    RATIFIED 2026-07-13 during implementation. Same-signature keys whose
+    runtime MEANINGS differ per member are declared in the gate's
+    meaning-variance registry (participant-pinned), e.g. `dir_mode`. Divergence = failure unless a participant-pinned
     in-family compatibility exception exists. The canonical contract is the
     family component's; an exception is explicitly OUTSIDE it — `file.line`'s
     action-selector `mode` (Salt parity) is the first and currently only
@@ -567,8 +584,12 @@ for families whose names collide with keywords/conventions (`pkg`, `test`,
 1. `file.*` — makedirs (after the file.directory ruling), user/group
    (ownership pair), mode (via the member-supplied-default rule), then the
    `path` alias review (already unified).
-2. `ssh_auth.*`, `host.*`, `cron.*`, `git.*` — the paired families' shared
-   trios (name/user/config etc.) via family common structs.
+2. `ssh_auth.*`, `host.*`, `cron.*` — the paired families' shared trios via
+   family components. DECIDED during migration (recorded here): `git.*`'s
+   shared keys (branch/rev/force) and `pkg.*`'s `refresh` stay
+   MEMBER-DECLARED — their runtime semantics differ per operation (phase
+   coverage, error handling), and a component fixes the runtime contract; the
+   divergences are participant-pinned in the gate instead.
 3. Other families define their OWN components as needed (`archive.*`
    declares its own makedirs component; no cross-family sharing, ever).
 
