@@ -153,10 +153,16 @@ Rules (keystone spec §13, Amendment A1):
   redeclaration in any member — even byte-identical — fails the vocabulary
   gate's component ratchet.
 - **A component that promises runtime semantics ships a behavior suite**
-  (`<family>/family_*_behavior_test.go`) that every embedder runs — see
-  `TestFileFamily_MakeDirsContract`'s four makedirs cases. Shared declarations
-  over divergent behavior are worse than duplication: the docs would lie
-  uniformly.
+  (`<family>/family_*_behavior_test.go`) that every embedder runs — the model
+  is `TestFileFamily_MakeDirsContract`: the four core makedirs cases
+  (true/false × parents present/missing) plus fault arms (parent exists as a
+  regular file, injected non-ENOENT stat failure, trailing-slash targets) and
+  a completeness pin so a new embedder cannot skip the suite. Note the
+  contract's Check/Apply split: Check reports a *would-change* naming the
+  missing parent (an earlier state in the run may create it — dry runs of
+  ordered trees must stay valid), while Apply fails strictly at the point the
+  operation actually runs. Shared declarations over divergent behavior are
+  worse than duplication: the docs would lie uniformly.
 - **In-family divergence is an exception, not a variant.** Outside the
   declared member-supplied dimensions, divergence is allowed only as a
   participant-pinned compatibility exception in the gate (`file.line`'s

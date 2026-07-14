@@ -445,6 +445,13 @@ If your module needs a provider beyond the nine existing interfaces (Package/Fil
 - [ ] Define the struct: untagged `id`/`reqs`/providers/memos + tagged exported
       parameter fields (semantic types from `paramtypes` where polymorphic —
       never inline).
+- [ ] EMBED the family's parameter components (`<family>/components.go`) for
+      every family-shared canonical parameter — never redeclare one privately
+      (the component ratchet fails CI). Member-supplied dimensions go through
+      `modschema.WithDefault`/`WithRequired` (mandatory). A component that
+      promises runtime semantics must also pass the family behavior suite
+      (model: `TestFileFamily_MakeDirsContract` — note its Check-soft/
+      Apply-strict split so ordered-tree dry runs stay valid).
 - [ ] Write the `Spec` via `regdef.MustSpec` with a drift-corrected `Doc`
       (Summary/Description/Effects-by-kind/Examples/Notes/Divergences/SeeAlso);
       run a `sensitive` pass on any secret-bearing parameter.
