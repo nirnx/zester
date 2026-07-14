@@ -110,11 +110,12 @@ func TestRegistrations_ExactlyOneBuilderShape(t *testing.T) {
 func TestRegistrations_SpecCarryingRows(t *testing.T) {
 	// The migration ratchet reached ZERO (keystone spec §9 gate 3): EVERY
 	// registration now carries a Spec, so the spec-carrying set is the full
-	// registration table in registration order. The FINAL gate-close wave added
-	// cmd.run (command primary; args StringList, env StringMap) after file.append
-	// and service.enabled (name primary only) after service.dead. This pins the
-	// exact registration order (file.managed leads, module.run last) and that no
-	// row lost its Spec.
+	// registration table in registration order. Since the family package split
+	// (A1 step 8) the table is the concatenation of the per-family Rows in
+	// historical family order (the order each family first appeared in the
+	// pre-split central table; rows keep their relative order within each
+	// family). This pins the exact registration order (file.managed leads,
+	// module.run last) and that no row lost its Spec.
 	var withSpec []string
 	for _, r := range registrations {
 		if r.Spec != nil {
@@ -125,16 +126,26 @@ func TestRegistrations_SpecCarryingRows(t *testing.T) {
 		}
 	}
 	want := []string{
-		"file.managed", "file.directory", "file.absent", "file.append", "cmd.run",
-		"pkg.installed", "user.present", "user.absent", "group.present", "group.absent",
-		"file.symlink", "file.blockreplace", "file.recurse", "pkg.removed", "service.running",
-		"service.dead", "service.enabled", "cron.present", "cron.absent", "mount.mounted",
-		"sysctl.present", "locale.present", "timezone.system", "pip.installed", "git.cloned",
-		"git.latest", "file.line", "file.replace", "file.comment", "file.uncomment",
-		"file.keyvalue", "file.copy", "file.touch", "pkg.latest", "pkg.purged",
-		"pkgrepo.managed", "archive.extracted", "host.present", "host.absent", "ssh_auth.present",
-		"ssh_auth.absent",
-		// the FINAL test.*/module.run wave (registration order; module.run last)
+		"file.managed", "file.directory", "file.absent", "file.append", "file.symlink",
+		"file.blockreplace", "file.recurse", "file.line", "file.replace", "file.comment",
+		"file.uncomment", "file.keyvalue", "file.copy", "file.touch",
+		"cmd.run",
+		"pkg.installed", "pkg.removed", "pkg.latest", "pkg.purged",
+		"user.present", "user.absent",
+		"group.present", "group.absent",
+		"service.running", "service.dead", "service.enabled",
+		"cron.present", "cron.absent",
+		"mount.mounted",
+		"sysctl.present",
+		"locale.present",
+		"timezone.system",
+		"pip.installed",
+		"git.cloned", "git.latest",
+		"pkgrepo.managed",
+		"archive.extracted",
+		"host.present", "host.absent",
+		"ssh_auth.present", "ssh_auth.absent",
+		// the test.* family, then module.run LAST (it dispatches to the others)
 		"test.ping", "test.nop", "test.fail_without_changes", "test.succeed_with_changes",
 		"test.configurable_test_state", "module.run",
 	}

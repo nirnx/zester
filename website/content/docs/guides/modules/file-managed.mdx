@@ -5,7 +5,7 @@ description: "Ensure a file exists with the desired content, permissions, and ow
 
 {/* zester-docgen:managed module="file.managed" */}
 
-**Source**: `pkg/state/modules/file_managed.go`
+**Source**: `pkg/state/modules/file/file_managed.go`
 
 ---
 
@@ -19,14 +19,14 @@ description: "Ensure a file exists with the desired content, permissions, and ow
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
 | `content` | `string` | No | *(none)* | desired inline file content; provide either content or source (source wins if both are set) |
-| `source` | `string` | No | *(none)* | local file path to copy content from; provide either content or source (source wins if both are set) |
+| `source` | `string` | No | *(none)* | source path content is taken from; whether it is required is member-specific |
 | `template` | `TemplateFlag` | No | *(none)* | render source/content as a Jinja2 template before writing (a bool, the string "jinja", or a truthy/falsy string); defaults to off |
 | `context` | `map` | No | *(none)* | extra template variables, available as top-level names; override defaults; only used when template is enabled |
 | `defaults` | `map` | No | *(none)* | fallback template variables; context takes precedence; only used when template is enabled |
-| `mode` | `FileMode` | No | `0644` (lazy) | file permission mode in octal ("0644", "0755", "4755"); setuid/setgid/sticky bits honored; defaults to 0644 |
-| `user` | `string` | No | *(none)* | file owner username; ownership is left unchanged when unset |
-| `group` | `string` | No | *(none)* | file group name; ownership is left unchanged when unset |
-| `makedirs` | `bool` | No | *(none)* | create missing parent directories (with mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `mode` | `FileMode` | No | `0644` (lazy) | permission mode for the target in octal ("0644", "0755", "4755"); setuid/setgid/sticky bits are honored; the default is member-specific |
+| `user` | `string` | No | *(none)* | owner username for the target; ownership is left unchanged when unset |
+| `group` | `string` | No | *(none)* | group name for the target; ownership is left unchanged when unset |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
@@ -49,7 +49,7 @@ A Unix file-permission mode. Accepts an octal string ("0644", "755", "4755") or 
 
 ### Check
 
-Resolves the desired content (reading `source` or using `content`, rendering the template when enabled) and compares, in order: file existence (a genuine not-exist means the file must be created, while any other read error fails the check rather than risking a blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed facets — permission bits plus setuid/setgid/sticky); and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Resolves the desired content (reading `source` or using `content`, rendering the template when enabled) and compares, in order: file existence (a genuine not-exist means the file must be created, while any other read error fails the check rather than risking a blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed facets — permission bits plus setuid/setgid/sticky); and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.
 
 ### Apply
 
@@ -186,6 +186,7 @@ zester 'web*' file.managed /etc/motd content="Welcome to Zester" mode=0644
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

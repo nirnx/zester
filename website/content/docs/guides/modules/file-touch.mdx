@@ -5,7 +5,7 @@ description: "Create an empty file when missing, or update its modification time
 
 {/* zester-docgen:managed module="file.touch" */}
 
-**Source**: `pkg/state/modules/file_touch.go`
+**Source**: `pkg/state/modules/file/file_touch.go`
 
 ---
 
@@ -18,7 +18,7 @@ description: "Create an empty file when missing, or update its modification time
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | absolute path to the file to touch; the path alias is accepted for Salt compatibility (defaults to the state ID) |
-| `makedirs` | `bool` | No | *(none)* | create missing parent directories (mode 0755) before touching; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
@@ -28,7 +28,7 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ### Check
 
-Stats the path. An existing file (any content) needs no change; a missing path needs a change.
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Stats the path. An existing file (any content) needs no change; a missing path needs a change.
 
 ### Apply
 
@@ -93,6 +93,7 @@ zester 'web-01' file.touch /var/run/myapp/.initialized
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

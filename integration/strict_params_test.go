@@ -31,6 +31,23 @@ func TestSysDoc_ModuleRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSysDoc_FamilyForm pins the Salt-parity family form end to end: `zester
+// '<peel>' sys.doc ssh_auth` renders BOTH ssh_auth.* modules as one document
+// instead of erroring "no documentation" (the exact-name miss falls through to
+// a family prefix scan on the peel's DocSource).
+func TestSysDoc_FamilyForm(t *testing.T) {
+	r := requireSuccess(t, execCLI(t, "web-01", "sys.doc", "ssh_auth"), "web-01")
+	if len(r.Results) == 0 {
+		t.Fatal("sys.doc ssh_auth returned no results")
+	}
+	doc := r.Results[0].Details["result"]
+	iAbs := strings.Index(doc, "ssh_auth.absent (state)")
+	iPre := strings.Index(doc, "ssh_auth.present (state)")
+	if iAbs < 0 || iPre < 0 || iAbs > iPre {
+		t.Errorf("sys.doc ssh_auth family doc missing/misordered members (abs=%d pre=%d):\n%.400s", iAbs, iPre, doc)
+	}
+}
+
 // TestSysDoc_UnifiedIndex runs bare `zester '<peel>' sys.doc`: the peel returns
 // the unified index of every callable surface, which must span all three
 // surface kinds — a state module, an execution function, and a dispatch special.

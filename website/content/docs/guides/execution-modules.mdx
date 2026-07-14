@@ -565,7 +565,7 @@ zester 'web-01' grains.items
 
 ---
 
-`sys.doc <module>` renders the named module's documentation — the SAME self-documenting metadata `zester doc` and the generated reference pages are built from — as plain text. With no module named, it returns the unified index of every callable surface (identical to `sys.list_functions`). It answers even during a long-running state run (it is a read-only surface).
+`sys.doc <module>` renders the named module's documentation — the SAME self-documenting metadata `zester doc` and the generated reference pages are built from — as plain text. A bare FAMILY name renders every documented member (`sys.doc ssh_auth` shows ssh_auth.present AND ssh_auth.absent; Salt parity). With no module named, it returns the unified index of every callable surface (identical to `sys.list_functions`). It answers even during a long-running state run (it is a read-only surface).
 
 ---
 
@@ -573,7 +573,7 @@ zester 'web-01' grains.items
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | Request ID (bare positional) | module name to document; when omitted, the unified index of every callable surface is returned |
+| `name` | `string` | No | Request ID (bare positional) | module name — or bare family name, rendering every member — to document; when omitted, the unified index of every callable surface is returned |
 
 ---
 
@@ -581,7 +581,7 @@ zester 'web-01' grains.items
 
 #### Execution
 
-Looks the module up following the peel's dispatch precedence (dispatch specials, then state modules, then execution functions) and renders its ModuleInfo through the shared text renderer. With no module named, returns the unified index. Errors when the named module has no documentation.
+Looks the module up following the peel's dispatch precedence (dispatch specials, then state modules, then execution functions) and renders its ModuleInfo through the shared text renderer; a name matching no module but prefixing a family renders every `<family>.*` member as one document. With no module named, returns the unified index. Errors when the name is neither a module nor a family.
 
 
 ---
@@ -594,6 +594,14 @@ The bare positional argument is the module name to document.
 
 ```bash
 zester 'web-01' sys.doc pkg.installed
+```
+
+#### Document a whole family
+
+A bare family name renders every documented member.
+
+```bash
+zester 'web-01' sys.doc ssh_auth
 ```
 
 #### Show the unified index

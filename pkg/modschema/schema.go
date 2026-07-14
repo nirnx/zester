@@ -44,6 +44,16 @@ type Field struct {
 	Default string
 	// JSONSchema is the field's JSON Schema fragment.
 	JSONSchema map[string]any
+	// DeclaredBy is the Go struct type that declared the field (§13): a family
+	// parameter component's type for componentized parameters, the module's
+	// own proto type otherwise. Consumed by the vocabulary gate; additive.
+	DeclaredBy string `json:"-"`
+	// DefaultMemberSupplied / RequiredMemberSupplied mirror the component's
+	// memberdefault/memberrequired declarations (§13): the dimension varies
+	// per member BY CONTRACT, and the vocabulary gate excludes it from the
+	// in-family signature when every participant shares the component.
+	DefaultMemberSupplied  bool `json:"-"`
+	RequiredMemberSupplied bool `json:"-"`
 }
 
 // Schema returns the derived ModuleSchema view of the compiled plan as a DEEP

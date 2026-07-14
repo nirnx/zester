@@ -176,15 +176,41 @@ func projectFields(v any) map[string]any {
 	if rv.Kind() != reflect.Struct {
 		return out
 	}
+	projectStructInto(rv, out)
+	return out
+}
+
+// projectStructInto flattens a struct's exported fields into out, recursing
+// into anonymous (embedded) struct fields — family parameter components
+// (keystone spec §13) promote their fields, and contract `want` projections
+// address them by the promoted name exactly like the module code does. An
+// unexported embedded struct's exported leaves are still promoted, matching
+// modschema.Compile's walk.
+func projectStructInto(rv reflect.Value, out map[string]any) {
 	rt := rv.Type()
 	for i := range rt.NumField() {
 		sf := rt.Field(i)
-		if sf.PkgPath != "" {
-			continue // unexported
+		fv := rv.Field(i)
+		if sf.Anonymous {
+			ft := sf.Type
+			inner := fv
+			if ft.Kind() == reflect.Pointer {
+				if inner.IsNil() {
+					continue
+				}
+				inner = inner.Elem()
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct {
+				projectStructInto(inner, out)
+				continue
+			}
 		}
-		out[sf.Name] = rv.Field(i).Interface()
+		if sf.PkgPath != "" {
+			continue // unexported non-embedded
+		}
+		out[sf.Name] = fv.Interface()
 	}
-	return out
 }
 
 // looseEqual compares two values, treating all integer kinds as equal by value

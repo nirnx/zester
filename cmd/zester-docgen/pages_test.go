@@ -112,7 +112,7 @@ func TestRenderModulePage_PkgRemoved_AnatomySections(t *testing.T) {
 	mustContain := []string{
 		`title: "pkg.removed"`,
 		managedMarker("pkg.removed"),
-		"**Source**: `pkg/state/modules/pkg_removed.go`",
+		"**Source**: `pkg/state/modules/pkg/pkg_removed.go`",
 		"## Parameters",
 		"| `name` | `string` |",
 		requisitesBoilerplate,

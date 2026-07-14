@@ -309,8 +309,8 @@ func TestRenderModulePageGroup_DistinctParamsRendersPerMember(t *testing.T) {
 		"`mod.a` and `mod.b` are documented together on this page; each has its own parameters.",
 		"## `mod.a`",
 		"## `mod.b`",
-		"**Source**: `pkg/state/modules/mod_a.go`",
-		"**Source**: `pkg/state/modules/mod_b.go`",
+		"**Source**: `pkg/state/modules/mod/mod_a.go`",
+		"**Source**: `pkg/state/modules/mod/mod_b.go`",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(got, want) {

@@ -5,7 +5,7 @@ description: "Copy a source file that already exists on the peel to a destinatio
 
 {/* zester-docgen:managed module="file.copy" */}
 
-**Source**: `pkg/state/modules/file_copy.go`
+**Source**: `pkg/state/modules/file/file_copy.go`
 
 ---
 
@@ -18,10 +18,10 @@ description: "Copy a source file that already exists on the peel to a destinatio
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | destination path; the path alias is accepted for Salt compatibility (defaults to the state ID) |
-| `source` | `string` | Yes | *(none)* | local path (on the peel) to copy from |
+| `source` | `string` | Yes | *(none)* | source path content is taken from; whether it is required is member-specific |
 | `force` | `bool` | No | *(none)* | overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false) |
 | `preserve` | `bool` | No | *(none)* | copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false) |
-| `makedirs` | `bool` | No | *(none)* | create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
@@ -31,7 +31,7 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ### Check
 
-Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.
 
 ### Apply
 
@@ -98,6 +98,7 @@ zester 'web-01' file.copy /etc/nginx/nginx.conf.bak source=/etc/nginx/nginx.conf
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

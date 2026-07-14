@@ -5,7 +5,7 @@ description: "Ensure a symbolic link exists at a path, pointing to a target."
 
 {/* zester-docgen:managed module="file.symlink" */}
 
-**Source**: `pkg/state/modules/file_symlink.go`
+**Source**: `pkg/state/modules/file/file_symlink.go`
 
 ---
 
@@ -17,10 +17,10 @@ description: "Ensure a symbolic link exists at a path, pointing to a target."
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | absolute path for the symbolic link (defaults to the state ID) |
+| `name` | `string` | No | State ID | absolute path for the symbolic link (defaults to the state ID); the path alias is accepted |
 | `target` | `string` | No | *(none)* | destination the symlink should point to |
 | `force` | `bool` | No | *(none)* | replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false) |
-| `makedirs` | `bool` | No | *(none)* | create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
@@ -30,7 +30,7 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ### Check
 
-Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.
 
 ### Apply
 
@@ -102,6 +102,7 @@ zester 'web-01' file.symlink /usr/local/bin/python target=/usr/bin/python3
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

@@ -24,6 +24,29 @@ Modules follow a two-layer split:
 State modules never call `os.Exec`, `os.WriteFile`, etc. directly. They call the
 injected exec providers, which enables testing with fakes.
 
+## Package layout (family-oriented, keystone spec §13)
+
+One directory per module FAMILY (family = the module name's first dotted
+segment); the directory name is the family verbatim, the Go package name is the
+family + `mod` (`file/` → `filemod`, `ssh_auth/` → `sshauthmod`, …):
+
+- **`<family>/`** — the family's member sources (`file_managed.go`), its
+  parameter components (`components.go`, the former `family_<fam>.go`), member
+  + behavior tests, contract fixtures (`<family>/testdata/contract/<module>.yaml`),
+  and `register.go` exporting the family's registration rows as
+  `var Rows = []regdef.Registration{...}`.
+- **`regdef/`** — the registration row shape shared by every family:
+  `Registration`, `BuildFunc`/`PlainBuildFunc`, and `MustSpec`.
+- **`internal/famshared/`** — helpers used by MORE THAN ONE family package
+  (`ContainsString`, `ReadManagedFile`/`RevertHostsFile`/`SplitHostLines`/
+  `JoinHostLines`, `DetectPkgSystem`, …). A helper used by a single family
+  stays unexported inside that family.
+- **`pkg/state/modules` (the aggregator)** — concatenates the family `Rows`
+  into the full table (historical family order, `module.run` LAST), owns
+  `RegisterAll`, the dispatch-surface docs (`dispatch_docs.go`), and the
+  doc-coverage/registration conformance tests. Its public API is unchanged by
+  the split; the peel and docgen import only the aggregator.
+
 ## Schema-first: the proto IS the module
 
 A migrated module's struct is BOTH the runtime state and its own **schema proto**.
@@ -104,14 +127,14 @@ the sealed `SemanticType` interface, `register(...)` it in `vocabulary.go`, bump
 `VocabularySize`, and add its fixtures in `paramtypes/fixtures_test.go`
 (completeness is test-enforced). Do this only when a real parameter needs it.
 
-## Authoring the Spec (`mustSpec` + `Doc`)
+## Authoring the Spec (`regdef.MustSpec` + `Doc`)
 
-`mustSpec(module, kind, proto, doc)` compiles the schema once at package init and
-panics on a bad declaration (a programming error). It lives in `register.go`.
-Declare the spec next to the module:
+`regdef.MustSpec(module, kind, proto, doc)` compiles the schema once at package
+init and panics on a bad declaration (a programming error). It lives in
+`pkg/state/modules/regdef`. Declare the spec next to the module:
 
 ```go
-var pkgRemovedSpec = mustSpec("pkg.removed", modschema.KindState, PkgRemoved{}, modschema.Doc{
+var pkgRemovedSpec = regdef.MustSpec("pkg.removed", modschema.KindState, PkgRemoved{}, modschema.Doc{
     Summary:     "Ensure a system package is not installed.",
     Description: "`pkg.removed` ensures the named package is absent ...", // CommonMark; no JSX
     Effects: modschema.Effects{
@@ -291,22 +314,26 @@ fmt.Errorf("pkg.removed: %w", err) // wraps the typed Decode error unchanged
 
 ## Registration
 
-Register in the ordered `registrations` table in **`pkg/state/modules/register.go`**
-(NOT `cmd/zester-peel/main.go` — that is the old, wrong path). Every row carries a
-`Spec` and exactly one builder shape; `module.run` stays LAST:
+Register in the family's ordered `Rows` table in
+**`pkg/state/modules/<family>/register.go`** (NOT `cmd/zester-peel/main.go` —
+that is the old, wrong path). Every row carries a `Spec` and exactly one
+builder shape:
 
 ```go
-var registrations = []Registration{
+var Rows = []regdef.Registration{
     // ...
     {Name: "pkg.removed", Spec: pkgRemovedSpec, Build: NewPkgRemovedBuilder},
-    {Name: "service.running", Spec: svcRunningSpec, Build: NewSvcRunningBuilder},
-    {Name: "test.ping", Spec: testPingSpec, BuildPlain: NewTestPingBuilder},
-    {Name: "module.run", Spec: moduleRunSpec, BuildWithRegistry: NewModuleRunBuilder}, // LAST
 }
 ```
 
-`RegisterAll` `RegisterSpec`s each row (so `Describe`/`SpecNames`/`Parse` see it),
-panicking on a name/spec mismatch or missing builder. The count is pinned to 47 in
+The aggregator's `registrations` table concatenates every family's `Rows`
+(historical family order; the `module` family — `module.run` — stays LAST so it
+registers after every target it may dispatch to). A brand-NEW family also gets
+its `Rows` added to the aggregator's `concatRows` call in
+`pkg/state/modules/register.go`, plus the registration-order pin in
+`register_test.go`. `RegisterAll` `RegisterSpec`s each row (so
+`Describe`/`SpecNames`/`Parse` see it), panicking on a name/spec mismatch or
+missing builder. The count is pinned to 47 in
 `TestDocCoverage_EveryModuleHasSpec` — bump it deliberately when you add a module.
 
 **N:1 (one proto, several registered names)**: `file.comment`/`file.uncomment`
@@ -418,7 +445,14 @@ If your module needs a provider beyond the nine existing interfaces (Package/Fil
 - [ ] Define the struct: untagged `id`/`reqs`/providers/memos + tagged exported
       parameter fields (semantic types from `paramtypes` where polymorphic —
       never inline).
-- [ ] Write the `Spec` via `mustSpec` with a drift-corrected `Doc`
+- [ ] EMBED the family's parameter components (`<family>/components.go`) for
+      every family-shared canonical parameter — never redeclare one privately
+      (the component ratchet fails CI). Member-supplied dimensions go through
+      `modschema.WithDefault`/`WithRequired` (mandatory). A component that
+      promises runtime semantics must also pass the family behavior suite
+      (model: `TestFileFamily_MakeDirsContract` — note its Check-soft/
+      Apply-strict split so ordered-tree dry runs stay valid).
+- [ ] Write the `Spec` via `regdef.MustSpec` with a drift-corrected `Doc`
       (Summary/Description/Effects-by-kind/Examples/Notes/Divergences/SeeAlso);
       run a `sensitive` pass on any secret-bearing parameter.
 - [ ] Implement the builder (provider-nil guard → `spec.Decode` → assign
@@ -430,11 +464,20 @@ If your module needs a provider beyond the nine existing interfaces (Package/Fil
 - [ ] Do NOT parse reserved keys (requisites/attributes/`names`/`listen`/`_in`/
       `test`) — the runner, compiler, and wrapper own them.
 - [ ] Wrap errors `fmt.Errorf("module.function: op: %w", err)`.
-- [ ] Register in `pkg/state/modules/register.go`'s `registrations` table
-      (`module.run` stays last); bump the count pin.
+- [ ] Register in the family's `Rows` table
+      (`pkg/state/modules/<family>/register.go`; a new family also joins the
+      aggregator's `concatRows` — `module` stays last); bump the count pin.
+- [ ] Parameter names pass the PARAMETER-VOCABULARY gate
+      (`TestParameterVocabularyConsistency` in `cmd/zester-docgen`): the same
+      key — canonical name or alias — must carry the SAME schema in every
+      module that uses it. On a collision: reuse the existing semantic type,
+      pick a non-colliding name, or add a justified, participant-pinned entry
+      to the exception table. (Distinct from the SEMANTIC-TYPE vocabulary in
+      `paramtypes/vocabulary.go` — that one registers types; this one governs
+      parameter KEY reuse across modules.)
 - [ ] Unit tests (name, primary-default, requisites, check both ways, apply,
       apply-error, revert, provider-missing, convergence).
-- [ ] Permanent contract fixture `testdata/contract/<module>.yaml` +
+- [ ] Permanent contract fixture `<family>/testdata/contract/<module>.yaml` +
       `RunContract` test; per-param BD fixtures across yaml+msgpack for every
       bool/TriState and numeric-coercion parameter; CHANGELOG entry for any BD.
 - [ ] `go run ./cmd/zester-docgen` LAST; verify the tree is clean and the website

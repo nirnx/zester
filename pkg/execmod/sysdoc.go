@@ -41,10 +41,27 @@ func SysDoc(src DocSource) Func {
 			return strings.Join(src.Names(), "\n"), nil
 		}
 		mi, ok := src.Describe(name)
-		if !ok {
-			return "", fmt.Errorf("sys.doc: no documentation for %q", name)
+		if ok {
+			return modschema.RenderText(mi), nil
 		}
-		return modschema.RenderText(mi), nil
+		// FAMILY form (Salt parity): a bare family name renders every
+		// documented `<family>.*` surface — `sys.doc ssh_auth` shows
+		// ssh_auth.present AND ssh_auth.absent. Names() is sorted, so the
+		// family document is deterministic.
+		prefix := name + "."
+		var infos []modschema.ModuleInfo
+		for _, n := range src.Names() {
+			if !strings.HasPrefix(n, prefix) {
+				continue
+			}
+			if fmi, fok := src.Describe(n); fok {
+				infos = append(infos, fmi)
+			}
+		}
+		if len(infos) > 0 {
+			return modschema.RenderTextAll(infos), nil
+		}
+		return "", fmt.Errorf("sys.doc: no documentation for %q (try a full module.function name, a family name like \"file\", or sys.list_functions)", name)
 	}
 }
 

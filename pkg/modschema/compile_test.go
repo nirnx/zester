@@ -265,3 +265,170 @@ func TestCompileValidNonLazyDefaultDecodedThroughFieldDecoder(t *testing.T) {
 		t.Fatalf("eager default: got %d want 755", dst.N)
 	}
 }
+
+// ---- Member-supplied dimensions (keystone spec §13, Amendment A1) ----
+
+// memberDimComponent models a family parameter component (§13): member-
+// supplied dimensions are only legal on an EMBEDDED declarer.
+type memberDimComponent struct {
+	Mode paramtypes.FileMode `zester:"mode,lazy,memberdefault" usage:"canonical mode"`
+	Src  string              `zester:"source,memberrequired" usage:"canonical source"`
+}
+
+type memberDimProto struct {
+	Name string `zester:"name,primary" usage:"the name"`
+	memberDimComponent
+}
+
+// rootMemberDimProto declares a member-supplied dimension on the proto ROOT —
+// illegal (§13): without a shared declaration there is nothing "member" about it.
+type rootMemberDimProto struct {
+	Mode paramtypes.FileMode `zester:"mode,lazy,memberdefault" usage:"mode"`
+}
+
+// ptrEmbedProto embeds a component by POINTER — rejected loudly (it would
+// otherwise be silently skipped, losing the whole component).
+type ptrEmbedProto struct {
+	Name string `zester:"name,primary" usage:"the name"`
+	*memberDimComponent
+}
+
+// TestMemberSuppliedDimensions pins the §13 member-supplied rule end to end:
+// a memberdefault/memberrequired field MUST be supplied via WithDefault /
+// WithRequired (validated + rendered like a tag default), supplying a FIXED
+// dimension is an error, and omitting a mandatory supply is an error.
+func TestMemberSuppliedDimensions(t *testing.T) {
+	cs, err := Compile(memberDimProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0644"), WithRequired("source", true))
+	if err != nil {
+		t.Fatalf("compile with member dims: %v", err)
+	}
+	var modeField, srcField *Field
+	for i := range cs.schema.Fields {
+		switch cs.schema.Fields[i].Name {
+		case "mode":
+			modeField = &cs.schema.Fields[i]
+		case "source":
+			srcField = &cs.schema.Fields[i]
+		}
+	}
+	if modeField == nil || !modeField.HasDefault || modeField.Default != "0644" {
+		t.Fatalf("member default not rendered: %+v", modeField)
+	}
+	if srcField == nil || !srcField.Required {
+		t.Fatalf("member requiredness not applied: %+v", srcField)
+	}
+
+	// A second member supplies different values — same proto, different contract
+	// dimensions, everything else identical.
+	cs2, err := Compile(memberDimProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0755"), WithRequired("source", false))
+	if err != nil {
+		t.Fatalf("compile second member: %v", err)
+	}
+	for i := range cs2.schema.Fields {
+		if cs2.schema.Fields[i].Name == "mode" && cs2.schema.Fields[i].Default != "0755" {
+			t.Fatalf("second member default: %+v", cs2.schema.Fields[i])
+		}
+	}
+
+	// Mandatory: omitting a member-supplied dimension fails compile.
+	if _, err := Compile(memberDimProto{}, Doc{Summary: "d"}, WithRequired("source", true)); err == nil {
+		t.Fatal("missing WithDefault for a memberdefault field compiled")
+	}
+	if _, err := Compile(memberDimProto{}, Doc{Summary: "d"}, WithDefault("mode", "0644")); err == nil {
+		t.Fatal("missing WithRequired for a memberrequired field compiled")
+	}
+
+	// FIXED dimensions have no override mechanism.
+	if _, err := Compile(memberDimProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0644"), WithRequired("source", true),
+		WithDefault("name", "x")); err == nil {
+		t.Fatal("WithDefault on a fixed-dimension field compiled")
+	}
+	if _, err := Compile(memberDimProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0644"), WithRequired("source", true),
+		WithRequired("name", true)); err == nil {
+		t.Fatal("WithRequired on a fixed-dimension field compiled")
+	}
+	if _, err := Compile(memberDimProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0644"), WithDefault("nope", "1"), WithRequired("source", true)); err == nil {
+		t.Fatal("WithDefault on an unknown parameter compiled")
+	}
+
+	// An invalid member default literal is a compile error (validated by the
+	// field's own decoder, like a tag default).
+	if _, err := Compile(memberDimProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "banana"), WithRequired("source", true)); err == nil {
+		t.Fatal("invalid member default literal compiled")
+	}
+}
+
+// TestMemberDimensionPlacementAndStamping pins the §13 hardening from the
+// final review: member-supplied dimensions are embedded-declarer-only,
+// pointer embedding is rejected, and the declaring-type stamp is "" for root
+// fields, the component type for embedded fields, and the INNERMOST type for
+// double-nested embedding.
+func TestMemberDimensionPlacementAndStamping(t *testing.T) {
+	if _, err := Compile(rootMemberDimProto{}, Doc{Summary: "d"}, WithDefault("mode", "0644")); err == nil {
+		t.Fatal("memberdefault on a root proto field compiled")
+	}
+	if _, err := Compile(ptrEmbedProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0644"), WithRequired("source", false)); err == nil {
+		t.Fatal("untagged pointer-to-struct embed compiled (would silently drop the component)")
+	}
+
+	cs, err := Compile(memberDimProto{}, Doc{Summary: "d"},
+		WithDefault("mode", "0644"), WithRequired("source", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range cs.schema.Fields {
+		switch f.Name {
+		case "name":
+			if f.DeclaredBy != "" {
+				t.Errorf("root field stamped %q, want empty", f.DeclaredBy)
+			}
+		case "mode", "source":
+			if f.DeclaredBy != "modschema.memberDimComponent" {
+				t.Errorf("component field %q stamped %q, want modschema.memberDimComponent", f.Name, f.DeclaredBy)
+			}
+			if f.Name == "mode" && !f.DefaultMemberSupplied {
+				t.Error("mode not marked DefaultMemberSupplied")
+			}
+			if f.Name == "source" && !f.RequiredMemberSupplied {
+				t.Error("source not marked RequiredMemberSupplied")
+			}
+		}
+	}
+
+	// Double nesting: the INNERMOST declaring type is stamped.
+	type outerWrap struct {
+		memberDimComponent
+	}
+	type doubleNested struct {
+		Name string `zester:"name,primary" usage:"n"`
+		outerWrap
+	}
+	cs2, err := Compile(doubleNested{}, Doc{Summary: "d"},
+		WithDefault("mode", "0700"), WithRequired("source", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range cs2.schema.Fields {
+		if f.Name == "mode" && f.DeclaredBy != "modschema.memberDimComponent" {
+			t.Errorf("double-nested mode stamped %q, want the innermost component type", f.DeclaredBy)
+		}
+	}
+}
+
+type badMemberDimProto struct {
+	Mode paramtypes.FileMode `zester:"mode,memberdefault,default=0644" usage:"contradiction"`
+}
+
+// TestMemberDimensionTagContradictions pins the tag-level combos.
+func TestMemberDimensionTagContradictions(t *testing.T) {
+	if _, err := Compile(badMemberDimProto{}, Doc{Summary: "d"}); err == nil {
+		t.Fatal("memberdefault + tag default compiled")
+	}
+}

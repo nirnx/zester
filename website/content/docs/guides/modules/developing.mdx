@@ -16,7 +16,7 @@ documentation cannot drift from behavior. The framework and its guarantees are
 described in [Self-Documenting Modules](/docs/architecture/self-documenting-modules);
 this page is the practical recipe.
 
-Everything below uses `host.present` (`pkg/state/modules/host_present.go`) as the
+Everything below uses `host.present` (`pkg/state/modules/host/host_present.go`) as the
 running example — it is deliberately kept small and exercises every schema
 feature: a primary, a required field, an alias, and a default.
 
@@ -70,6 +70,15 @@ Two hard rules:
 - **Never define a polymorphic type inline.** Semantic types live only in the
   controlled package (they are sealed) so that decoding, validation,
   documentation, and JSON Schema always come from one implementation.
+- **Respect the parameter vocabulary.** The same key must mean the same shape
+  in every module — `mode` is a `FileMode` wherever it means permissions,
+  `user` is always a string account name, and so on. A test gate
+  (`TestParameterVocabularyConsistency` in `cmd/zester-docgen`) compares every
+  parameter key — canonical names AND aliases — across all state and exec
+  modules and fails on a schema mismatch. If your new parameter collides with
+  an existing key, reuse the existing semantic type, pick a different name, or
+  (for a deliberate Salt-parity reuse like `file.line`'s action-selector
+  `mode`) add a justified entry to the gate's exception table.
 
 ## Step 2 — Polymorphic parameters: semantic types
 
@@ -103,12 +112,70 @@ a registered type without fixtures fails the suite, and the fixture↔schema
 agreement gate automatically verifies that whatever the decoder accepts/rejects,
 the emitted JSON Schema fragment agrees.
 
-## Step 3 — Write the documentation: `Doc` + `mustSpec`
+## Step 3 — Family parameter components
+
+A parameter that means the same thing across several members of one family
+(`makedirs`, `mode`, ownership, `source` in `file.*`) is declared ONCE in the
+family's `components.go` (`pkg/state/modules/<family>/`) and embedded by every
+member that exposes it:
+
+```go
+type FileManaged struct {
+    id   string
+    // ...member-specific fields...
+    fileModeParam      // mode (FileMode, lazy; default is member-supplied)
+    fileOwnershipParam // user + group
+    fileMakeDirsParam  // makedirs (canonical parent-creation contract)
+}
+```
+
+The component fixes the contract's FIXED dimensions — name, value type, alias
+set, canonical usage text, and the runtime behavioral contract. Defaults and
+requiredness can be member-supplied, but only when the component declares them
+so (`memberdefault` / `memberrequired` tag options); the member then MUST
+supply them:
+
+```go
+var fileManagedSpec = regdef.MustSpec("file.managed", modschema.KindState, FileManaged{}, fileManagedDoc,
+    modschema.WithDefault("mode", "0644"), modschema.WithRequired("source", false))
+```
+
+A missing supply is a compile panic at package load, and supplying either for
+any other field is an error — fixed dimensions have no override mechanism, by
+design.
+
+Rules (keystone spec §13, Amendment A1):
+
+- **Components are strictly scoped to one family.** Never embed another
+  family's component — the same spelling in another family is a different
+  word; declare your own.
+- **Once a component exists for a key, embedding it is mandatory.** A private
+  redeclaration in any member — even byte-identical — fails the vocabulary
+  gate's component ratchet.
+- **A component that promises runtime semantics ships a behavior suite**
+  (`<family>/family_*_behavior_test.go`) that every embedder runs — the model
+  is `TestFileFamily_MakeDirsContract`: the four core makedirs cases
+  (true/false × parents present/missing) plus fault arms (parent exists as a
+  regular file, injected non-ENOENT stat failure, trailing-slash targets) and
+  a completeness pin so a new embedder cannot skip the suite. Note the
+  contract's Check/Apply split: Check reports a *would-change* naming the
+  missing parent (an earlier state in the run may create it — dry runs of
+  ordered trees must stay valid), while Apply fails strictly at the point the
+  operation actually runs. Shared declarations over divergent behavior are
+  worse than duplication: the docs would lie uniformly.
+- **In-family divergence is an exception, not a variant.** Outside the
+  declared member-supplied dimensions, divergence is allowed only as a
+  participant-pinned compatibility exception in the gate (`file.line`'s
+  action-selector `mode` is the model).
+- **Member-specific context goes in the member's Description/Notes** — the
+  component's usage line is the canonical contract.
+
+## Step 4 — Write the documentation: `Doc` + `regdef.MustSpec`
 
 Compile the schema and its documentation together at package init:
 
 ```go
-var hostPresentSpec = mustSpec("host.present", modschema.KindState, HostPresent{}, modschema.Doc{
+var hostPresentSpec = regdef.MustSpec("host.present", modschema.KindState, HostPresent{}, modschema.Doc{
     Summary:     "Ensure a hostname maps to an IP address in the hosts file.",
     Description: "`host.present` ensures a hostname (`name`, defaulting to the state ID) is mapped to `ip` ...",
     Effects: modschema.Effects{
@@ -146,11 +213,11 @@ What the fields feed:
 - **Divergences** — every deliberate behavioral difference gets a stable BD id,
   a CHANGELOG entry, and its own contract fixture **per parameter** (see Step 6).
 
-`mustSpec` panics at package load on any compile error (duplicate key, two
+`regdef.MustSpec` panics at package load on any compile error (duplicate key, two
 primaries, alias collision, invalid default literal, unregistered field type) —
 an invalid schema is a programming error, never a runtime condition.
 
-## Step 4 — Implement the builder and lifecycle
+## Step 5 — Implement the builder and lifecycle
 
 The builder decodes through the spec and wires providers:
 
@@ -191,12 +258,16 @@ module contract:
   `mctx.Package`, `mctx.Command`, …) so the `exectest` fakes work in tests.
 - Wrap errors `fmt.Errorf("host.present: read %s: %w", path, err)`.
 
-## Step 5 — Register it
+## Step 6 — Register it
 
-Add one row to the `registrations` table in `pkg/state/modules/register.go`:
+Add one row to your family's `Rows` table (`pkg/state/modules/<family>/register.go`) — the aggregator (`pkg/state/modules/register.go`) concatenates every family's rows in canonical order:
 
 ```go
-{Name: "host.present", Spec: hostPresentSpec, Build: NewHostPresentBuilder},
+// pkg/state/modules/host/register.go
+var Rows = []regdef.Registration{
+    {Name: "host.present", Spec: hostPresentSpec, Build: NewHostPresentBuilder},
+    {Name: "host.absent", Spec: hostAbsentSpec, Build: NewHostAbsentBuilder},
+}
 ```
 
 Exactly one builder shape per row: `Build` (needs providers), `BuildPlain` (no
@@ -207,7 +278,7 @@ without a schema — there is no allowlist to hide behind. The same test also
 pins the table's exact size, so bump its module-count constant deliberately in
 the same commit — a new module changing the count is the point of the pin.
 
-## Step 6 — Tests
+## Step 7 — Tests
 
 Unit tests (see any `*_test.go` sibling for the pattern, using the
 `pkg/exec/exectest` fakes): name/ID defaulting, the primary default, requisite
@@ -216,7 +287,7 @@ standalone no-op), provider-missing, and a convergence test (Apply → Check
 reports no change).
 
 Every module also ships a **permanent contract fixture** —
-`pkg/state/modules/testdata/contract/<module>.yaml` — replayed by a small
+`pkg/state/modules/<family>/testdata/contract/<module>.yaml` — replayed by a small
 wiring test:
 
 ```go
@@ -266,7 +337,7 @@ that other parameter" is not accepted as a pin.
 Finally: **new features need integration coverage** — add an end-to-end case in
 `integration/` (Docker suite) exercising the module through the real CLI.
 
-## Step 7 — Regenerate the documentation
+## Step 8 — Regenerate the documentation
 
 ```bash
 go run ./cmd/zester-docgen
@@ -301,15 +372,20 @@ accepted key sets compatible (that is why the state `cmd.run` also accepts
 
 - [ ] Proto struct: tagged exported params (`usage:` on every one), untagged
       runtime fields; semantic types from `paramtypes` for anything polymorphic.
-- [ ] `mustSpec` with a drift-corrected `Doc` (Summary / Description /
+- [ ] `regdef.MustSpec` with a drift-corrected `Doc` (Summary / Description /
       Effects-by-kind / Examples / Notes / Divergences / SeeAlso); `sensitive`
       on secret-bearing params.
 - [ ] Builder: provider guard → `spec.Decode` → runtime fields →
       `ParseRequisites` → tail cross-field validation.
 - [ ] Lifecycle: Check-compares-equals-Apply-produces; standalone Revert is a
       clean no-op; no reserved-key parsing; wrapped errors.
-- [ ] Row in `register.go`'s table with the `Spec` set; bump the coverage
-      gate's module-count pin.
+- [ ] Row in your family's `Rows` table with the `Spec` set; bump the
+      aggregator's coverage-gate module-count pin.
+- [ ] Family-shared parameters embedded from the family's components (never
+      redeclared privately); member-supplied dimensions passed via
+      `WithDefault`/`WithRequired`; new components ship a behavior suite.
+- [ ] Parameter names pass the two-tier vocabulary gate (one contract per
+      family; cross-family shape agreement; justified pinned exceptions only).
 - [ ] Unit tests incl. convergence; permanent contract fixture +
       `RunContract`; per-param BD fixtures + CHANGELOG for any divergence.
 - [ ] Integration test in `integration/`.

@@ -502,7 +502,7 @@
       }
     ],
     "HasSpec": true,
-    "AlsoExecmod": false
+    "AlsoExecmod": true
   },
   {
     "Module": "cron.absent",
@@ -602,7 +602,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "command line whose crontab entry is removed (required)",
+        "Usage": "command line of the managed crontab entry; required",
         "Required": true,
         "Primary": false,
         "Lazy": false,
@@ -738,7 +738,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "command line to run on the schedule (required)",
+        "Usage": "command line of the managed crontab entry; required",
         "Required": true,
         "Primary": false,
         "Lazy": false,
@@ -1157,10 +1157,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path to the file or directory to remove (defaults to the state ID)",
+        "Usage": "absolute path to the file or directory to remove (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -1242,10 +1244,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path to the target file (defaults to the state ID)",
+        "Usage": "absolute path to the target file (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -1393,10 +1397,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path to the target file; defaults to the state ID",
+        "Usage": "absolute path to the target file; defaults to the state ID; the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -1708,7 +1714,7 @@
       "Summary": "Copy a source file that already exists on the peel to a destination path.",
       "Description": "`file.copy` copies `source` (a path local to the peel) to the destination. The destination path defaults to the state ID; `path` is accepted as an alias. Without `force`, an existing destination is left untouched (the copy is a one-time seed); with `force`, the destination is kept in sync with the source by content hash.",
       "Effects": {
-        "Check": "Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.",
+        "Check": "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.",
         "Apply": "Reads the source file. If the destination exists and `force` is not set, Apply is a no-op. With `force` on an existing destination, the current content is captured for revert (a non-not-exist read error fails the apply rather than overwriting content it could not capture) before it is overwritten. Creates missing parent directories when `makedirs` is set, then writes the destination with mode 0644, or the source's permission mode (via an explicit chmod) when `preserve` is set. Reports the byte count in its details.",
         "Revert": "Restores what this run's Apply changed: a destination that pre-existed (and was overwritten under `force`) is rewritten with its captured prior content; a destination this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.",
         "Execution": ""
@@ -1748,7 +1754,8 @@
       "Divergences": [
         "BD-2",
         "BD-6",
-        "BD-7"
+        "BD-7",
+        "BD-9"
       ],
       "SeeAlso": [
         "file.managed",
@@ -1789,7 +1796,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "local path (on the peel) to copy from",
+        "Usage": "source path content is taken from; whether it is required is member-specific",
         "Required": true,
         "Primary": false,
         "Lazy": false,
@@ -1877,13 +1884,13 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Usage": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
         "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
+        "HasDefault": true,
+        "Default": "false",
         "JSONSchema": {
           "anyOf": [
             {
@@ -1913,10 +1920,10 @@
     "Kind": "state",
     "Doc": {
       "Summary": "Ensure a directory exists with the desired permissions and ownership.",
-      "Description": "`file.directory` ensures a directory exists at its path with the desired permission mode and ownership. The path defaults to the state ID. The `mode` parameter sets the directory's permission bits and defaults to `0755`; `dir_mode` is accepted as an alias — a fallback source for the same mode, with `mode` winning when both are given. It honors an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0700` applies 0700. `user`/`group` converge ownership only when declared. The `makedirs` parameter is accepted for Salt compatibility but has no effect — the parent chain is always created.",
+      "Description": "`file.directory` ensures a directory exists at its path with the desired permission mode and ownership. The path defaults to the state ID. The `mode` parameter sets the directory's permission bits and defaults to `0755`; `dir_mode` is a standalone fallback source for the same mode, with `mode` winning when both are given. It honors an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0700` applies 0700. `user`/`group` converge ownership only when declared. `makedirs` follows the file.* family's canonical contract: it governs missing PARENTS of the managed directory (created at 0755 when true); when false — the default — a missing parent fails the apply instead of being silently created, while a dry run reports it as a would-change (a deliberate compatibility fix; see the changelog).",
       "Effects": {
-        "Check": "Compares, in order: path existence (a genuine not-exist means the directory must be created, while any other stat error fails the check rather than reporting phantom drift); that the path is a directory (an existing non-directory needs a change); the permission mode (the managed facets — permission bits plus setuid/setgid/sticky) against the desired mode, defaulting to 0755; and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.",
-        "Apply": "Probes existence for the revert memo — a non-not-exist stat error fails the apply rather than poisoning the memo, since a pre-existing tree must never be recorded as created (a same-instance Revert would RemoveAll it). Creates the directory and any missing parents with MkdirAll (unconditionally — `makedirs` is inert), records the created memo only when the directory did not pre-exist, sets the mode via Chmod, and — when `user`/`group` is declared — converges ownership via Chown. Reports the applied mode.",
+        "Check": "Reports a would-change first — naming the missing parent and the remedy — when a parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create the parent, so dry runs of ordered trees stay valid; the strict failure happens at apply). Then compares, in order: path existence (a genuine not-exist means the directory must be created, while any other stat error fails the check rather than reporting phantom drift); that the path is a directory (an existing non-directory needs a change); the permission mode (the managed facets — permission bits plus setuid/setgid/sticky) against the desired mode, defaulting to 0755; and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.",
+        "Apply": "Ensures parents per the canonical makedirs contract (missing parents are created at 0755 only when `makedirs` is true; otherwise a missing parent fails before anything is created). Probes existence for the revert memo — a non-not-exist stat error fails the apply rather than poisoning the memo, since a pre-existing tree must never be recorded as created (a same-instance Revert would RemoveAll it). Creates the directory itself, records the created memo only when it did not pre-exist, sets the mode via Chmod, and — when `user`/`group` is declared — converges ownership via Chown. Reports the applied mode. Revert removes only the managed directory, never parents makedirs created.",
         "Revert": "Removes a directory this run's Apply created (RemoveAll). A directory that pre-existed (only its mode or ownership changed) is left untouched, and a fresh instance (a standalone revert) recorded nothing and is a no-op — it never removes a directory it did not create.",
         "Execution": ""
       },
@@ -1942,9 +1949,9 @@
       ],
       "Notes": [
         {
-          "Level": "info",
-          "Title": "makedirs has no effect",
-          "Body": "The makedirs parameter is accepted for Salt compatibility but is inert: file.directory always creates the full parent chain via MkdirAll, whether or not makedirs is set."
+          "Level": "warning",
+          "Title": "makedirs now follows the canonical contract (compatibility fix)",
+          "Body": "Before 0.7.0 makedirs was accepted but inert — file.directory always created the full parent chain, silently masking typos in deep paths. It now follows the file.* family contract: a missing parent without `makedirs: true` fails Apply (Check reports a would-change naming the parent, keeping dry runs of ordered trees valid) — BD-9."
         },
         {
           "Level": "",
@@ -1961,7 +1968,8 @@
         "BD-1",
         "BD-2",
         "BD-6",
-        "BD-7"
+        "BD-7",
+        "BD-9"
       ],
       "SeeAlso": [
         "file.managed",
@@ -1972,10 +1980,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path to the target directory (defaults to the state ID)",
+        "Usage": "absolute path to the target directory (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -1998,12 +2008,36 @@
       },
       {
         "Name": "mode",
-        "Aliases": [
-          "dir_mode"
-        ],
+        "Aliases": null,
         "GoType": "paramtypes.FileMode",
         "SemanticType": "FileMode",
-        "Usage": "directory permission mode in octal (\"0755\", \"0700\"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755",
+        "Usage": "permission mode for the target in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits are honored; the default is member-specific",
+        "Required": false,
+        "Primary": false,
+        "Lazy": true,
+        "Sensitive": false,
+        "HasDefault": true,
+        "Default": "0755",
+        "JSONSchema": {
+          "anyOf": [
+            {
+              "pattern": "^0*[0-7]{1,4}$",
+              "type": "string"
+            },
+            {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "dir_mode",
+        "Aliases": null,
+        "GoType": "paramtypes.FileMode",
+        "SemanticType": "FileMode",
+        "Usage": "fallback source for mode (Salt compatibility): applied as the directory's permission mode when mode is not declared; defaults to 0755",
         "Required": false,
         "Primary": false,
         "Lazy": true,
@@ -2029,7 +2063,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "directory owner username; ownership is left unchanged when unset",
+        "Usage": "owner username for the target; ownership is left unchanged when unset",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -2055,7 +2089,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "directory group name; ownership is left unchanged when unset",
+        "Usage": "group name for the target; ownership is left unchanged when unset",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -2081,13 +2115,13 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "accepted for Salt compatibility but has NO effect — parent directories are always created via MkdirAll regardless; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Usage": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
         "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
+        "HasDefault": true,
+        "Default": "false",
         "JSONSchema": {
           "anyOf": [
             {
@@ -2615,7 +2649,7 @@
       "Summary": "Ensure a file exists with the desired content, permissions, and ownership.",
       "Description": "`file.managed` ensures a file exists at its path with the desired content, permission mode, and ownership. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). Supply the content inline with `content` or copy it from a local file with `source` — these are alternatives, and if both are given `source` wins (there is no parse-time mutual-exclusion check). Setting `template` renders the content or source through the Jinja2 engine before writing (opt-in, so files that legitimately contain `{{ }}` are left untouched by default). The `mode` parameter defaults to `0644` and honors an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0755` applies 0755. `user`/`group` converge ownership only when declared.",
       "Effects": {
-        "Check": "Resolves the desired content (reading `source` or using `content`, rendering the template when enabled) and compares, in order: file existence (a genuine not-exist means the file must be created, while any other read error fails the check rather than risking a blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed facets — permission bits plus setuid/setgid/sticky); and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.",
+        "Check": "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Resolves the desired content (reading `source` or using `content`, rendering the template when enabled) and compares, in order: file existence (a genuine not-exist means the file must be created, while any other read error fails the check rather than risking a blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed facets — permission bits plus setuid/setgid/sticky); and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.",
         "Apply": "Probes the prior state for revert (a non-not-exist read error fails the apply rather than overwriting content it could not capture), resolves the desired content and mode, creates missing parent directories with mode 0755 when `makedirs` is set, then writes the content. It records the revert memo on the first write only (first-capture-wins; a file it created stays marked created). Ownership is applied BEFORE the mode — chown clears the setuid/setgid bits, so the mode is chmod'd last — and the mode is enforced on pre-existing files too (os.WriteFile only applies perms at creation), so a mode-only drift converges. Reports the byte count and the applied mode.",
         "Revert": "Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content AND prior mode (never the mode Apply set); a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never destroys a file it did not touch.",
         "Execution": ""
@@ -2689,7 +2723,8 @@
         "BD-1",
         "BD-2",
         "BD-6",
-        "BD-7"
+        "BD-7",
+        "BD-9"
       ],
       "SeeAlso": [
         "file.directory",
@@ -2757,7 +2792,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "local file path to copy content from; provide either content or source (source wins if both are set)",
+        "Usage": "source path content is taken from; whether it is required is member-specific",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -2839,7 +2874,7 @@
         "Aliases": null,
         "GoType": "paramtypes.FileMode",
         "SemanticType": "FileMode",
-        "Usage": "file permission mode in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits honored; defaults to 0644",
+        "Usage": "permission mode for the target in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits are honored; the default is member-specific",
         "Required": false,
         "Primary": false,
         "Lazy": true,
@@ -2865,7 +2900,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "file owner username; ownership is left unchanged when unset",
+        "Usage": "owner username for the target; ownership is left unchanged when unset",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -2891,7 +2926,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "file group name; ownership is left unchanged when unset",
+        "Usage": "group name for the target; ownership is left unchanged when unset",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -2917,13 +2952,13 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "create missing parent directories (with mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Usage": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
         "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
+        "HasDefault": true,
+        "Default": "false",
         "JSONSchema": {
           "anyOf": [
             {
@@ -2988,7 +3023,7 @@
       "Summary": "Recursively copy a source directory tree to a destination directory.",
       "Description": "`file.recurse` mirrors a `source` directory tree onto the destination, creating directories and copying files by SHA-256 content. The destination path defaults to the state ID. `file_mode` (default `0644`) is enforced on every copied file. `dir_mode` (default `0755`) is DECLARED-ONLY: when it is omitted, existing directory modes are left alone (it is used only as the creation mode for directories the copy makes); when it is set, managed directory modes are compared and enforced. `user`/`group` set ownership on copied files only. `clean` removes destination files absent from the source, and `makedirs` creates the destination's parent chain. Both mode parameters honor an octal string or an octal integer of any kind.",
       "Effects": {
-        "Check": "Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.",
+        "Check": "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.",
         "Apply": "Requires a source. When `makedirs` is set, creates the destination's parent chain. Walks the source: creates each directory with MkdirAll (chmod'ing it to `dir_mode` ONLY when dir_mode is declared — an undeclared dir_mode never rewrites a pre-existing directory's mode), and writes each file with `file_mode`, recording newly created files for revert (a non-not-exist stat error fails the apply rather than mis-memoizing a pre-existing file), chmod'ing it to `file_mode`, and chowning it when ownership is declared. With `clean`, removes destination regular files not present in the source (directories are never removed). Reports the copied and cleaned counts.",
         "Revert": "Removes only the files this run's Apply created (best-effort; files that already existed before Apply are left untouched). A fresh instance (a standalone revert, e.g. after a peel restart) recorded nothing and is a clean no-op — it never removes a file it did not create.",
         "Execution": ""
@@ -3039,7 +3074,8 @@
         "BD-1",
         "BD-2",
         "BD-6",
-        "BD-7"
+        "BD-7",
+        "BD-9"
       ],
       "SeeAlso": [
         "file.managed",
@@ -3050,10 +3086,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "destination directory path (defaults to the state ID)",
+        "Usage": "destination directory path (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -3079,7 +3117,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "source directory path to copy from (required at run time)",
+        "Usage": "source path content is taken from; whether it is required is member-specific",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -3157,7 +3195,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "owner username for copied files; ownership is left unchanged when unset",
+        "Usage": "owner username for the target; ownership is left unchanged when unset",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -3183,7 +3221,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "group name for copied files; ownership is left unchanged when unset",
+        "Usage": "group name for the target; ownership is left unchanged when unset",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -3240,13 +3278,13 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "create the destination's parent directory chain if it does not exist; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Usage": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
         "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
+        "HasDefault": true,
+        "Default": "false",
         "JSONSchema": {
           "anyOf": [
             {
@@ -3561,7 +3599,7 @@
       "Summary": "Ensure a symbolic link exists at a path, pointing to a target.",
       "Description": "`file.symlink` ensures a symbolic link exists at the path (defaulting to the state ID) pointing to `target`. Without `force`, a pre-existing file or wrong-target symlink at the path is an error rather than being replaced.",
       "Effects": {
-        "Check": "Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.",
+        "Check": "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.",
         "Apply": "Creates missing parent directories first when `makedirs` is set. If a symlink already points to `target`, Apply is a no-op. If something else exists at the path (a wrong-target symlink, or a non-symlink file/directory), it is only removed when `force` is set — otherwise Apply fails with an error naming what is in the way. Reports the created link and its target in its details.",
         "Revert": "Removes the symlink unconditionally. It does not restore any file that `force` replaced, and a fresh instance's Revert still removes the symlink at the path (Revert is not gated on this instance having run Apply).",
         "Execution": ""
@@ -3606,7 +3644,8 @@
       "Divergences": [
         "BD-2",
         "BD-6",
-        "BD-7"
+        "BD-7",
+        "BD-9"
       ],
       "SeeAlso": [
         "file.managed",
@@ -3616,10 +3655,12 @@
     "Params": [
       {
         "Name": "name",
-        "Aliases": null,
+        "Aliases": [
+          "path"
+        ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "absolute path for the symbolic link (defaults to the state ID)",
+        "Usage": "absolute path for the symbolic link (defaults to the state ID); the path alias is accepted",
         "Required": false,
         "Primary": true,
         "Lazy": false,
@@ -3702,13 +3743,13 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Usage": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
         "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
+        "HasDefault": true,
+        "Default": "false",
         "JSONSchema": {
           "anyOf": [
             {
@@ -3740,7 +3781,7 @@
       "Summary": "Create an empty file when missing, or update its modification time.",
       "Description": "`file.touch` ensures a file exists, creating it empty when missing. The path defaults to the state ID; `path` is accepted as an alias for Salt compatibility. If the file already exists, Check reports no change is needed regardless of its timestamp — the modification-time update only runs when the state is force-applied (for example by a `watch` requisite).",
       "Effects": {
-        "Check": "Stats the path. An existing file (any content) needs no change; a missing path needs a change.",
+        "Check": "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Stats the path. An existing file (any content) needs no change; a missing path needs a change.",
         "Apply": "Creates missing parent directories first when `makedirs` is set. If the file is missing, creates it empty with the default file mode. If the file already exists (only reached on a force-apply), runs the system `touch` command to update its modification time — a no-op (`Changed: false`) when no command provider is available.",
         "Revert": "A file this run's Apply created is removed. A file that already existed (Apply only updated its mtime) is left alone — the previous timestamp is not restored, so Revert is a clean no-op.",
         "Execution": ""
@@ -3780,7 +3821,8 @@
       "Divergences": [
         "BD-2",
         "BD-6",
-        "BD-7"
+        "BD-7",
+        "BD-9"
       ],
       "SeeAlso": [
         "file.managed",
@@ -3821,13 +3863,13 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "create missing parent directories (mode 0755) before touching; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Usage": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
         "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
+        "HasDefault": true,
+        "Default": "false",
         "JSONSchema": {
           "anyOf": [
             {
@@ -5860,13 +5902,13 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "refresh the package cache before installing",
+        "Usage": "refresh the package database before installing (in Apply; a refresh failure fails the state); defaults to false; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
         "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
+        "HasDefault": true,
+        "Default": "false",
         "JSONSchema": {
           "anyOf": [
             {
@@ -5993,7 +6035,7 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "refresh the package cache before Check and before Apply",
+        "Usage": "refresh the package database at the start of both Check and Apply (a failure warns and proceeds on possibly-stale indexes); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -7548,6 +7590,32 @@
         }
       },
       {
+        "Name": "config",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "explicit authorized_keys path; user or config is required (config takes precedence over the user's home)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      {
         "Name": "enc",
         "Aliases": null,
         "GoType": "string",
@@ -7579,32 +7647,6 @@
         "GoType": "string",
         "SemanticType": "",
         "Usage": "optional trailing comment on the key line",
-        "Required": false,
-        "Primary": false,
-        "Lazy": false,
-        "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
-        "JSONSchema": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            }
-          ]
-        }
-      },
-      {
-        "Name": "config",
-        "Aliases": null,
-        "GoType": "string",
-        "SemanticType": "",
-        "Usage": "explicit authorized_keys path; user or config is required (config takes precedence over the user's home)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -7697,12 +7739,12 @@
     "Kind": "exec",
     "Doc": {
       "Summary": "Render a module's documentation, or the unified index.",
-      "Description": "`sys.doc <module>` renders the named module's documentation — the SAME self-documenting metadata `zester doc` and the generated reference pages are built from — as plain text. With no module named, it returns the unified index of every callable surface (identical to `sys.list_functions`). It answers even during a long-running state run (it is a read-only surface).",
+      "Description": "`sys.doc <module>` renders the named module's documentation — the SAME self-documenting metadata `zester doc` and the generated reference pages are built from — as plain text. A bare FAMILY name renders every documented member (`sys.doc ssh_auth` shows ssh_auth.present AND ssh_auth.absent; Salt parity). With no module named, it returns the unified index of every callable surface (identical to `sys.list_functions`). It answers even during a long-running state run (it is a read-only surface).",
       "Effects": {
         "Check": "",
         "Apply": "",
         "Revert": "",
-        "Execution": "Looks the module up following the peel's dispatch precedence (dispatch specials, then state modules, then execution functions) and renders its ModuleInfo through the shared text renderer. With no module named, returns the unified index. Errors when the named module has no documentation."
+        "Execution": "Looks the module up following the peel's dispatch precedence (dispatch specials, then state modules, then execution functions) and renders its ModuleInfo through the shared text renderer; a name matching no module but prefixing a family renders every `<family>.*` member as one document. With no module named, returns the unified index. Errors when the name is neither a module nor a family."
       },
       "Examples": [
         {
@@ -7710,6 +7752,12 @@
           "Kind": "cli",
           "Explanation": "The bare positional argument is the module name to document.",
           "Code": "zester 'web-01' sys.doc pkg.installed"
+        },
+        {
+          "Title": "Document a whole family",
+          "Kind": "cli",
+          "Explanation": "A bare family name renders every documented member.",
+          "Code": "zester 'web-01' sys.doc ssh_auth"
         },
         {
           "Title": "Show the unified index",
@@ -7732,7 +7780,7 @@
         ],
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "module name to document; when omitted, the unified index of every callable surface is returned",
+        "Usage": "module name — or bare family name, rendering every member — to document; when omitted, the unified index of every callable surface is returned",
         "Required": false,
         "Primary": true,
         "Lazy": false,

@@ -5,7 +5,7 @@ description: "Ensure a crontab entry exists for a user with the given schedule a
 
 {/* zester-docgen:managed module="cron.present" */}
 
-**Source**: `pkg/state/modules/cron_present.go`
+**Source**: `pkg/state/modules/cron/cron_present.go`
 
 ---
 
@@ -19,7 +19,7 @@ description: "Ensure a crontab entry exists for a user with the given schedule a
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | identifier comment stamped on the crontab line (its Salt-identifier identity); defaults to the state ID |
 | `user` | `string` | No | `root` | user whose crontab is managed; defaults to root |
-| `command` | `string` | Yes | *(none)* | command line to run on the schedule (required) |
+| `command` | `string` | Yes | *(none)* | command line of the managed crontab entry; required |
 | `minute` | `string` | No | `*` | minute field (0-59 or *); defaults to * |
 | `hour` | `string` | No | `*` | hour field (0-23 or *); defaults to * |
 | `daymonth` | `string` | No | `*` | day-of-month field (1-31 or *); defaults to * |

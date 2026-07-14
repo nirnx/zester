@@ -1,0 +1,440 @@
+module: file.directory
+# Permanent differential contract for the file.directory migration (the
+# declared-facet exemplar). These cases were approved by the legacy-vs-new
+# equivalence comparison while the legacy parse still existed; after its deletion
+# RunContract replays them as the permanent regression guard. Accept cases pin the
+# decoded projection — Path (primary string), User/Group (strings), MakeDirs
+# (bool), Mode (paramtypes.FileMode); reject cases pin the error kind. A FileMode
+# `want` is an octal string/int (compared on the managed facets) or
+# `{declared: false}` (the lazy, unset default the module resolves to 0755 at use
+# time). BD-tagged cases pin the flagged behavioral differences: BD-1 (a
+# msgpack-delivered sized-int mode is applied, where the legacy modeConfigToString
+# switch dropped it to the 0755 default — the same reproduced reactor bug as
+# file.managed), BD-2 (a CLI makedirs string is honored), BD-6 (a wrong-typed value
+# is coerced or rejected, not silently ignored — including a float/composite/
+# invalid-octal mode now rejected at decode where legacy handled it at apply, and a
+# numeric name coerced where legacy fell back to the state ID), and BD-7 (a
+# boolean-typed makedirs accepts the integers 1/0 and rejects any other integer
+# with a typed error). The dir_mode alias cases are PARITY (§2.1 source
+# fall-through): dir_mode is a fallback source for the same mode, mode wins when
+# both are set, and an empty-string mode falls THROUGH to dir_mode — never the ID.
+cases:
+  # --- parity: explicit string name across all three universes ---
+  - label: string-name-yaml
+    universe: yaml
+    id: st
+    input:
+      name: /opt/data
+    want:
+      Path: /opt/data
+      Mode: {declared: false}
+  - label: string-name-msgpack
+    universe: msgpack
+    id: st
+    input:
+      name: /opt/data
+    want:
+      Path: /opt/data
+  - label: string-name-cli
+    universe: cli
+    id: st
+    input:
+      name: /opt/data
+    want:
+      Path: /opt/data
+
+  # --- parity: no name key -> primary falls back to the state ID ---
+  - label: primary-fallback-yaml
+    universe: yaml
+    id: /var/log/app
+    input: {}
+    want:
+      Path: /var/log/app
+  - label: primary-fallback-cli
+    universe: cli
+    id: /var/log/app
+    input: {}
+    want:
+      Path: /var/log/app
+
+  # --- parity: an EMPTY-STRING name falls back to the state ID (§2.1) ---
+  - label: empty-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /opt/data
+    input:
+      name: ""
+    want:
+      Path: /opt/data
+
+  # --- parity: a NIL name (YAML null / trailing-colon) is absent, falls back to
+  # the state ID (§2.1). Nil has no faithful CLI spelling. ---
+  - label: nil-name-falls-back-to-id-yaml
+    universe: yaml
+    id: /opt/data
+    input:
+      name:
+    want:
+      Path: /opt/data
+  - label: nil-name-falls-back-to-id-msgpack
+    universe: msgpack
+    id: /opt/data
+    input:
+      name:
+    want:
+      Path: /opt/data
+
+  # --- parity: an octal-STRING mode decodes to that mode (all universes; a string
+  # survives every ingress unchanged) ---
+  - label: mode-string-yaml
+    universe: yaml
+    id: st
+    input:
+      mode: "0755"
+    want:
+      Mode: "0755"
+  - label: mode-string-msgpack
+    universe: msgpack
+    id: st
+    input:
+      mode: "0755"
+    want:
+      Mode: "0755"
+  - label: mode-string-cli
+    universe: cli
+    id: st
+    input:
+      mode: "0755"
+    want:
+      Mode: "0755"
+
+  # --- parity: an octal-INT mode in YAML (native int) decodes to that mode, as it
+  # did under the legacy int branch ---
+  - label: mode-octal-int-yaml
+    universe: yaml
+    id: st
+    input:
+      mode: 0700
+    want:
+      Mode: "0700"
+
+  # --- parity: an omitted mode (and no dir_mode) leaves the lazy, undeclared
+  # FileMode (the module applies the documented 0755 default at use time) ---
+  - label: mode-undeclared-yaml
+    universe: yaml
+    id: st
+    input: {}
+    want:
+      Mode: {declared: false}
+
+  # --- A1 (§13): dir_mode is a STANDALONE member field (DirMode) since the
+  # family-component migration; the mode fallback happens in the BUILDER tail
+  # (mode wins; dir_mode fills in when mode is undeclared — behavior identical
+  # to the pre-A1 alias, pinned by TestFileDirectoryDirModeFallback), so the
+  # DECODE projection now lands on DirMode with Mode left undeclared. ---
+  - label: dir-mode-alias-yaml
+    universe: yaml
+    id: st
+    input:
+      dir_mode: "0700"
+    want:
+      Mode: {declared: false}
+      DirMode: "0700"
+  - label: dir-mode-alias-cli
+    universe: cli
+    id: st
+    input:
+      dir_mode: "0700"
+    want:
+      Mode: {declared: false}
+      DirMode: "0700"
+
+  # --- PARITY: mode WINS over dir_mode when both are set (name source precedes the
+  # alias) ---
+  - label: mode-wins-over-dir_mode-yaml
+    universe: yaml
+    id: st
+    input:
+      mode: "0700"
+      dir_mode: "0755"
+    want:
+      Mode: "0700"
+      DirMode: "0755"
+
+  # --- A1 (§13): an EMPTY-STRING mode is the undeclared sentinel; dir_mode
+  # decodes into its own field and the builder tail applies it as the mode
+  # (behavior unchanged from the pre-A1 alias fall-through) ---
+  - label: empty-mode-dir_mode-wins-yaml
+    universe: yaml
+    id: st
+    input:
+      mode: ""
+      dir_mode: "0700"
+    want:
+      Mode: {declared: false}
+      DirMode: "0700"
+  - label: empty-mode-dir_mode-wins-msgpack
+    universe: msgpack
+    id: st
+    input:
+      mode: ""
+      dir_mode: "0700"
+    want:
+      Mode: {declared: false}
+      DirMode: "0700"
+
+  # --- parity: a setgid octal STRING mode decodes with the special bit (setgid on a
+  # directory is the group-inheritance bit) ---
+  - label: mode-setgid-string-yaml
+    universe: yaml
+    id: st
+    input:
+      mode: "2755"
+    want:
+      Mode: "2755"
+
+  # --- parity: a full realistic config (mode + ownership + makedirs) ---
+  - label: full-config-yaml
+    universe: yaml
+    id: st
+    input:
+      name: /opt/data
+      mode: "0750"
+      user: root
+      group: root
+      makedirs: true
+    want:
+      Path: /opt/data
+      Mode: "0750"
+      User: root
+      Group: root
+      MakeDirs: true
+
+  # --- parity: makedirs as a native bool ---
+  - label: makedirs-true-yaml
+    universe: yaml
+    id: st
+    input:
+      makedirs: true
+    want:
+      MakeDirs: true
+
+  # --- BD-1 CENTERPIECE: a `mode: 0700` delivered over msgpack (a sized uint16) is
+  # now applied as 0700. The legacy modeConfigToString switch handled only
+  # int/int64/float64, so the msgpack-sized-int fell through to "", then to the
+  # empty dir_mode, and the module applied the 0755 default — the reproduced reactor
+  # bug. The YAML leg (native int) already matched legacy and is pinned as parity
+  # above (mode-octal-int-yaml). ---
+  - label: mode-0700-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-1
+    input:
+      mode: 0700
+    want:
+      Mode: "0700"
+
+  # --- BD-1: the special (setgid) bits survive a msgpack sized-int mode too
+  # (0o2755 = 1517 -> uint16); legacy dropped it to 0755 ---
+  - label: mode-setgid-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-1
+    input:
+      mode: 02755
+    want:
+      Mode: "2755"
+
+  # --- BD-1: dir_mode honors a msgpack sized-int too (legacy dropped it to the
+  # 0755 default); decodes into the standalone DirMode since A1 (§13) ---
+  - label: dir-mode-alias-0700-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-1
+    input:
+      dir_mode: 0700
+    want:
+      Mode: {declared: false}
+      DirMode: "0700"
+
+  # --- BD-2: a CLI makedirs=true (the string "true") now applies, where the legacy
+  # .(bool) assertion dropped the string ---
+  - label: makedirs-cli-truthy-string
+    universe: cli
+    id: st
+    bd: BD-2
+    input:
+      makedirs: true
+    want:
+      MakeDirs: true
+
+  # --- BD-6: a numeric name is coerced to its string form (was fallback-to-id) ---
+  - label: numeric-name-coerced-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Path: "123"
+  - label: numeric-name-coerced-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name: 123
+    want:
+      Path: "123"
+  # CLI already delivers "123" as a string, so this agrees with legacy.
+  - label: numeric-name-cli
+    universe: cli
+    id: web
+    input:
+      name: 123
+    want:
+      Path: "123"
+
+  # --- BD-6: a composite name is rejected with a typed error (was fallback-to-id) ---
+  - label: composite-name-rejected-yaml
+    universe: yaml
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+  - label: composite-name-rejected-msgpack
+    universe: msgpack
+    id: web
+    bd: BD-6
+    input:
+      name:
+        - a
+        - b
+    want_error: wrong_type
+
+  # --- BD-6: a composite mode is rejected with a typed value error (legacy's
+  # modeConfigToString returned "" and the module silently applied 0755) ---
+  - label: composite-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      mode:
+        - a
+    want_error: value_invalid
+
+  # --- BD-6: a FLOAT mode is rejected at decode with a typed value error. The
+  # legacy modeConfigToString had a `case float64: return "%04o"` arm, so a YAML
+  # `mode: 493.0` was silently %04o-converted (0755) and applied at apply time;
+  # FileMode takes only octal strings/ints, so mode VALIDATION now moves to decode
+  # time. Pinned across yaml (native float) and msgpack (round-tripped float64). ---
+  - label: float-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      mode: 493.0
+    want_error: value_invalid
+  - label: float-mode-rejected-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-6
+    input:
+      mode: 493.0
+    want_error: value_invalid
+
+  # --- BD-6: an INVALID-OCTAL string mode ("banana") is rejected at DECODE with a
+  # typed value error, where the legacy path carried the raw string through and only
+  # failed later at apply. A string survives every ingress unchanged, so it is
+  # pinned on yaml and the CLI. ---
+  - label: invalid-octal-string-mode-rejected-yaml
+    universe: yaml
+    id: st
+    bd: BD-6
+    input:
+      mode: "banana"
+    want_error: value_invalid
+  - label: invalid-octal-string-mode-rejected-cli
+    universe: cli
+    id: st
+    bd: BD-6
+    input:
+      mode: "banana"
+    want_error: value_invalid
+
+  # --- BD-7: a boolean-typed parameter accepts the INTEGERS 1 and 0 (1 -> true,
+  # 0 -> false) and rejects any other integer with a typed error. The legacy
+  # `makedirs, _ = config["makedirs"].(bool)` assertion dropped an int entirely
+  # (silent false). Pinned across yaml (native int) and msgpack (sized int). ---
+  - label: makedirs-int-one-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-one-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      makedirs: 1
+    want:
+      MakeDirs: true
+  - label: makedirs-int-zero-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-zero-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      makedirs: 0
+    want:
+      MakeDirs: false
+  - label: makedirs-int-invalid-yaml
+    universe: yaml
+    id: st
+    bd: BD-7
+    input:
+      makedirs: 2
+    want_error: value_invalid
+  - label: makedirs-int-invalid-msgpack
+    universe: msgpack
+    id: st
+    bd: BD-7
+    input:
+      makedirs: 2
+    want_error: value_invalid
+
+  # --- Vocabulary unification (PR-19 review): the `path` alias for the primary
+  # is now accepted by EVERY file.* module, not just the 7 that had it —
+  # `- path: <p>` behaves identically across the family. ---
+  - label: path-alias-yaml
+    universe: yaml
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Path: /srv/aliased
+  - label: path-alias-cli
+    universe: cli
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Path: /srv/aliased
+  - label: path-alias-msgpack
+    universe: msgpack
+    id: state-label
+    input:
+      path: /srv/aliased
+    want:
+      Path: /srv/aliased

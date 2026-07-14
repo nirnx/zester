@@ -16,6 +16,7 @@ type FakeFileExec struct {
 	mu       sync.Mutex
 	files    map[string]*fakeFile
 	symlinks map[string]string
+	statErrs map[string]error
 	readErrs map[string]error
 
 	// RemoveAllErr, if set, is returned by RemoveAll.
@@ -69,11 +70,42 @@ func (f *FakeFileExec) WriteFile(_ context.Context, path string, data []byte, pe
 	return nil
 }
 
+// SetStatErr injects an error returned by Stat for exactly this path —
+// fault-injection for permission/I-O paths (e.g. the makedirs contract's
+// non-ENOENT arm).
+func (f *FakeFileExec) SetStatErr(path string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.statErrs == nil {
+		f.statErrs = map[string]error{}
+	}
+	f.statErrs[path] = err
+}
+
 func (f *FakeFileExec) Stat(_ context.Context, path string) (fs.FileInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.statErrs[path]; ok {
+		return nil, err
+	}
 	ff, ok := f.files[path]
 	if !ok {
+		// IMPLICIT directories: an entry cannot exist without its ancestor
+		// directories, so any strict prefix-dir of an existing entry stats as
+		// a directory (mirrors a real filesystem; keeps parent-existence
+		// checks like the file.* makedirs contract working against fixtures
+		// that pre-create only the file).
+		prefix := strings.TrimSuffix(path, "/") + "/"
+		for k := range f.files {
+			if strings.HasPrefix(k, prefix) {
+				return &fakeFileInfo{name: path, mode: 0o755 | fs.ModeDir}, nil
+			}
+		}
+		for k := range f.symlinks {
+			if strings.HasPrefix(k, prefix) {
+				return &fakeFileInfo{name: path, mode: 0o755 | fs.ModeDir}, nil
+			}
+		}
 		return nil, fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
 	return &fakeFileInfo{name: path, size: int64(len(ff.data)), mode: ff.mode}, nil
@@ -129,7 +161,11 @@ func (f *FakeFileExec) Chmod(_ context.Context, path string, mode fs.FileMode) e
 	if !ok {
 		return fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
-	ff.mode = mode
+	// Real chmod never changes file-TYPE bits (a directory stays a
+	// directory); only permission + setuid/setgid/sticky change. The fake
+	// previously overwrote the whole mode, silently un-directorying dir
+	// entries (caught by the ordered-tree makedirs pin).
+	ff.mode = (ff.mode & fs.ModeType) | (mode &^ fs.ModeType)
 	return nil
 }
 

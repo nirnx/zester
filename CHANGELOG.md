@@ -4,6 +4,159 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Added
+- **Family parameter components (Amendment A1, spec §13).** The `file.*`
+  family's canonical parameters are now declared ONCE in embeddable family
+  components — `makedirs`, `mode`, `user`/`group` ownership, and `source` —
+  and members embed them; the schema declaration, canonical usage text, and
+  runtime behavior contract are all shared, per the approved family-scoped
+  contract model. The framework gains member-supplied dimensions
+  (`memberdefault`/`memberrequired` tag options + `modschema.WithDefault`/
+  `WithRequired`): the mode component fixes name/type/semantics while
+  `file.managed` supplies 0644 and `file.directory` 0755; the source
+  component fixes everything but requiredness (`file.copy` requires it).
+  Every field is stamped with its declaring type, and the vocabulary gate
+  gains a COMPONENT RATCHET: once a family component exists for a key, a
+  private redeclaration in any member — even byte-identical — fails CI.
+- **Paired-family components (A1 step 7).** `ssh_auth.*` (the user/config
+  target pair), `host.*` (the config/path hosts-file selector), `cron.*`
+  (the user/command entry identity), and `pkg.*` (`refresh`, with
+  member-supplied defaults: `pkg.installed` false, `pkg.latest` true —
+  behavior unchanged) now declare their canonical parameters once in family
+  components. `git.*`'s shared keys (branch/rev/force) stay member-declared:
+  their per-operation semantics genuinely differ, and the gate keeps their
+  contract signatures aligned. The pkg refresh vocabulary-ratchet entry is
+  retired — the in-family exception table is down to the single
+  maintainer-blessed permanent (`file.line`'s action-selector `mode`).
+- **Canonical `file.*` `makedirs` runtime contract, enforced by a shared
+  behavior suite.** All six members (`managed`, `copy`, `directory`,
+  `recurse`, `symlink`, `touch`) now implement ONE contract: `makedirs`
+  governs missing PARENTS of the target only (created at 0755 when true);
+  when false, a missing parent fails BOTH Check and Apply with an error
+  naming the parent and the `makedirs: true` remedy — no partial creation,
+  and Revert never removes created parents. A four-case behavior suite
+  (false/true × parents present/missing) runs against every embedding member.
+
+- **`path` alias unified across the whole file family.** All 13 `file.*`
+  modules now accept `path` as an alias of their primary — previously 7 did
+  and 6 (absent, append, blockreplace, directory, recurse, symlink) rejected
+  it under strict params (or, on blockreplace, deliberately ignored it), so
+  `- path: /srv/www` worked on `file.managed` but failed on `file.directory`.
+  Pinned by three-universe contract fixtures per module; blockreplace's old
+  "path is not an alias" pin is retired by this change.
+
+- **Family form for the doc surfaces (Salt parity).** `zester '<target>'
+  sys.doc ssh_auth` and the offline `zester doc ssh_auth` now render every
+  documented `ssh_auth.*` module as one document (sorted, shared
+  `RenderTextAll` shape on both surfaces) instead of erroring
+  `no documentation for "ssh_auth"`. Works for any family — `file`, `pkg`,
+  `facts` (dispatch specials included); `--json` returns an array for a
+  family. Family names also join `zester doc`'s did-you-mean suggestions and
+  shell completion.
+- **Parameter vocabulary gate.** A conformance test
+  (`TestParameterVocabularyConsistency`) now compares every parameter key —
+  canonical names and aliases — across ALL state and exec modules and fails
+  when the same key carries different schemas ("`mode` must always behave the
+  same"). The fleet passes with exactly three documented Salt-parity
+  exceptions (`mode` in file.line = action selector; `gid` in group.present =
+  numeric-only create id; `text` in test.echo = scalar echo string), each
+  justified in the exception table, which also refuses stale entries. The
+  developing guide documents the rule. REWORKED to the family-scoped
+  two-tier form per the approved Amendment A1 (spec §13): the contract
+  boundary is (module kind, family, parameter name) — within one family the
+  full contract is compared (shape, aliases, primary, requiredness,
+  default), across families only the value shape (the same spelling may
+  legitimately mean different things in unrelated families). Alias keys are
+  first-class: the gate caught `dir_mode` meaning an alias-of-mode on
+  file.directory but a standalone parameter on file.recurse. In-family
+  divergences are pinned as migration-ratchet entries the family-component
+  tranches delete. Exceptions are participant-pinned:
+  the exception covers only the known divergence, so a NEW module reusing an
+  excepted key (e.g. a third `mode` shape) still fails until the pin is
+  deliberately updated. Dual-surface modules (`cmd.run`) now carry their
+  "also reachable as an execution module" header in the OFFLINE docs too —
+  the embedded docdata gains the same AlsoExecmod overlay live sys.doc
+  renders, and the docdata↔live parity test covers it.
+
+### Changed
+- **Family-oriented package layout (A1 step 8).** `pkg/state/modules` is now
+  one package per module family (`modules/file/`, `modules/cron/`, …; package
+  names `filemod`, `cronmod`, …), each holding its members, its parameter
+  components (`components.go`), its behavior suites, its contract fixtures,
+  and its registration rows; shared plumbing lives in `modules/regdef`
+  (registration types + `MustSpec`) and `modules/internal/famshared`
+  (cross-family helpers). The aggregator `pkg/state/modules` keeps its import
+  path and public API (`RegisterAll`, the dispatch specials) unchanged — no
+  consumer changes; file history follows the moves.
+
+### Fixed
+- **`makedirs: true` no longer accepts a regular file at the parent path, and
+  non-ENOENT `Stat` failures are surfaced instead of masked.** The Apply-side
+  parent-creation arm returned success whenever `Stat(parent)` succeeded —
+  without checking it was a directory — and fell through to `MkdirAll` on ANY
+  stat error, hiding permission/I-O/provider failures behind a creation
+  attempt. It now succeeds only for an existing directory, reports a clear
+  not-a-directory error for a file, creates only on a genuine not-exist, and
+  wraps every other stat error untouched. Two new arms in the shared family
+  behavior suite pin both cases per member (regular-file parent; injected
+  non-ENOENT stat failure via the fake's new fault injection).
+
+- **`makedirs` Check semantics re-ruled (Salt-aligned).** A missing parent
+  with `makedirs` unset no longer fails Check: dry runs do not materialize
+  changes from earlier required states, so a correctly ordered tree (a
+  directory state creating the parent, a file state writing into it with
+  `require`) must dry-run clean — Check now reports a would-change whose
+  detail names the missing parent and the remedy. Apply retains the strict
+  canonical contract: a parent still missing when the operation actually runs
+  fails without partial creation. Pinned by the ordered-tree dry-run,
+  ordered-tree apply, and standalone strict-apply cases in the family
+  behavior suite; BD-9's wording updated. (Also fixed en route: the exectest
+  fake's Chmod wiped file-TYPE bits, silently un-directorying entries.)
+
+- **A1 final-verification round.** `file.directory`'s documentation was
+  drift-corrected (it still described the pre-fix inert `makedirs`; the
+  published page contradicted its own parameter table) and the five other
+  members' Check effects now document the missing-parent failure; the fix is
+  minted as **BD-9** in the spec and each member's Divergences. The makedirs
+  helpers now `Clean` the target path first (a trailing-slash target no
+  longer gates on itself) and report a parent that exists as a regular file
+  with a clear not-a-directory error. `pkg.*`'s `refresh` was
+  UN-componentized: its two members genuinely differ in phase coverage and
+  error semantics (installed: Apply-only, fatal; latest: Check+Apply,
+  warn-only), so per §13 it is member-declared with a permanent pinned
+  exception — the git.* precedent. Gate hardening: the component ratchet now
+  fires for single-embedder components (a member defecting from a 2-member
+  component was previously invisible); member-supplied dimensions are only
+  legal on embedded component fields; untagged pointer-to-struct embeds are
+  compile errors (previously silently dropped the whole component); the
+  declaring-type stamp gained direct tests; same-signature keys with
+  per-member runtime meanings (`dir_mode`) are declared in a participant-
+  pinned meaning-variance registry. The behavior suite now asserts the 0755
+  creation mode, that errors name the missing parent, revert-never-removes-
+  parents, trailing-slash handling, and pins suite completeness against the
+  live embedder set.
+
+- **`file.directory` `makedirs` was accepted but inert — deliberate
+  compatibility fix (A1).** The module previously always created the full
+  parent chain (`MkdirAll`), silently masking typos in deep paths, and
+  ignored the flag. It now follows the canonical contract: a missing parent
+  without `makedirs: true` fails Check and Apply. Behavioral difference from
+  0.6.0, maintainer-ruled; pinned by the shared behavior suite and the
+  makedirs contract fixtures across YAML/CLI/msgpack.
+- **The other five `makedirs` members failed missing-parent cases with raw
+  OS errors and reported phantom applicable changes in Check.** All now fail
+  both phases with the canonical contract error. `file.recurse` previously
+  created missing parents with `dir_mode` instead of the canonical 0755.
+- **`file.directory`'s `dir_mode` is now a standalone parameter** (was an
+  alias of `mode`): decode lands on its own field and the mode fallback
+  (mode wins; `dir_mode` fills in when `mode` is undeclared) moved to the
+  builder — behavior is byte-identical to the alias era, pinned by
+  `TestFileDirectoryDirModeFallback` and updated contract fixtures; its
+  contract signature now matches `file.recurse`'s `dir_mode`, retiring that
+  vocabulary-ratchet entry (along with the `source` one).
+
 ## [0.6.0] - 2026-07-13
 
 ### Added

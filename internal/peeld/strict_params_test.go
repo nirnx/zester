@@ -19,7 +19,7 @@ import (
 	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/proto"
 	"github.com/nirnx/zester/pkg/state"
-	"github.com/nirnx/zester/pkg/state/modules"
+	filemod "github.com/nirnx/zester/pkg/state/modules/file"
 )
 
 // The strict flip (keystone spec §5 endgame): strict_params defaults ON, so an
@@ -211,9 +211,9 @@ func TestStrictParams_DeclaredNameFieldWinsOverExtraReserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("file.managed name: must still decode as the param: %v", err)
 	}
-	fm, ok := s.(*modules.FileManaged)
+	fm, ok := s.(*filemod.FileManaged)
 	if !ok {
-		t.Fatalf("file.managed built %T, want *modules.FileManaged", s)
+		t.Fatalf("file.managed built %T, want *filemod.FileManaged", s)
 	}
 	if fm.Path != "/etc/explicit.conf" {
 		t.Errorf("Path = %q, want the explicit name: value (declared field must win over ExtraReserved)", fm.Path)

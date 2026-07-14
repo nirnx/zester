@@ -8,7 +8,7 @@ import (
 
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/state/compiler"
-	"github.com/nirnx/zester/pkg/state/modules"
+	modulemod "github.com/nirnx/zester/pkg/state/modules/module"
 	"github.com/nirnx/zester/pkg/template"
 )
 
@@ -19,7 +19,7 @@ func compileStates(t *testing.T, formula, content string) map[string]state.State
 	tmpDir := t.TempDir()
 	registry := setupTestRegistry()
 	// module.run captures the registry so it can dispatch to the test modules.
-	registry.Register("module.run", modules.NewModuleRunBuilder(registry))
+	registry.Register("module.run", modulemod.NewModuleRunBuilder(registry))
 
 	engine, err := template.NewEngine(template.EngineConfig{BasePath: tmpDir})
 	if err != nil {

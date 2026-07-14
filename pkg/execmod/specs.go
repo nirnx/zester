@@ -84,12 +84,12 @@ type grainsItemParams struct {
 // sysDocParams is sys.doc's schema proto: argStr(args, "name", "module",
 // "__id__"). With no module named, sys.doc returns the unified index.
 type sysDocParams struct {
-	Name string `zester:"name,primary,aliases=module" usage:"module name to document; when omitted, the unified index of every callable surface is returned"`
+	Name string `zester:"name,primary,aliases=module" usage:"module name — or bare family name, rendering every member — to document; when omitted, the unified index of every callable surface is returned"`
 }
 
 // mustExecSpec compiles an execution-module spec at package init, panicking on a
 // compile error — an invalid schema declaration is a programming error caught at
-// load, never a runtime condition. It mirrors pkg/state/modules' mustSpec.
+// load, never a runtime condition. It mirrors pkg/state/modules/regdef's MustSpec.
 func mustExecSpec(module string, proto any, doc modschema.Doc) *modschema.Spec {
 	s, err := modschema.NewSpec(module, modschema.KindExec, proto, doc)
 	if err != nil {
@@ -413,13 +413,16 @@ var sysListFunctionsSpec = mustExecSpec("sys.list_functions", execNoParams{}, mo
 var sysDocSpec = mustExecSpec("sys.doc", sysDocParams{}, modschema.Doc{
 	Summary: "Render a module's documentation, or the unified index.",
 	Description: "`sys.doc <module>` renders the named module's documentation — the SAME self-documenting " +
-		"metadata `zester doc` and the generated reference pages are built from — as plain text. With no module " +
-		"named, it returns the unified index of every callable surface (identical to `sys.list_functions`). It " +
-		"answers even during a long-running state run (it is a read-only surface).",
+		"metadata `zester doc` and the generated reference pages are built from — as plain text. A bare FAMILY " +
+		"name renders every documented member (`sys.doc ssh_auth` shows ssh_auth.present AND ssh_auth.absent; " +
+		"Salt parity). With no module named, it returns the unified index of every callable surface (identical " +
+		"to `sys.list_functions`). It answers even during a long-running state run (it is a read-only surface).",
 	Effects: modschema.Effects{
 		Execution: "Looks the module up following the peel's dispatch precedence (dispatch specials, then state " +
-			"modules, then execution functions) and renders its ModuleInfo through the shared text renderer. With " +
-			"no module named, returns the unified index. Errors when the named module has no documentation.",
+			"modules, then execution functions) and renders its ModuleInfo through the shared text renderer; a " +
+			"name matching no module but prefixing a family renders every `<family>.*` member as one document. " +
+			"With no module named, returns the unified index. Errors when the name is neither a module nor a " +
+			"family.",
 	},
 	Examples: []modschema.Example{
 		{
@@ -427,6 +430,12 @@ var sysDocSpec = mustExecSpec("sys.doc", sysDocParams{}, modschema.Doc{
 			Kind:        "cli",
 			Explanation: "The bare positional argument is the module name to document.",
 			Code:        "zester 'web-01' sys.doc pkg.installed",
+		},
+		{
+			Title:       "Document a whole family",
+			Kind:        "cli",
+			Explanation: "A bare family name renders every documented member.",
+			Code:        "zester 'web-01' sys.doc ssh_auth",
 		},
 		{
 			Title:       "Show the unified index",

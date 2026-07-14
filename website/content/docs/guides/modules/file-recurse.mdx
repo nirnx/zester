@@ -5,7 +5,7 @@ description: "Recursively copy a source directory tree to a destination director
 
 {/* zester-docgen:managed module="file.recurse" */}
 
-**Source**: `pkg/state/modules/file_recurse.go`
+**Source**: `pkg/state/modules/file/file_recurse.go`
 
 ---
 
@@ -17,14 +17,14 @@ description: "Recursively copy a source directory tree to a destination director
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | No | State ID | destination directory path (defaults to the state ID) |
-| `source` | `string` | No | *(none)* | source directory path to copy from (required at run time) |
+| `name` | `string` | No | State ID | destination directory path (defaults to the state ID); the path alias is accepted |
+| `source` | `string` | No | *(none)* | source path content is taken from; whether it is required is member-specific |
 | `dir_mode` | `FileMode` | No | `0755` (lazy) | directory permission mode for managed directories (octal); DECLARED-ONLY — undeclared, existing directory modes are left alone (used only as the creation mode for new directories, defaulting to 0755) |
 | `file_mode` | `FileMode` | No | `0644` (lazy) | permission mode for copied files in octal ("0644"); always enforced; defaults to 0644 |
-| `user` | `string` | No | *(none)* | owner username for copied files; ownership is left unchanged when unset |
-| `group` | `string` | No | *(none)* | group name for copied files; ownership is left unchanged when unset |
+| `user` | `string` | No | *(none)* | owner username for the target; ownership is left unchanged when unset |
+| `group` | `string` | No | *(none)* | group name for the target; ownership is left unchanged when unset |
 | `clean` | `bool` | No | *(none)* | remove files in the destination that are not present in the source (regular files only; directories are never removed); a boolean that also accepts the integers 1 (true) and 0 (false) |
-| `makedirs` | `bool` | No | *(none)* | create the destination's parent directory chain if it does not exist; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
@@ -43,7 +43,7 @@ A Unix file-permission mode. Accepts an octal string ("0644", "755", "4755") or 
 
 ### Check
 
-Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.
 
 ### Apply
 
@@ -125,6 +125,7 @@ zester 'web*' file.recurse /etc/app source=/srv/config/app clean=true
 - BD-2
 - BD-6
 - BD-7
+- BD-9
 
 ---
 

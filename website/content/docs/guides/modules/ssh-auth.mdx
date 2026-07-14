@@ -12,7 +12,7 @@ description: "Ensure an SSH public key is absent from a user's authorized_keys. 
 
 ## `ssh_auth.absent`
 
-**Source**: `pkg/state/modules/ssh_auth_absent.go`
+**Source**: `pkg/state/modules/ssh_auth/ssh_auth_absent.go`
 
 ---
 
@@ -99,7 +99,7 @@ zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
 
 ## `ssh_auth.present`
 
-**Source**: `pkg/state/modules/ssh_auth_present.go`
+**Source**: `pkg/state/modules/ssh_auth/ssh_auth_present.go`
 
 ---
 
@@ -113,9 +113,9 @@ zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | public key blob (the base64 body) or a full key line; defaults to the state ID |
 | `user` | `string` | No | *(none)* | account whose authorized_keys is managed; user or config is required |
+| `config` | `string` | No | *(none)* | explicit authorized_keys path; user or config is required (config takes precedence over the user's home) |
 | `enc` | `string` | No | `ssh-rsa` | key encoding/type (ssh-rsa, ssh-ed25519, …); defaults to ssh-rsa; ignored when name is a full key line |
 | `comment` | `string` | No | *(none)* | optional trailing comment on the key line |
-| `config` | `string` | No | *(none)* | explicit authorized_keys path; user or config is required (config takes precedence over the user's home) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

@@ -11,6 +11,7 @@ import (
 	"github.com/nirnx/zester/pkg/proto"
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/state/modules"
+	testmod "github.com/nirnx/zester/pkg/state/modules/test"
 )
 
 // TestDispatchTableBound is the §7 pin: the two peel dispatch sites and the
@@ -58,7 +59,7 @@ func TestSysDocReadOnly(t *testing.T) {
 	}
 	// A state module shadowing sys.doc drops it from the read-only fast path,
 	// mirroring the sys.list_functions/grains precedence rule.
-	a.registry.Register("sys.doc", modules.NewTestPingBuilder(modschema.DecodeOptions{}))
+	a.registry.Register("sys.doc", testmod.NewTestPingBuilder(modschema.DecodeOptions{}))
 	if a.readOnlyModule("sys.doc") {
 		t.Error("readOnlyModule(sys.doc) = true after a state module shadowed it")
 	}
@@ -180,7 +181,7 @@ func TestPeelDocSourcePrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := a.registry.RegisterSpec(spec, func(id string, _ map[string]any) (state.State, error) {
-		return modules.NewTestPingBuilder(modschema.DecodeOptions{})(id, nil)
+		return testmod.NewTestPingBuilder(modschema.DecodeOptions{})(id, nil)
 	}); err != nil {
 		t.Fatal(err)
 	}

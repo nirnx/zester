@@ -2,6 +2,7 @@ package state_test
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -72,16 +73,34 @@ func TestReplaceSpec_Validation(t *testing.T) {
 	}
 }
 
+// registrationFiles returns every built-in registration file: the aggregator's
+// modules/register.go plus each family package's modules/<family>/register.go.
+// Failing on an empty glob keeps the pin honest if the layout moves again.
+func registrationFiles(t *testing.T) []string {
+	t.Helper()
+	files := []string{"modules/register.go"}
+	famFiles, err := filepath.Glob("modules/*/register.go")
+	if err != nil {
+		t.Fatalf("glob modules/*/register.go: %v", err)
+	}
+	if len(famFiles) == 0 {
+		t.Fatal("no modules/*/register.go family registration files found — the source-scan pin no longer covers the built-in table")
+	}
+	return append(files, famFiles...)
+}
+
 // TestBuiltinsNeverReplaceSpec is the conformance pin promised in
 // ReplaceSpec's doc comment: the built-in registration table must use the
 // strict RegisterSpec only. (Source-scan style, like the reserved-key pins.)
 func TestBuiltinsNeverReplaceSpec(t *testing.T) {
-	src, err := os.ReadFile("modules/register.go")
-	if err != nil {
-		t.Fatalf("read modules/register.go: %v", err)
-	}
-	if strings.Contains(string(src), ".ReplaceSpec(") {
-		t.Fatal("pkg/state/modules/register.go calls ReplaceSpec — built-ins must register via the strict RegisterSpec only")
+	for _, path := range registrationFiles(t) {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if strings.Contains(string(src), ".ReplaceSpec(") {
+			t.Fatalf("pkg/state/%s calls ReplaceSpec — built-ins must register via the strict RegisterSpec only", path)
+		}
 	}
 }
 
@@ -137,11 +156,13 @@ func TestUnregister(t *testing.T) {
 // TestBuiltinsNeverUnregister is the conformance pin promised in Unregister's
 // doc comment: the built-in registration table must never remove modules.
 func TestBuiltinsNeverUnregister(t *testing.T) {
-	src, err := os.ReadFile("modules/register.go")
-	if err != nil {
-		t.Fatalf("read modules/register.go: %v", err)
-	}
-	if strings.Contains(string(src), ".Unregister(") {
-		t.Fatal("pkg/state/modules/register.go calls Unregister — built-ins must never be unregistered")
+	for _, path := range registrationFiles(t) {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if strings.Contains(string(src), ".Unregister(") {
+			t.Fatalf("pkg/state/%s calls Unregister — built-ins must never be unregistered", path)
+		}
 	}
 }

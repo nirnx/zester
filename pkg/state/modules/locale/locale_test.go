@@ -1,0 +1,533 @@
+package localemod
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/nirnx/zester/pkg/exec"
+	"github.com/nirnx/zester/pkg/exec/exectest"
+	"github.com/nirnx/zester/pkg/modschema"
+	"github.com/nirnx/zester/pkg/modschema/schematest"
+	"github.com/nirnx/zester/pkg/state"
+)
+
+func testLocaleMctx(fakeCmd *exectest.FakeCommandExec, fakeFile *exectest.FakeFileExec) *exec.ModuleContext {
+	return &exec.ModuleContext{
+		ProviderSet: exec.ProviderSet{
+			Command: fakeCmd,
+			File:    fakeFile,
+			Package: exectest.NewFakePackageExec("apt"),
+		},
+	}
+}
+
+func TestLocalePresentName(t *testing.T) {
+	mctx := testLocaleMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+	s, err := builder("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Name() != "locale.present:en_US.UTF-8" {
+		t.Errorf("Name: got %q", s.Name())
+	}
+}
+
+func TestLocalePresentPrimaryParamDefault(t *testing.T) {
+	mctx := testLocaleMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+	s, err := builder("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := s.(*LocalePresent)
+	if l.Locale != "en_US.UTF-8" {
+		t.Errorf("Locale: got %q, want en_US.UTF-8", l.Locale)
+	}
+}
+
+func TestLocalePresentRequisites(t *testing.T) {
+	mctx := testLocaleMctx(exectest.NewFakeCommandExec(), exectest.NewFakeFileExec())
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+	s, err := builder("en_US.UTF-8", map[string]any{
+		"require": []any{"pkg.installed:locales"},
+		"watch":   []any{"file.managed:/etc/locale.gen"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs := s.Reqs()
+	if len(reqs.Require) != 1 || reqs.Require[0] != "pkg.installed:locales" {
+		t.Errorf("Require: got %v", reqs.Require)
+	}
+	if len(reqs.Watch) != 1 || reqs.Watch[0] != "file.managed:/etc/locale.gen" {
+		t.Errorf("Watch: got %v", reqs.Watch)
+	}
+}
+
+func TestLocalePresentCheckNoChange(t *testing.T) {
+	// Deliberately updated for the Check-verifies-locale.gen fix: compliant
+	// now means generated (`locale -a`) AND enabled in /etc/locale.gen.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("locale", &exec.CommandResult{
+		Stdout:   "C\nC.UTF-8\nen_US.utf8\n",
+		ExitCode: 0,
+	}, nil)
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate(localeGenPath, []byte("# comment\nen_US.UTF-8 UTF-8\n"), 0644)
+	mctx := testLocaleMctx(fakeCmd, fakeFile)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+
+	s, err := builder("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("expected no change when locale is generated and enabled, diff: %s", cr.Diff)
+	}
+}
+
+func TestLocalePresentCheckGeneratedButNotEnabled(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("locale", &exec.CommandResult{
+		Stdout:   "C\nC.UTF-8\nen_US.utf8\n",
+		ExitCode: 0,
+	}, nil)
+
+	t.Run("line commented out", func(t *testing.T) {
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
+		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cr, err := s.Check(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cr.NeedsChange {
+			t.Error("expected NeedsChange when locale.gen line is commented out")
+		}
+	})
+
+	t.Run("locale.gen missing skips the file facet", func(t *testing.T) {
+		// No /etc/locale.gen (glibc-langpack, musl): the facet does not
+		// apply — a generated locale is compliant from `locale -a` alone,
+		// and Apply never creates the file on such systems.
+		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, exectest.NewFakeFileExec()), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cr, err := s.Check(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cr.NeedsChange {
+			t.Errorf("expected no change when locale.gen does not exist, diff: %s", cr.Diff)
+		}
+	})
+
+	// Convergence: Apply then re-Check must report compliant.
+	t.Run("apply converges", func(t *testing.T) {
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
+		s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Apply(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		cr, err := s.Check(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cr.NeedsChange {
+			t.Errorf("expected no change after Apply, diff: %s", cr.Diff)
+		}
+	})
+}
+
+func TestLocalePresentCheckNoFileProvider(t *testing.T) {
+	// Without a file provider the locale.gen half cannot be verified (nor
+	// would Apply enforce it) — Check answers from `locale -a` alone.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("locale", &exec.CommandResult{
+		Stdout:   "en_US.utf8\n",
+		ExitCode: 0,
+	}, nil)
+	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{Command: fakeCmd}}
+	s, err := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Error("expected no change when generated and no file provider is available")
+	}
+}
+
+func TestLocalePresentReadErrorFailsPhases(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("locale", &exec.CommandResult{
+		Stdout:   "en_US.utf8\n",
+		ExitCode: 0,
+	}, nil)
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate(localeGenPath, []byte("en_US.UTF-8 UTF-8\nde_DE.UTF-8 UTF-8\n"), 0644)
+	fakeFile.SetReadError(localeGenPath, errors.New("input/output error"))
+
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Check(context.Background()); err == nil {
+		t.Error("expected Check to fail on a non-not-exist read error")
+	}
+	if _, err := s.Apply(context.Background()); err == nil {
+		t.Error("expected Apply to fail on a non-not-exist read error")
+	}
+	// The unreadable locale.gen must never have been overwritten.
+	data, _ := fakeFile.GetFile(localeGenPath)
+	if string(data) != "en_US.UTF-8 UTF-8\nde_DE.UTF-8 UTF-8\n" {
+		t.Errorf("locale.gen must not be rewritten on read error, got %q", string(data))
+	}
+}
+
+func TestLocalePresentCheckNeedsChange(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("locale", &exec.CommandResult{
+		Stdout:   "C\nC.UTF-8\n",
+		ExitCode: 0,
+	}, nil)
+	mctx := testLocaleMctx(fakeCmd, exectest.NewFakeFileExec())
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+
+	s, err := builder("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.NeedsChange {
+		t.Error("expected NeedsChange when locale is missing")
+	}
+}
+
+func TestLocalePresentCheckError(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetError("locale", errors.New("command not found"))
+	mctx := testLocaleMctx(fakeCmd, exectest.NewFakeFileExec())
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+
+	s, err := builder("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Check(context.Background())
+	if err == nil {
+		t.Error("expected error when locale command fails")
+	}
+}
+
+func TestLocalePresentApply(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
+
+	mctx := testLocaleMctx(fakeCmd, fakeFile)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+
+	s, err := builder("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Apply(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed after locale-gen")
+	}
+	if ar.Details["locale"] != "en_US.UTF-8" {
+		t.Errorf("locale detail: got %q", ar.Details["locale"])
+	}
+
+	// Verify locale line was uncommented.
+	data, ok := fakeFile.GetFile(localeGenPath)
+	if !ok {
+		t.Fatal("locale.gen not written")
+	}
+	if strings.Contains(string(data), "# en_US.UTF-8") {
+		t.Error("locale line should be uncommented after Apply")
+	}
+}
+
+func TestLocalePresentApplyError(t *testing.T) {
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetError("locale-gen", errors.New("permission denied"))
+	fakeFile := exectest.NewFakeFileExec()
+
+	mctx := testLocaleMctx(fakeCmd, fakeFile)
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+
+	s, err := builder("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Apply(context.Background())
+	if err == nil {
+		t.Error("expected error when locale-gen fails")
+	}
+}
+
+func TestLocalePresentRevertFreshInstanceNoOp(t *testing.T) {
+	// The runner builds FRESH instances for ModeRevert — no same-instance
+	// Apply ever ran, so Revert must be an explicit clean no-op: commenting
+	// out an installer/admin-enabled locale.gen line (then running
+	// locale-gen) would drop a locale zester never added.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate(localeGenPath, []byte("en_US.UTF-8 UTF-8\n"), 0644)
+
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("fresh-instance Revert must report Changed: false")
+	}
+	if !strings.Contains(ar.Diff, "nothing to revert") {
+		t.Errorf("expected explicit no-op diff, got %q", ar.Diff)
+	}
+	data, _ := fakeFile.GetFile(localeGenPath)
+	if string(data) != "en_US.UTF-8 UTF-8\n" {
+		t.Errorf("locale.gen must not be touched by a fresh-instance revert, got %q", string(data))
+	}
+	if fakeCmd.CallCount() != 0 {
+		t.Errorf("locale-gen must not run on a fresh-instance revert, got %d calls", fakeCmd.CallCount())
+	}
+}
+
+func TestLocalePresentRevertAfterApply(t *testing.T) {
+	// Same-instance Apply→Revert: Apply uncommented the line in THIS run,
+	// so Revert may safely comment it back out.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
+
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ar.Changed {
+		t.Error("expected Changed on a same-instance revert after Apply enabled the line")
+	}
+	data, ok := fakeFile.GetFile(localeGenPath)
+	if !ok {
+		t.Fatal("locale.gen not written")
+	}
+	if !strings.Contains(string(data), "# en_US.UTF-8") {
+		t.Errorf("expected locale line to be commented after Revert, got: %s", string(data))
+	}
+}
+
+func TestLocalePresentRevertNotArmedWithoutFileDrift(t *testing.T) {
+	// The line was already enabled (by the admin) — Apply only ran
+	// locale-gen and modified nothing in locale.gen, so the revert memo must
+	// stay unarmed: Revert must not comment out a line this run never enabled.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeFile := exectest.NewFakeFileExec()
+	fakeFile.PreCreate(localeGenPath, []byte("en_US.UTF-8 UTF-8\n"), 0644)
+
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("Revert must be a no-op when Apply did not modify locale.gen")
+	}
+	data, _ := fakeFile.GetFile(localeGenPath)
+	if string(data) != "en_US.UTF-8 UTF-8\n" {
+		t.Errorf("admin-enabled line must stay enabled, got %q", string(data))
+	}
+}
+
+func TestLocalePresentNoLocaleGenNeverCreatesIt(t *testing.T) {
+	// Non-Debian system (glibc langpacks): locale already generated, no
+	// /etc/locale.gen. Pre-0.4.2 this was compliant; the locale.gen facet
+	// must not regress it — and a watch-forced Apply (which bypasses Check)
+	// must not drop a foreign /etc/locale.gen onto the box.
+	fakeCmd := exectest.NewFakeCommandExec()
+	fakeCmd.SetResult("locale", &exec.CommandResult{
+		Stdout:   "C\nC.utf8\nen_US.utf8\n",
+		ExitCode: 0,
+	}, nil)
+	fakeFile := exectest.NewFakeFileExec()
+
+	s, err := NewLocalePresentBuilder(testLocaleMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("en_US.UTF-8", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cr, err := s.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.NeedsChange {
+		t.Errorf("already-generated locale without locale.gen must be compliant, diff: %s", cr.Diff)
+	}
+
+	// Watch-forced apply goes straight to Apply.
+	if _, err := s.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fakeFile.Exists(localeGenPath) {
+		t.Error("Apply must never create /etc/locale.gen on a system without it")
+	}
+
+	// And that Apply modified no file, so Revert stays a clean no-op.
+	ar, err := s.Revert(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.Changed {
+		t.Error("Revert must be a no-op when Apply modified no file")
+	}
+}
+
+func TestLocalePresentCharmapSpellingConverges(t *testing.T) {
+	// Declared as "en_US.utf8" — the exact spelling `locale -a` prints. The
+	// locale.gen half must accept the canonical "en_US.UTF-8 UTF-8" line via
+	// the same normalisation, or every run drives a spurious Apply that
+	// appends a junk duplicate line.
+	newCmd := func() *exectest.FakeCommandExec {
+		c := exectest.NewFakeCommandExec()
+		c.SetResult("locale", &exec.CommandResult{
+			Stdout:   "C\nen_US.utf8\n",
+			ExitCode: 0,
+		}, nil)
+		return c
+	}
+
+	t.Run("enabled canonical line is compliant", func(t *testing.T) {
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate(localeGenPath, []byte("en_US.UTF-8 UTF-8\n"), 0644)
+		s, err := NewLocalePresentBuilder(testLocaleMctx(newCmd(), fakeFile), modschema.DecodeOptions{})("en_US.utf8", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cr, err := s.Check(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cr.NeedsChange {
+			t.Errorf("expected no change for charmap-spelled declaration, diff: %s", cr.Diff)
+		}
+	})
+
+	t.Run("check-apply-check on commented canonical line", func(t *testing.T) {
+		fakeFile := exectest.NewFakeFileExec()
+		fakeFile.PreCreate(localeGenPath, []byte("# en_US.UTF-8 UTF-8\n"), 0644)
+		s, err := NewLocalePresentBuilder(testLocaleMctx(newCmd(), fakeFile), modschema.DecodeOptions{})("en_US.utf8", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		cr, err := s.Check(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cr.NeedsChange {
+			t.Fatal("expected NeedsChange while the canonical line is commented out")
+		}
+		if _, err := s.Apply(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+
+		// Apply must uncomment THE canonical line, not append a duplicate.
+		data, _ := fakeFile.GetFile(localeGenPath)
+		if string(data) != "en_US.UTF-8 UTF-8\n" {
+			t.Errorf("expected the canonical line uncommented with no junk append, got %q", string(data))
+		}
+
+		cr2, err := s.Check(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cr2.NeedsChange {
+			t.Errorf("expected convergence after Apply, diff: %s", cr2.Diff)
+		}
+	})
+}
+
+func TestLocalePresentNoProvider(t *testing.T) {
+	mctx := &exec.ModuleContext{
+		ProviderSet: exec.ProviderSet{
+			File: exectest.NewFakeFileExec(),
+		},
+	}
+	builder := NewLocalePresentBuilder(mctx, modschema.DecodeOptions{})
+	_, err := builder("en_US.UTF-8", map[string]any{})
+	if err == nil {
+		t.Error("expected error when no command provider is set")
+	}
+}
+
+var _ state.State = (*LocalePresent)(nil)
+
+// TestLocalePresentContract replays the permanent differential contract fixtures
+// against the migrated locale.present decoder. The cases were approved by the
+// legacy-vs-new equivalence comparison while the legacy constructor still
+// existed (see the migration changelog); after its deletion this replay is the
+// permanent regression guard for locale.present's decode behavior — including
+// the flagged BD-6 divergence (a non-string `name` is now coerced, or rejected
+// for composites, instead of silently falling back to the state ID).
+func TestLocalePresentContract(t *testing.T) {
+	decode := func(id string, config map[string]any) (any, error) {
+		var l LocalePresent
+		if _, err := localePresentSpec.Decode(id, config, &l, modschema.DecodeOptions{}); err != nil {
+			return nil, err
+		}
+		return &l, nil
+	}
+	schematest.RunContract(t, decode, "testdata/contract/locale.present.yaml")
+}
