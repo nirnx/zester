@@ -20,8 +20,8 @@ type CronAbsent struct {
 	reqs state.Requisites
 
 	CronName string `zester:"name,primary" usage:"label for the state; defaults to the state ID"`
-	User     string `zester:"user,default=root" usage:"user whose crontab is managed; defaults to root"`
-	Command  string `zester:"command,required" usage:"command line whose crontab entry is removed (required)"`
+	// User/Command: cron.* family target component.
+	cronTargetParam
 
 	cron exec.CronExec
 }

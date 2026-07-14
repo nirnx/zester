@@ -33,8 +33,8 @@ type HostPresent struct {
 	Hostname string `zester:"name,primary" usage:"host name to manage; defaults to the state ID"`
 	// IP is the IP address the hostname should map to; required.
 	IP string `zester:"ip,required" usage:"IP address the hostname should map to; required"`
-	// Path is the hosts file path; the config key with a path alias, default /etc/hosts.
-	Path string `zester:"config,aliases=path,default=/etc/hosts" usage:"hosts file path; the path alias is also accepted; defaults to /etc/hosts"`
+	// Path: host.* family hosts-file component.
+	hostFileParam
 
 	file exec.FileExec
 

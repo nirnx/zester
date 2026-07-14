@@ -30,14 +30,8 @@ type PkgLatest struct {
 	// Package is the name of the package to keep up to date.
 	Package string `zester:"name,primary" usage:"package to keep at the newest available version (defaults to the state ID)"`
 
-	// Refresh runs a package cache refresh at the start of BOTH Check and
-	// Apply. Defaults to true (matching Salt's pkg.latest semantics, which
-	// refresh before deciding). Each phase refreshes independently — no
-	// cross-phase state — so a watch-forced Apply that bypasses Check still
-	// acts on a fresh index, and a Check-only dry run answers from a fresh
-	// index too. Refreshing mutates only the manager's metadata cache, never
-	// the managed system state, so it is legitimate in Check.
-	Refresh bool `zester:"refresh,default=true" usage:"refresh the package cache before Check and before Apply"`
+	// Refresh: pkg.* family component (member-supplied default true).
+	pkgRefreshParam
 
 	// family is the detected OS family ("debian", "redhat", "darwin", "").
 	family string
@@ -59,7 +53,10 @@ type PkgLatest struct {
 // compiled once at package init and executed by every decode path (the
 // builder below, and Registry.Parse). The prose is verified against the live
 // Check/Apply/Revert behavior and the detectPkgSystem/provider logic below.
-var pkgLatestSpec = mustSpec("pkg.latest", modschema.KindState, PkgLatest{}, modschema.Doc{
+var pkgLatestSpec = mustSpec("pkg.latest", modschema.KindState, PkgLatest{}, pkgLatestDoc,
+	modschema.WithDefault("refresh", "true"))
+
+var pkgLatestDoc = modschema.Doc{
 	Summary: "Ensure a package is installed and kept at the newest available version.",
 	Description: "`pkg.latest` ensures the named package is installed and upgraded to the newest " +
 		"version the package manager can see, refreshing its cache before deciding (by default) so " +
@@ -165,7 +162,7 @@ var pkgLatestSpec = mustSpec("pkg.latest", modschema.KindState, PkgLatest{}, mod
 	},
 	Divergences: []string{"BD-2", "BD-6", "BD-7"},
 	SeeAlso:     []string{"pkg.installed", "pkg.purged", "pkg.removed"},
-})
+}
 
 // NewPkgLatestBuilder returns a state.Builder that creates PkgLatest states
 // using the given ModuleContext's package and command providers. Decode

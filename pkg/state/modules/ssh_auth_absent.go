@@ -27,10 +27,8 @@ type SSHAuthAbsent struct {
 	// Key is the public key blob to remove; it defaults to the state ID and is
 	// TrimSpace'd in the builder.
 	Key string `zester:"name,primary" usage:"public key blob (or full key line) to remove; matched on the blob; defaults to the state ID"`
-	// User is the account whose authorized_keys is managed.
-	User string `zester:"user" usage:"account whose authorized_keys is managed; user or config is required"`
-	// Config overrides the authorized_keys path (default ~user/.ssh/authorized_keys).
-	Config string `zester:"config" usage:"explicit authorized_keys path; user or config is required (config takes precedence over the user's home)"`
+	// User/Config: ssh_auth.* family target component.
+	sshAuthTargetParam
 
 	file exec.FileExec
 

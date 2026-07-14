@@ -20,6 +20,16 @@ All notable changes to Zester are documented here. The format follows
   Every field is stamped with its declaring type, and the vocabulary gate
   gains a COMPONENT RATCHET: once a family component exists for a key, a
   private redeclaration in any member — even byte-identical — fails CI.
+- **Paired-family components (A1 step 7).** `ssh_auth.*` (the user/config
+  target pair), `host.*` (the config/path hosts-file selector), `cron.*`
+  (the user/command entry identity), and `pkg.*` (`refresh`, with
+  member-supplied defaults: `pkg.installed` false, `pkg.latest` true —
+  behavior unchanged) now declare their canonical parameters once in family
+  components. `git.*`'s shared keys (branch/rev/force) stay member-declared:
+  their per-operation semantics genuinely differ, and the gate keeps their
+  contract signatures aligned. The pkg refresh vocabulary-ratchet entry is
+  retired — the in-family exception table is down to the single
+  maintainer-blessed permanent (`file.line`'s action-selector `mode`).
 - **Canonical `file.*` `makedirs` runtime contract, enforced by a shared
   behavior suite.** All six members (`managed`, `copy`, `directory`,
   `recurse`, `symlink`, `touch`) now implement ONE contract: `makedirs`

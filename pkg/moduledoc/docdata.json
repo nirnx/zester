@@ -595,14 +595,15 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.cronTargetParam"
       },
       {
         "Name": "command",
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "command line whose crontab entry is removed (required)",
+        "Usage": "command line of the managed crontab entry; required",
         "Required": true,
         "Primary": false,
         "Lazy": false,
@@ -621,7 +622,8 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.cronTargetParam"
       }
     ],
     "SemTypes": null,
@@ -731,14 +733,15 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.cronTargetParam"
       },
       {
         "Name": "command",
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "command line to run on the schedule (required)",
+        "Usage": "command line of the managed crontab entry; required",
         "Required": true,
         "Primary": false,
         "Lazy": false,
@@ -757,7 +760,8 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.cronTargetParam"
       },
       {
         "Name": "minute",
@@ -5019,7 +5023,8 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.hostFileParam"
       }
     ],
     "SemTypes": null,
@@ -5166,7 +5171,8 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.hostFileParam"
       }
     ],
     "SemTypes": null,
@@ -5918,13 +5924,13 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "refresh the package cache before installing",
+        "Usage": "refresh the package database before the operation; the default is member-specific; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
         "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
+        "HasDefault": true,
+        "Default": "false",
         "JSONSchema": {
           "anyOf": [
             {
@@ -5942,7 +5948,9 @@
               "type": "string"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.pkgRefreshParam",
+        "DefaultMemberSupplied": true
       }
     ],
     "SemTypes": null,
@@ -6051,7 +6059,7 @@
         "Aliases": null,
         "GoType": "bool",
         "SemanticType": "",
-        "Usage": "refresh the package cache before Check and before Apply",
+        "Usage": "refresh the package database before the operation; the default is member-specific; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -6075,7 +6083,9 @@
               "type": "string"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.pkgRefreshParam",
+        "DefaultMemberSupplied": true
       }
     ],
     "SemTypes": null,
@@ -7458,7 +7468,8 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.sshAuthTargetParam"
       },
       {
         "Name": "config",
@@ -7484,7 +7495,8 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.sshAuthTargetParam"
       }
     ],
     "SemTypes": null,
@@ -7603,7 +7615,35 @@
               "type": "boolean"
             }
           ]
-        }
+        },
+        "DeclaredBy": "modules.sshAuthTargetParam"
+      },
+      {
+        "Name": "config",
+        "Aliases": null,
+        "GoType": "string",
+        "SemanticType": "",
+        "Usage": "explicit authorized_keys path; user or config is required (config takes precedence over the user's home)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "DeclaredBy": "modules.sshAuthTargetParam"
       },
       {
         "Name": "enc",
@@ -7637,32 +7677,6 @@
         "GoType": "string",
         "SemanticType": "",
         "Usage": "optional trailing comment on the key line",
-        "Required": false,
-        "Primary": false,
-        "Lazy": false,
-        "Sensitive": false,
-        "HasDefault": false,
-        "Default": "",
-        "JSONSchema": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            }
-          ]
-        }
-      },
-      {
-        "Name": "config",
-        "Aliases": null,
-        "GoType": "string",
-        "SemanticType": "",
-        "Usage": "explicit authorized_keys path; user or config is required (config takes precedence over the user's home)",
         "Required": false,
         "Primary": false,
         "Lazy": false,

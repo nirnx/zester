@@ -27,7 +27,7 @@ The version pin's on-the-wire format depends on the detected package manager:
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | package to install (defaults to the state ID) |
 | `version` | `string` | No | *(none)* | exact version pin; any other installed version converges via install or downgrade (format depends on the detected package manager) |
-| `refresh` | `bool` | No | *(none)* | refresh the package cache before installing |
+| `refresh` | `bool` | No | `false` | refresh the package database before the operation; the default is member-specific; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

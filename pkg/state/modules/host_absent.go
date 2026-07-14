@@ -26,8 +26,8 @@ type HostAbsent struct {
 
 	// Hostname is the host name to remove; it defaults to the state ID.
 	Hostname string `zester:"name,primary" usage:"host name to remove from the hosts file; defaults to the state ID"`
-	// Path is the hosts file path; the config key with a path alias, default /etc/hosts.
-	Path string `zester:"config,aliases=path,default=/etc/hosts" usage:"hosts file path; the path alias is also accepted; defaults to /etc/hosts"`
+	// Path: host.* family hosts-file component.
+	hostFileParam
 
 	file exec.FileExec
 

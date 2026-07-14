@@ -29,8 +29,8 @@ type PkgInstalled struct {
 	// installed version needs a change (upgrades AND downgrades converge).
 	Version string `zester:"version" usage:"exact version pin; any other installed version converges via install or downgrade (format depends on the detected package manager)"`
 
-	// Refresh forces a package cache refresh before install.
-	Refresh bool `zester:"refresh" usage:"refresh the package cache before installing"`
+	// Refresh: pkg.* family component (member-supplied default false).
+	pkgRefreshParam
 
 	// pkg is the injected package execution provider.
 	pkg exec.PackageExec
@@ -41,7 +41,10 @@ type PkgInstalled struct {
 // builder below, and Registry.Parse). The prose is verified against the live
 // Check/Apply/Revert behavior and the apt/dnf/yum/brew provider implementations
 // (pkg/exec/pkg_*.go).
-var pkgInstalledSpec = mustSpec("pkg.installed", modschema.KindState, PkgInstalled{}, modschema.Doc{
+var pkgInstalledSpec = mustSpec("pkg.installed", modschema.KindState, PkgInstalled{}, pkgInstalledDoc,
+	modschema.WithDefault("refresh", "false"))
+
+var pkgInstalledDoc = modschema.Doc{
 	Summary: "Ensure a system package is installed, optionally pinned to an exact version.",
 	Description: "`pkg.installed` ensures the named package is present on the target through the " +
 		"peel's auto-detected package manager (apt, dnf, yum, or brew). The package name defaults " +
@@ -179,7 +182,7 @@ var pkgInstalledSpec = mustSpec("pkg.installed", modschema.KindState, PkgInstall
 	},
 	Divergences: []string{"BD-2", "BD-6", "BD-7"},
 	SeeAlso:     []string{"pkg.latest", "pkg.purged", "pkg.removed"},
-})
+}
 
 // NewPkgInstalledBuilder returns a state.Builder that creates PkgInstalled
 // states using the given ModuleContext's package provider. Decode policy

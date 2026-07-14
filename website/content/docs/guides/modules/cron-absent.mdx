@@ -19,7 +19,7 @@ description: "Ensure a crontab entry does not exist for a user."
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | label for the state; defaults to the state ID |
 | `user` | `string` | No | `root` | user whose crontab is managed; defaults to root |
-| `command` | `string` | Yes | *(none)* | command line whose crontab entry is removed (required) |
+| `command` | `string` | Yes | *(none)* | command line of the managed crontab entry; required |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

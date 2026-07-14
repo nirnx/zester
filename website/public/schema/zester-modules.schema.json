@@ -215,7 +215,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "command line whose crontab entry is removed (required)"
+              "description": "command line of the managed crontab entry; required"
             },
             "name": {
               "anyOf": [
@@ -286,7 +286,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "command line to run on the schedule (required)"
+              "description": "command line of the managed crontab entry; required"
             },
             "daymonth": {
               "anyOf": [
@@ -2214,7 +2214,7 @@
                   "type": "string"
                 }
               ],
-              "description": "refresh the package cache before installing"
+              "description": "refresh the package database before the operation; the default is member-specific; a boolean that also accepts the integers 1 (true) and 0 (false)"
             },
             "version": {
               "anyOf": [
@@ -2271,7 +2271,7 @@
                   "type": "string"
                 }
               ],
-              "description": "refresh the package cache before Check and before Apply"
+              "description": "refresh the package database before the operation; the default is member-specific; a boolean that also accepts the integers 1 (true) and 0 (false)"
             }
           },
           "type": "object"

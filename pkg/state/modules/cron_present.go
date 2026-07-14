@@ -29,10 +29,8 @@ type CronPresent struct {
 	// Label is the identifier comment stamped on the crontab line (its identity);
 	// it defaults to the state ID.
 	Label string `zester:"name,primary" usage:"identifier comment stamped on the crontab line (its Salt-identifier identity); defaults to the state ID"`
-	// User is the user whose crontab is managed; defaults to root.
-	User string `zester:"user,default=root" usage:"user whose crontab is managed; defaults to root"`
-	// Command is the command line to run; required.
-	Command string `zester:"command,required" usage:"command line to run on the schedule (required)"`
+	// User/Command: cron.* family target component.
+	cronTargetParam
 	// Minute..DayWeek are the five schedule fields; each defaults to *.
 	Minute   string `zester:"minute,default=*" usage:"minute field (0-59 or *); defaults to *"`
 	Hour     string `zester:"hour,default=*" usage:"hour field (0-23 or *); defaults to *"`

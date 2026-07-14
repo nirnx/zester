@@ -35,14 +35,12 @@ type SSHAuthPresent struct {
 	// Key is the public key blob (the base64 body), or a full key line; it
 	// defaults to the state ID and is TrimSpace'd in the builder.
 	Key string `zester:"name,primary" usage:"public key blob (the base64 body) or a full key line; defaults to the state ID"`
-	// User is the account whose authorized_keys is managed.
-	User string `zester:"user" usage:"account whose authorized_keys is managed; user or config is required"`
+	// User/Config: ssh_auth.* family target component.
+	sshAuthTargetParam
 	// Enc is the key encoding/type (e.g., "ssh-rsa"). Default "ssh-rsa".
 	Enc string `zester:"enc,default=ssh-rsa" usage:"key encoding/type (ssh-rsa, ssh-ed25519, …); defaults to ssh-rsa; ignored when name is a full key line"`
 	// Comment is an optional trailing comment on the key line.
 	Comment string `zester:"comment" usage:"optional trailing comment on the key line"`
-	// Config overrides the authorized_keys path (default ~user/.ssh/authorized_keys).
-	Config string `zester:"config" usage:"explicit authorized_keys path; user or config is required (config takes precedence over the user's home)"`
 
 	file exec.FileExec
 

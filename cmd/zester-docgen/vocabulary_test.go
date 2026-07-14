@@ -63,13 +63,6 @@ var inFamilyExceptions = map[string]vocabException{
 		participants: []string{"file.directory(mode)", "file.line(mode)", "file.managed(mode)"},
 		distinct:     2,
 	},
-	"state/pkg/refresh": {
-		reason: "MIGRATION-PENDING (§13): pkg.latest defaults `refresh` to true while pkg.installed has no " +
-			"default — the pkg.* family component decides whether the default unifies or is member-supplied; " +
-			"delete this entry when that tranche lands.",
-		participants: []string{"pkg.installed(refresh)", "pkg.latest(refresh)"},
-		distinct:     2,
-	},
 }
 
 // crossFamilyExceptions is TIER 2's table, keyed on the bare parameter key.
