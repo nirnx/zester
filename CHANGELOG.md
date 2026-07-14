@@ -31,7 +31,16 @@ All notable changes to Zester are documented here. The format follows
   exceptions (`mode` in file.line = action selector; `gid` in group.present =
   numeric-only create id; `text` in test.echo = scalar echo string), each
   justified in the exception table, which also refuses stale entries. The
-  developing guide documents the rule. Exceptions are participant-pinned:
+  developing guide documents the rule. REWORKED to the family-scoped
+  two-tier form per the approved Amendment A1 (spec §13): the contract
+  boundary is (module kind, family, parameter name) — within one family the
+  full contract is compared (shape, aliases, primary, requiredness,
+  default), across families only the value shape (the same spelling may
+  legitimately mean different things in unrelated families). Alias keys are
+  first-class: the gate caught `dir_mode` meaning an alias-of-mode on
+  file.directory but a standalone parameter on file.recurse. In-family
+  divergences are pinned as migration-ratchet entries the family-component
+  tranches delete. Exceptions are participant-pinned:
   the exception covers only the known divergence, so a NEW module reusing an
   excepted key (e.g. a third `mode` shape) still fails until the pin is
   deliberately updated. Dual-surface modules (`cmd.run`) now carry their
