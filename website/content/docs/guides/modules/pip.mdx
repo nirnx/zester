@@ -1,9 +1,21 @@
 ---
-title: "pip.installed"
-description: "Ensure a Python package is installed via pip, optionally pinned or from a requirements file."
+title: "pip"
+description: "The pip.* family of state modules."
 ---
 
 {/* zester-docgen:managed module="pip.installed" */}
+
+| Module | Summary |
+|---|---|
+| [`pip.installed`](#pip-installed) | Ensure a Python package is installed via pip, optionally pinned or from a requirements file. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## `pip.installed` [#pip-installed]
+
+Ensure a Python package is installed via pip, optionally pinned or from a requirements file.
 
 **Source**: `pkg/state/modules/pip/pip_installed.go`
 
@@ -13,7 +25,7 @@ description: "Ensure a Python package is installed via pip, optionally pinned or
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -22,30 +34,28 @@ description: "Ensure a Python package is installed via pip, optionally pinned or
 | `requirements` | `string` | No | *(none)* | path to a requirements.txt file; when set, name is ignored for install |
 | `bin` | `string` | No | `pip3` | path or name of the pip binary to use; defaults to pip3 |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
-
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 With `requirements` set, ALWAYS reports a change: a requirements file cannot be verified without actually running the install. Otherwise runs `<bin> show <name>`; a non-zero exit means the package needs installing. When `version` is declared and the package is present, parses the `Version:` line from `pip show` output and reports a change on any mismatch (compared as strings, so pre-release suffixes matter).
 
-### Apply
+#### Apply
 
 Package mode: `<bin> install <name>[==version]`. Requirements mode: `<bin> install -r <requirements>`. Reports the package and bin in its details.
 
-### Revert
+#### Revert
 
 Package mode: `<bin> uninstall -y <name>`. Requirements mode: an explicit no-op (`Changed: false`) — there is no record of which packages a requirements file installed, so there is nothing safe to uninstall.
 
 
 ---
 
-## Examples
+### Examples
 
-### Install the latest version
+#### Install the latest version
 
 The package name defaults to the state ID.
 
@@ -54,7 +64,7 @@ requests:
   pip.installed: []
 ```
 
-### Pin to a specific version
+#### Pin to a specific version
 
 version makes exact version equality part of the desired state.
 
@@ -64,7 +74,7 @@ requests:
     - version: "2.28.0"
 ```
 
-### Install from a requirements file
+#### Install from a requirements file
 
 requirements installs every dependency listed in the file; name is ignored for install.
 
@@ -76,7 +86,7 @@ myapp-dependencies:
       - pkg.installed:python3-pip
 ```
 
-### Use a virtual environment's pip
+#### Use a virtual environment's pip
 
 bin overrides the pip binary, e.g. to target a venv.
 
@@ -87,7 +97,7 @@ myapp-venv-requests:
     - bin: /opt/myapp/venv/bin/pip
 ```
 
-### Install a package ad hoc
+#### Install a package ad hoc
 
 The bare positional argument is the package name.
 
@@ -95,22 +105,3 @@ The bare positional argument is the package name.
 zester '*' pip.installed requests
 ```
 
-
----
-
-## Notes
-
-> **bin must be on PATH (or an absolute path)**
->
-> The module requires `pip3` (or the configured `bin`) to be resolvable. There is no cache refresh step; run `pip install --upgrade pip` separately if needed.
-
-> **Version comparison is string-based**
->
-> Version comparison uses the `Version:` field from `pip show` output, compared as a string. Pre-release suffixes (e.g. `2.28.0rc1`) are compared literally, not semantically.
-
-
----
-
-## Divergences
-
-- BD-6

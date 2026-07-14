@@ -1,31 +1,13 @@
 ---
-title: "cmd.run"
-description: "Execute a command on the target system and capture its output."
+title: "cmd"
+description: "The cmd.* family of state modules."
 ---
 
 {/* zester-docgen:managed module="cmd.run" */}
 
-**Source**: `pkg/state/modules/cmd/cmd_run.go`
-
----
-
-`cmd.run` executes a command (`command`, defaulting to the state ID) on the target and captures its output. For Salt compatibility `command` also accepts the `name` alias, so `cmd.run: - name: apt-get update` runs `apt-get update` (a declared `command` wins over `name`). Commands are not inherently idempotent, so the `creates` parameter provides an idempotency mechanism: a file path that, when it already exists, means the command has already run and is skipped.
-
-When `args` is empty the command string is run through the shell (`sh -c`), so shell features (pipes, redirection, `&&`) work; when `args` is non-empty the command is executed directly with those arguments (no shell). `cwd` sets the working directory and `env` sets environment variables (merged with the peel process's environment).
-
-`cmd.run` is ALSO a remote-execution module of the same name: the state module documented here is the primary surface, and the execmod sibling is reachable from templates via `salt['cmd.run'](...)` and from the CLI as an ad-hoc `zester '<target>' cmd.run '<command>'`.
-
----
-
-## Parameters
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `command` | `string` | No | State ID | command to execute; the name and cmd aliases are accepted (Salt state and execution-module spellings); defaults to the state ID |
-| `args` | `StringList` | No | *(none)* | additional arguments passed to the command; when empty the command runs via the shell (sh -c), when non-empty it is executed directly with these arguments |
-| `cwd` | `string` | No | *(none)* | working directory for the command; the dir alias (execution-module spelling) is accepted; defaults to the peel process's working directory |
-| `env` | `StringMap` | No | *(none)* | environment variables to set for the command; merged with the peel process's environment |
-| `creates` | `string` | No | *(none)* | a file path that, if it exists, means the command has already run — provides idempotency by skipping execution when the path exists |
+| Module | Summary |
+|---|---|
+| [`cmd.run`](#cmd-run) | Execute a command on the target system and capture its output. |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
@@ -44,26 +26,54 @@ A map of string keys to string values. Scalar values are rendered to strings; a 
 
 ---
 
-## Effects
+## `cmd.run` [#cmd-run]
 
-### Check
+Execute a command on the target system and capture its output.
+
+**Source**: `pkg/state/modules/cmd/cmd_run.go`
+
+---
+
+`cmd.run` executes a command (`command`, defaulting to the state ID) on the target and captures its output. For Salt compatibility `command` also accepts the `name` alias, so `cmd.run: - name: apt-get update` runs `apt-get update` (a declared `command` wins over `name`). Commands are not inherently idempotent, so the `creates` parameter provides an idempotency mechanism: a file path that, when it already exists, means the command has already run and is skipped.
+
+When `args` is empty the command string is run through the shell (`sh -c`), so shell features (pipes, redirection, `&&`) work; when `args` is non-empty the command is executed directly with those arguments (no shell). `cwd` sets the working directory and `env` sets environment variables (merged with the peel process's environment).
+
+`cmd.run` is ALSO a remote-execution module of the same name: the state module documented here is the primary surface, and the execmod sibling is reachable from templates via `salt['cmd.run'](...)` and from the CLI as an ad-hoc `zester '<target>' cmd.run '<command>'`.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `command` | `string` | No | State ID | command to execute; the name and cmd aliases are accepted (Salt state and execution-module spellings); defaults to the state ID |
+| `args` | `StringList` | No | *(none)* | additional arguments passed to the command; when empty the command runs via the shell (sh -c), when non-empty it is executed directly with these arguments |
+| `cwd` | `string` | No | *(none)* | working directory for the command; the dir alias (execution-module spelling) is accepted; defaults to the peel process's working directory |
+| `env` | `StringMap` | No | *(none)* | environment variables to set for the command; merged with the peel process's environment |
+| `creates` | `string` | No | *(none)* | a file path that, if it exists, means the command has already run — provides idempotency by skipping execution when the path exists |
+
+---
+
+### Effects
+
+#### Check
 
 When `creates` is set and the path already exists, reports no change (the command is considered already run); a stat error other than not-exist fails the phase rather than re-running. Otherwise always reports a change — the command needs to run.
 
-### Apply
+#### Apply
 
 Re-evaluates the `creates` guard independently of Check (a watch-forced Apply bypasses Check, and a creates-guarded one-shot must not re-run just because a watched dependency changed): when the path exists, the command is not run and Apply is a no-op. Otherwise it runs the command — through the shell (`sh -c`) when `args` is empty, directly with the arguments otherwise — in `cwd` with `env` merged into the process environment, capturing stdout, stderr, and the exit code into its details. A non-zero exit is returned as an error (with the captured output still in details).
 
-### Revert
+#### Revert
 
 Commands are not revertible: Revert is a no-op (`Changed: false`). Manage any undo logic with a separate state.
 
 
 ---
 
-## Examples
+### Examples
 
-### Run a command ad hoc
+#### Run a command ad hoc
 
 The bare positional argument is the command string.
 
@@ -71,7 +81,7 @@ The bare positional argument is the command string.
 zester 'web*' cmd.run 'df -h'
 ```
 
-### One-shot command guarded by creates
+#### One-shot command guarded by creates
 
 creates makes the command idempotent — it is skipped once the marker path exists.
 
@@ -82,7 +92,7 @@ initialize_database:
     - creates: /var/lib/myapp/.db-initialized
 ```
 
-### Command with arguments and a working directory
+#### Command with arguments and a working directory
 
 A non-empty args list runs the command directly (no shell) in cwd.
 
@@ -96,7 +106,7 @@ build_application:
     - cwd: /opt/myapp/src
 ```
 
-### Command with environment variables after a dependency
+#### Command with environment variables after a dependency
 
 env is merged with the process environment; require orders this after the package install.
 
@@ -115,39 +125,6 @@ run_migrations:
 
 ---
 
-## Notes
+### See Also
 
-> **creates provides idempotency and guards both phases**
->
-> A command is not inherently idempotent. Set `creates` to a path the command produces: once it exists, both Check and Apply skip the command (a watch-forced Apply honors it too). A stat error other than "not found" fails the phase rather than falling through to re-running a destructive one-shot.
-
-> **Shell vs. direct execution depends on args**
->
-> With no `args`, the command string is run through `sh -c`, so pipes, redirection, and `&&` work. With a non-empty `args` list the command is executed directly with those arguments and no shell. Under the uniform decoder a bare-string `args` value (or a CLI `args=...`) is a one-element list — which switches execution to the direct (non-shell) path — where the legacy list assertion silently dropped it and left the shell path in effect (BD-5).
-
-> **Also a remote-execution module**
->
-> `cmd.run` is also an execution module of the same name — reachable from templates via `salt['cmd.run'](...)` and from the CLI as `zester '<target>' cmd.run '<command>'`. The state module documented here (with `creates` idempotency and the Check/Apply/Revert lifecycle) is the primary surface.
-
-> **The name and cmd aliases run the command (Salt idioms)**
->
-> For Salt compatibility the primary `command` accepts the `name` alias: `cmd.run: - name: apt-get update` runs `apt-get update`. Zester previously read only `command` and silently ran the STATE ID when only `name:` was given (quietly wrong); it now executes the named command, matching Salt (BD-8). The execution-module spelling `cmd` is also accepted (so `zester '<target>' cmd.run cmd=uptime` works even though the CLI dispatches through this state module). Source resolution order is `command` > `name` > `cmd`; an empty-string value falls through to the next source before the state-ID fallback.
-
-> **Details returned**
->
-> After execution the result details carry `command` (the command run), `stdout` and `stderr` (captured output), and `exitcode` (the process exit code as a string).
-
-
----
-
-## Divergences
-
-- BD-5
-- BD-6
-- BD-8
-
----
-
-## See Also
-
-- [module.run](/docs/guides/modules/module-run)
+- [module.run](/docs/guides/modules/module#module-run)

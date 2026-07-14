@@ -1,9 +1,21 @@
 ---
-title: "locale.present"
-description: "Ensure a locale is enabled in /etc/locale.gen and generated via locale-gen."
+title: "locale"
+description: "The locale.* family of state modules."
 ---
 
 {/* zester-docgen:managed module="locale.present" */}
+
+| Module | Summary |
+|---|---|
+| [`locale.present`](#locale-present) | Ensure a locale is enabled in /etc/locale.gen and generated via locale-gen. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## `locale.present` [#locale-present]
+
+Ensure a locale is enabled in /etc/locale.gen and generated via locale-gen.
 
 **Source**: `pkg/state/modules/locale/locale_present.go`
 
@@ -13,36 +25,34 @@ description: "Ensure a locale is enabled in /etc/locale.gen and generated via lo
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | locale string to enable (e.g. en_US.UTF-8); defaults to the state ID |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
-
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Runs `locale -a` and reports a change when the locale is absent from its output. When present, and only when `/etc/locale.gen` exists, it ALSO verifies the locale's line in that file is present and uncommented — a locale generated out-of-band (localedef, image bakery) or whose line was later commented out is reported as needing a change, so the next Apply re-enables it. On a system without `/etc/locale.gen` (non-Debian: glibc langpacks, musl), `locale -a` membership alone satisfies the state.
 
-### Apply
+#### Apply
 
 On systems with `/etc/locale.gen`: uncomments the locale's existing line, or appends a new `<locale> UTF-8` line when none matches — the file itself is NEVER created if it does not already exist (a system without it is left without it). Then runs `locale-gen` to regenerate the locale database. Reports Changed with the locale in its details.
 
-### Revert
+#### Revert
 
 Undoes only what this run's Apply actually changed in `/etc/locale.gen` (re-commenting the line it uncommented or appended) and re-runs `locale-gen`. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — a locale.gen line enabled by the distro installer or an admin is never safe to comment out.
 
 
 ---
 
-## Examples
+### Examples
 
-### Enable a locale
+#### Enable a locale
 
 The locale defaults to the state ID.
 
@@ -53,7 +63,7 @@ en_US.UTF-8:
       - pkg.installed:locales
 ```
 
-### Enable a second locale in order
+#### Enable a second locale in order
 
 require orders one locale.gen edit after another (here, de_DE.UTF-8) to avoid concurrent rewrites.
 
@@ -64,7 +74,7 @@ fr_FR.UTF-8:
       - "locale.present:de_DE.UTF-8"
 ```
 
-### Enable a locale ad hoc
+#### Enable a locale ad hoc
 
 The bare positional argument is the locale string.
 
@@ -72,22 +82,3 @@ The bare positional argument is the locale string.
 zester '*' locale.present en_US.UTF-8
 ```
 
-
----
-
-## Notes
-
-> **Debian/Ubuntu only for the locale.gen facet**
->
-> This module targets systems that use `/etc/locale.gen` and `locale-gen` (Debian, Ubuntu). On Red Hat-based systems, locale management uses `localectl` instead — use `cmd.run` with `localectl set-locale` there. The `locale` binary and `locale-gen` must be available on the target (the `locales` package on Debian/Ubuntu).
-
-> **locale.gen is never created from scratch**
->
-> On a system that already has `/etc/locale.gen`, a missing locale line is APPENDED (with a default `UTF-8` encoding suffix). On a system without the file at all, it is never created — the locale.gen facet simply does not apply there, and the state is satisfied by `locale -a` membership alone.
-
-
----
-
-## Divergences
-
-- BD-6

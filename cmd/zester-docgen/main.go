@@ -1,8 +1,11 @@
 // Command zester-docgen generates Zester's self-documenting-module artifacts
 // (keystone spec §8) from the live module registries: the modules guide
 // meta.json (wholesale nav, all 47 built-in state modules), a marker-guarded
-// MDX page per module that has a registered modschema.Spec, the combined
-// JSON Schema artifact, and pkg/moduledoc's embedded docdata.json.
+// MDX page per module FAMILY (Salt-style family tree — every member of a
+// family on one page, under stable per-member anchors), the combined
+// JSON Schema artifact, and pkg/moduledoc's embedded docdata.json. It also
+// deletes marker-carrying pages whose slug is no longer produced, so a slug
+// scheme change cannot strand stale generated pages.
 //
 // Run from the repo root: go run ./cmd/zester-docgen [--claim=module1,module2]
 //
@@ -168,26 +171,50 @@ func run(root string, claimed map[string]bool) error {
 	}
 
 	// Pages: gated on spec presence, state modules only (see stateSpecd above).
-	// Group by page slug so the N:1 PageGroups (file.comment/file.uncomment share
-	// file-comment) render ONE combined page instead of the members overwriting
-	// each other. Slug order follows stateSpecd (registration) order for
-	// determinism.
-	slugOrder, bySlug, err := groupBySlug(stateSpecd)
+	// ONE page per family (Salt-style family tree): group by the module name's
+	// family segment, in stateSpecd (sorted-name) order — members render
+	// alphabetically on their family page, deterministically.
+	famOrder, byFamily, err := groupByFamily(stateSpecd)
 	if err != nil {
 		return err
 	}
-	for _, slug := range slugOrder {
-		mis := bySlug[slug]
+	navSlugs := map[string]bool{}
+	for _, s := range allPageSlugs() {
+		navSlugs[s] = true
+	}
+	produced := map[string]bool{}
+	for _, family := range famOrder {
+		mis := byFamily[family]
 		claim := false
 		for _, mi := range mis {
 			if claimed[mi.Module] {
 				claim = true
 			}
 		}
+		slug := familySlug(mis[0].Module)
+		if extraPages[slug] {
+			return fmt.Errorf("docgen: family slug %q collides with a hand-maintained extra page", slug)
+		}
+		if !navSlugs[slug] {
+			return fmt.Errorf("docgen: family slug %q is not listed in the families nav (add it to a section)", slug)
+		}
 		path := filepath.Join(modulesDir, slug+".mdx")
-		if err := writeModulePageGroup(path, mis, claim, isDistinctParamSlug(slug)); err != nil {
+		if err := writeFamilyPage(path, family, mis, claim); err != nil {
 			return err
 		}
+		produced[slug] = true
+	}
+
+	// Stale-page cleanup: a slug no longer produced (the per-module era's
+	// file-managed, test-helpers, …) leaves its marker-carrying page behind —
+	// delete it so the nav, the directory, and the produced set stay one truth.
+	// Markerless (hand-written) pages are never touched.
+	removed, err := cleanupStalePages(modulesDir, produced)
+	if err != nil {
+		return err
+	}
+	for _, slug := range removed {
+		fmt.Fprintf(os.Stderr, "zester-docgen: removed stale generated page %s.mdx\n", slug)
 	}
 
 	// The FIRST-EVER execution-module reference page: ONE combined page under
@@ -225,23 +252,23 @@ func run(root string, claimed map[string]bool) error {
 	return nil
 }
 
-// groupBySlug groups the state-module ModuleInfos by their page slug (the §8 N:1
-// PageGroups: several module names — file.comment/file.uncomment, host.present/
-// host.absent, … — share one page). first-seen order is preserved so the
-// generated page order is deterministic (it follows stateSpecd registration
-// order). A module absent from moduleToSlug is a generation error rather than a
-// silently missing page.
-func groupBySlug(stateSpecd []modschema.ModuleInfo) (order []string, bySlug map[string][]modschema.ModuleInfo, err error) {
-	bySlug = map[string][]modschema.ModuleInfo{}
+// groupByFamily groups the state-module ModuleInfos by their family (the
+// module name's first dotted segment). First-seen order is preserved so the
+// generated page order is deterministic (it follows stateSpecd sorted-name
+// order — members render alphabetically within their family page). A module
+// absent from the stateModules membership table is a generation error rather
+// than a silently unlinkable page.
+func groupByFamily(stateSpecd []modschema.ModuleInfo) (order []string, byFamily map[string][]modschema.ModuleInfo, err error) {
+	byFamily = map[string][]modschema.ModuleInfo{}
 	for _, mi := range stateSpecd {
-		slug, ok := moduleToSlug[mi.Module]
-		if !ok {
-			return nil, nil, fmt.Errorf("docgen: module %s has no page-group slug", mi.Module)
+		if !stateModules[mi.Module] {
+			return nil, nil, fmt.Errorf("docgen: module %s is not in the stateModules membership table (add it)", mi.Module)
 		}
-		if _, seen := bySlug[slug]; !seen {
-			order = append(order, slug)
+		family := moduleFamily(mi.Module)
+		if _, seen := byFamily[family]; !seen {
+			order = append(order, family)
 		}
-		bySlug[slug] = append(bySlug[slug], mi)
+		byFamily[family] = append(byFamily[family], mi)
 	}
-	return order, bySlug, nil
+	return order, byFamily, nil
 }

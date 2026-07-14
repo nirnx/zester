@@ -74,7 +74,7 @@ const execPageIntro = "Execution modules are Zester's imperative remote-executio
 	"positional argument becomes the request ID, which is also the primary parameter's default (the package " +
 	"name, service name, fact key, and so on). A name that matches an execution function and is not a " +
 	"registered state module dispatches here; state-module names (like `cmd.run`) always win, so `cmd.run` " +
-	"is documented on its [state module page](/docs/guides/modules/cmd-run).\n"
+	"is documented on its [state module page](/docs/guides/modules/cmd#cmd-run).\n"
 
 // orderExecInfos returns the execution-only ModuleInfos in execPageOrder,
 // verifying every one is placed (a spec-registered execution-only function with
@@ -104,13 +104,15 @@ func orderExecInfos(execOnly []modschema.ModuleInfo) ([]modschema.ModuleInfo, er
 
 // renderExecModulesPage renders the combined execution-modules reference page:
 // frontmatter → one managed marker per function → intro → per-function body
-// (## banner → Source → Description → ### Parameters → ### Effects → ###
-// Examples → ### Notes → ### Divergences → ### See Also). It reuses the shared
-// section renderers at nestedSectionLevel (they handle the KindExec cases: no
-// requisites boilerplate, an Execution-only Effects block), so each function's
-// own sections render one level below its "## `module`" banner (M5: no
-// colliding H2s between the banner and its own Parameters/Effects/… headings)
-// while the exec page and the state pages stay one shared anatomy.
+// (## banner with an explicit stable anchor → Source → Description → ###
+// Parameters → ### Effects → ### Examples → ### See Also; rendered pages
+// carry NO Notes and NO Divergences — those Doc fields remain on the terminal
+// sys.doc / `zester doc` surface). It reuses the shared section renderers at
+// nestedSectionLevel (they handle the KindExec cases: no requisites
+// boilerplate, an Execution-only Effects block), so each function's own
+// sections render one level below its "## `module`" banner (M5: no colliding
+// H2s between the banner and its own Parameters/Effects/… headings) while the
+// exec page and the state pages stay one shared anatomy.
 func renderExecModulesPage(infos []modschema.ModuleInfo) (string, error) {
 	ordered, err := orderExecInfos(infos)
 	if err != nil {
@@ -129,15 +131,13 @@ func renderExecModulesPage(infos []modschema.ModuleInfo) (string, error) {
 	b.WriteString(execPageIntro)
 
 	for _, mi := range ordered {
-		fmt.Fprintf(&b, "\n---\n\n## `%s`\n\n", mi.Module)
+		fmt.Fprintf(&b, "\n---\n\n## `%s` [#%s]\n\n", mi.Module, memberAnchor(mi.Module))
 		fmt.Fprintf(&b, "**Source**: `%s`\n", execSourcePath(mi.Module))
 		renderDescriptionSection(&b, mi.Doc.Description)
 		renderParamsSection(&b, mi, nestedSectionLevel)
 		renderParamTypesSection(&b, mi, nestedSectionLevel)
 		renderPageEffects(&b, mi.Doc.Effects, nestedSectionLevel)
 		renderExamplesSection(&b, mi.Doc.Examples, nestedSectionLevel)
-		renderNotesSection(&b, mi.Doc.Notes, nestedSectionLevel)
-		renderDivergencesSection(&b, mi.Doc.Divergences, nestedSectionLevel)
 		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso, nestedSectionLevel); err != nil {
 			return "", err
 		}

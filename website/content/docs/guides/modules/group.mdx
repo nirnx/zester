@@ -1,28 +1,15 @@
 ---
-title: "group.present"
-description: "Ensure a group exists with the specified attributes and membership."
+title: "group"
+description: "The group.* family of state modules."
 ---
 
+{/* zester-docgen:managed module="group.absent" */}
 {/* zester-docgen:managed module="group.present" */}
 
-**Source**: `pkg/state/modules/group/group_present.go`
-
----
-
-`group.present` ensures the named group exists and converges its numeric GID and membership. The group name defaults to the state ID. `gid` is a numeric group ID, compared and set only when non-zero. `members` declares an EXACT membership (extra members are removed, missing members added), while `addusers` and `delusers` adjust membership additively without disturbing other members. `system` selects a low-GID system group and is honored only at creation time.
-
----
-
-## Parameters
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | `string` | No | State ID | group name; defaults to the state ID |
-| `gid` | `int` | No | *(none)* | numeric group ID; only compared and set when non-zero (0 auto-assigns) |
-| `system` | `bool` | No | *(none)* | create a system group (low GID range); used only during creation; a boolean that also accepts the integers 1 (true) and 0 (false) |
-| `members` | `StringList` | No | *(none)* | exact membership list — extra members are removed and missing members are added |
-| `addusers` | `StringList` | No | *(none)* | users to add without affecting other existing members |
-| `delusers` | `StringList` | No | *(none)* | users to remove without affecting other existing members |
+| Module | Summary |
+|---|---|
+| [`group.absent`](#group-absent) | Ensure a group does not exist on the system. |
+| [`group.present`](#group-present) | Ensure a group exists with the specified attributes and membership. |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
@@ -37,26 +24,129 @@ A list of strings. Accepts a single string (a one-element list), a list of strin
 
 ---
 
-## Effects
+## `group.absent` [#group-absent]
 
-### Check
+Ensure a group does not exist on the system.
+
+**Source**: `pkg/state/modules/group/group_absent.go`
+
+---
+
+`group.absent` ensures the named group is removed. The group name defaults to the state ID.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | group name to remove; defaults to the state ID |
+
+---
+
+### Effects
+
+#### Check
+
+Looks up the group and reports a change only when it exists; an already-absent group needs no change.
+
+#### Apply
+
+Re-verifies existence (a self-contained flow: a watch-forced Apply bypasses Check, and deleting a nonexistent group would fail), then deletes the group through the group provider. An already-absent group is a clean no-op. Reports the group in its details.
+
+#### Revert
+
+Cannot restore a deleted group (its GID and membership are not recorded), so Revert is an explicit no-op.
+
+
+---
+
+### Examples
+
+#### Remove a group
+
+The group name defaults to the state ID.
+
+```yaml
+oldgroup:
+  group.absent: []
+```
+
+#### Remove a group after removing its users
+
+require orders the user removals ahead of the group deletion.
+
+```yaml
+decommission-team:
+  group.absent:
+    - name: oldteam
+    - require:
+      - "user.absent:alice"
+      - "user.absent:bob"
+```
+
+#### Remove a group ad hoc
+
+The bare positional argument is the group name.
+
+```bash
+zester '*' group.absent tempgroup
+```
+
+
+---
+
+### See Also
+
+- [group.present](/docs/guides/modules/group#group-present)
+
+---
+
+## `group.present` [#group-present]
+
+Ensure a group exists with the specified attributes and membership.
+
+**Source**: `pkg/state/modules/group/group_present.go`
+
+---
+
+`group.present` ensures the named group exists and converges its numeric GID and membership. The group name defaults to the state ID. `gid` is a numeric group ID, compared and set only when non-zero. `members` declares an EXACT membership (extra members are removed, missing members added), while `addusers` and `delusers` adjust membership additively without disturbing other members. `system` selects a low-GID system group and is honored only at creation time.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | group name; defaults to the state ID |
+| `gid` | `int` | No | *(none)* | numeric group ID; only compared and set when non-zero (0 auto-assigns) |
+| `system` | `bool` | No | *(none)* | create a system group (low GID range); used only during creation; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `members` | `StringList` | No | *(none)* | exact membership list — extra members are removed and missing members are added |
+| `addusers` | `StringList` | No | *(none)* | users to add without affecting other existing members |
+| `delusers` | `StringList` | No | *(none)* | users to remove without affecting other existing members |
+
+---
+
+### Effects
+
+#### Check
 
 Looks up the group. Reports a change when it does not exist; otherwise it compares, in order: `gid` (only when non-zero); the exact `members` list (when declared); every `addusers` entry (a listed user that is not a member is drift); and every `delusers` entry (a listed user that IS a member is drift).
 
-### Apply
+#### Apply
 
 Creates the group with the declared GID and system flag when it does not exist (adding `members`/`addusers` afterward and recording the creation for revert); a create that races another state at the same DAG level re-looks-up and falls through to the modify path. For an existing group it builds a modify set from only the drifted GID and membership (arming the revert memo), and a fully converged group is a clean no-op that leaves the memo unarmed. Reports the group and the action (created/modified) in its details.
 
-### Revert
+#### Revert
 
 Undoes only what this run's Apply recorded. A group Apply created is deleted; a group Apply modified is restored by diffing the current group against the memoized original and reverting only the still-drifted GID AND membership (so an added member is removed and a removed member restored). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
 
 
 ---
 
-## Examples
+### Examples
 
-### Create a system group
+#### Create a system group
 
 The group name defaults to the state ID; system allocates a low GID.
 
@@ -66,7 +156,7 @@ docker:
     - system: true
 ```
 
-### Group with an exact membership list
+#### Group with an exact membership list
 
 members declares exact membership — users not listed are removed.
 
@@ -80,7 +170,7 @@ webadmins:
       - charlie
 ```
 
-### Add and remove members without disturbing others
+#### Add and remove members without disturbing others
 
 addusers/delusers adjust membership additively; require orders user creation first.
 
@@ -95,7 +185,7 @@ developers:
       - "user.present:newdev"
 ```
 
-### Create a group ad hoc
+#### Create a group ad hoc
 
 The bare positional argument is the group name; key=value pairs set attributes.
 
@@ -106,30 +196,7 @@ zester 'db*' group.present dbadmin gid=2000
 
 ---
 
-## Notes
+### See Also
 
-> **members is exact; addusers/delusers are additive**
->
-> `members` enforces an EXACT membership — a user present on the system but absent from the list is removed. Use `addusers`/`delusers` to adjust membership without touching other members.
-
-> **A bare-string member list is one member**
->
-> A scalar `members: alice` decodes as the single-element list `[alice]` (and enables exact-membership management), a mixed scalar list renders each element to a string, and a nested list/map element is rejected rather than silently dropped (BD-5).
-
-
----
-
-## Divergences
-
-- BD-1
-- BD-2
-- BD-5
-- BD-6
-- BD-7
-
----
-
-## See Also
-
-- [group.absent](/docs/guides/modules/group-absent)
-- [user.present](/docs/guides/modules/user-present)
+- [group.absent](/docs/guides/modules/group#group-absent)
+- [user.present](/docs/guides/modules/user#user-present)

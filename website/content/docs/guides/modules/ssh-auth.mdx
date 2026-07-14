@@ -1,16 +1,34 @@
 ---
-title: "ssh_auth.absent / ssh_auth.present"
-description: "Ensure an SSH public key is absent from a user's authorized_keys. Ensure an SSH public key is present in a user's authorized_keys."
+title: "ssh_auth"
+description: "The ssh_auth.* family of state modules."
 ---
 
 {/* zester-docgen:managed module="ssh_auth.absent" */}
 {/* zester-docgen:managed module="ssh_auth.present" */}
 
-`ssh_auth.absent` and `ssh_auth.present` are documented together on this page; each has its own parameters.
+| Module | Summary |
+|---|---|
+| [`ssh_auth.absent`](#ssh-auth-absent) | Ensure an SSH public key is absent from a user's authorized_keys. |
+| [`ssh_auth.present`](#ssh-auth-present) | Ensure an SSH public key is present in a user's authorized_keys. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## `ssh_auth.absent`
+## Family Parameters
+
+These parameters are declared once by the family's shared parameter components — every member that exposes one accepts the identical contract.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `user` | `string` | No | *(none)* | account whose authorized_keys is managed; user or config is required |
+| `config` | `string` | No | *(none)* | explicit authorized_keys path; user or config is required (config takes precedence over the user's home) |
+
+---
+
+## `ssh_auth.absent` [#ssh-auth-absent]
+
+Ensure an SSH public key is absent from a user's authorized_keys.
 
 **Source**: `pkg/state/modules/ssh_auth/ssh_auth_absent.go`
 
@@ -25,10 +43,8 @@ description: "Ensure an SSH public key is absent from a user's authorized_keys. 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | public key blob (or full key line) to remove; matched on the blob; defaults to the state ID |
-| `user` | `string` | No | *(none)* | account whose authorized_keys is managed; user or config is required |
-| `config` | `string` | No | *(none)* | explicit authorized_keys path; user or config is required (config takes precedence over the user's home) |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+`ssh_auth.absent` also accepts the family parameters `user`, `config` — see [Family Parameters](#family-parameters).
 
 ---
 
@@ -72,32 +88,15 @@ zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
 
 ---
 
-### Notes
-
-> **Comment and blank lines are preserved**
->
-> The `authorized_keys` file is rewritten in memory with existing comment (`#`) and blank lines kept verbatim; every line carrying the key blob is removed.
-
-> **Divergences from Salt**
->
-> `config` is used as the LITERAL `authorized_keys` path (Salt's `config` is relative to the user's home directory). The `user` is resolved via the peel's OS user database. Salt's `options` and `source` parameters are not supported.
-
-
----
-
-### Divergences
-
-- BD-6
-
----
-
 ### See Also
 
-- [ssh_auth.present](/docs/guides/modules/ssh-auth)
+- [ssh_auth.present](/docs/guides/modules/ssh-auth#ssh-auth-present)
 
 ---
 
-## `ssh_auth.present`
+## `ssh_auth.present` [#ssh-auth-present]
+
+Ensure an SSH public key is present in a user's authorized_keys.
 
 **Source**: `pkg/state/modules/ssh_auth/ssh_auth_present.go`
 
@@ -112,12 +111,10 @@ zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | public key blob (the base64 body) or a full key line; defaults to the state ID |
-| `user` | `string` | No | *(none)* | account whose authorized_keys is managed; user or config is required |
-| `config` | `string` | No | *(none)* | explicit authorized_keys path; user or config is required (config takes precedence over the user's home) |
 | `enc` | `string` | No | `ssh-rsa` | key encoding/type (ssh-rsa, ssh-ed25519, …); defaults to ssh-rsa; ignored when name is a full key line |
 | `comment` | `string` | No | *(none)* | optional trailing comment on the key line |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+`ssh_auth.present` also accepts the family parameters `user`, `config` — see [Family Parameters](#family-parameters).
 
 ---
 
@@ -172,33 +169,6 @@ zester 'web*' ssh_auth.present AAAAB3Nza... user=deploy enc=ssh-rsa
 
 ---
 
-### Notes
-
-> **Identity is the key blob**
->
-> The managed line's identity is the key BLOB (its base64 body). Re-running with a different `comment` or `enc` replaces the matching line in place rather than adding a duplicate. Provide either a bare blob (combined with `enc`/`comment`) or a full key line (used verbatim).
-
-> **user or config selects the file**
->
-> The managed file is resolved from `config` (an explicit authorized_keys path) when set, otherwise from the `user`'s home directory (`~user/.ssh/authorized_keys`). One of the two is required.
-
-> **Comment and blank lines are preserved**
->
-> The `authorized_keys` file is rewritten in memory: existing comment (`#`) and blank lines are kept verbatim, and only the line carrying the key blob is added, replaced in place, or deduplicated.
-
-> **Divergences from Salt**
->
-> `config` is used as the LITERAL `authorized_keys` path (so it must be absolute to be meaningful), whereas Salt's `config` is relative to the user's home directory (default `.ssh/authorized_keys`). Salt's `options` (key options such as `no-pty`) and `source` (key-file URL) parameters are not supported. The `user` is resolved via the peel's OS user database, and the `.ssh` directory and file are written by the peel's file provider — ownership is not changed to the target user.
-
-
----
-
-### Divergences
-
-- BD-6
-
----
-
 ### See Also
 
-- [ssh_auth.absent](/docs/guides/modules/ssh-auth)
+- [ssh_auth.absent](/docs/guides/modules/ssh-auth#ssh-auth-absent)

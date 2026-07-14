@@ -21,11 +21,11 @@ description: "Imperative remote-execution functions (Salt-style ad-hoc commands)
 
 Execution modules are Zester's imperative remote-execution functions — the Salt-style ad-hoc commands you run directly against peels, without writing a state file. Unlike state modules they have no Check/Apply/Revert lifecycle: each call runs a query or action and returns a plain string result.
 
-Invoke one from the CLI as `zester '<target>' <module.function> [id] [key=value ...]`. The first positional argument becomes the request ID, which is also the primary parameter's default (the package name, service name, fact key, and so on). A name that matches an execution function and is not a registered state module dispatches here; state-module names (like `cmd.run`) always win, so `cmd.run` is documented on its [state module page](/docs/guides/modules/cmd-run).
+Invoke one from the CLI as `zester '<target>' <module.function> [id] [key=value ...]`. The first positional argument becomes the request ID, which is also the primary parameter's default (the package name, service name, fact key, and so on). A name that matches an execution function and is not a registered state module dispatches here; state-module names (like `cmd.run`) always win, so `cmd.run` is documented on its [state module page](/docs/guides/modules/cmd#cmd-run).
 
 ---
 
-## `test.echo`
+## `test.echo` [#test-echo]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -65,7 +65,7 @@ zester '*' test.echo hello
 
 ---
 
-## `test.version`
+## `test.version` [#test-version]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -97,7 +97,7 @@ zester '*' test.version
 
 ---
 
-## `test.true`
+## `test.true` [#test-true]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -129,11 +129,11 @@ zester '*' test.true
 
 ### See Also
 
-- [test.false](/docs/guides/execution-modules)
+- [test.false](/docs/guides/execution-modules#test-false)
 
 ---
 
-## `test.false`
+## `test.false` [#test-false]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -165,11 +165,11 @@ zester '*' test.false
 
 ### See Also
 
-- [test.true](/docs/guides/execution-modules)
+- [test.true](/docs/guides/execution-modules#test-true)
 
 ---
 
-## `pkg.version`
+## `pkg.version` [#pkg-version]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -211,11 +211,11 @@ zester '*' pkg.version nginx
 
 ### See Also
 
-- [pkg.installed](/docs/guides/modules/pkg-installed)
+- [pkg.installed](/docs/guides/modules/pkg#pkg-installed)
 
 ---
 
-## `pkg.list_pkgs`
+## `pkg.list_pkgs` [#pkg-list-pkgs]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -247,11 +247,11 @@ zester 'web-01' pkg.list_pkgs
 
 ### See Also
 
-- [pkg.installed](/docs/guides/modules/pkg-installed)
+- [pkg.installed](/docs/guides/modules/pkg#pkg-installed)
 
 ---
 
-## `service.status`
+## `service.status` [#service-status]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -293,11 +293,11 @@ zester 'web-01' service.status nginx
 
 ### See Also
 
-- [service.running](/docs/guides/modules/service-running)
+- [service.running](/docs/guides/modules/service#service-running)
 
 ---
 
-## `service.start`
+## `service.start` [#service-start]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -337,11 +337,11 @@ zester 'web-01' service.start nginx
 
 ### See Also
 
-- [service.running](/docs/guides/modules/service-running)
+- [service.running](/docs/guides/modules/service#service-running)
 
 ---
 
-## `service.stop`
+## `service.stop` [#service-stop]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -381,11 +381,11 @@ zester 'web-01' service.stop nginx
 
 ### See Also
 
-- [service.dead](/docs/guides/modules/service-dead)
+- [service.dead](/docs/guides/modules/service#service-dead)
 
 ---
 
-## `service.restart`
+## `service.restart` [#service-restart]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -425,11 +425,11 @@ zester 'web-01' service.restart nginx
 
 ### See Also
 
-- [service.running](/docs/guides/modules/service-running)
+- [service.running](/docs/guides/modules/service#service-running)
 
 ---
 
-## `disk.usage`
+## `disk.usage` [#disk-usage]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -477,7 +477,7 @@ zester 'web-01' disk.usage /var
 
 ---
 
-## `grains.item`
+## `grains.item` [#grains-item]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -519,11 +519,11 @@ zester '*' grains.item os.family
 
 ### See Also
 
-- [grains.items](/docs/guides/execution-modules)
+- [grains.items](/docs/guides/execution-modules#grains-items)
 
 ---
 
-## `grains.items`
+## `grains.items` [#grains-items]
 
 **Source**: `pkg/execmod/builtins.go`
 
@@ -555,11 +555,11 @@ zester 'web-01' grains.items
 
 ### See Also
 
-- [grains.item](/docs/guides/execution-modules)
+- [grains.item](/docs/guides/execution-modules#grains-item)
 
 ---
 
-## `sys.doc`
+## `sys.doc` [#sys-doc]
 
 **Source**: `pkg/execmod/sysdoc.go`
 
@@ -617,11 +617,11 @@ zester 'web-01' sys.doc
 
 ### See Also
 
-- [sys.list_functions](/docs/guides/execution-modules)
+- [sys.list_functions](/docs/guides/execution-modules#sys-list-functions)
 
 ---
 
-## `sys.list_functions`
+## `sys.list_functions` [#sys-list-functions]
 
 **Source**: `pkg/execmod/sysdoc.go`
 
@@ -653,4 +653,4 @@ zester 'web-01' sys.list_functions
 
 ### See Also
 
-- [sys.doc](/docs/guides/execution-modules)
+- [sys.doc](/docs/guides/execution-modules#sys-doc)

@@ -1,0 +1,278 @@
+---
+title: "service"
+description: "The service.* family of state modules."
+---
+
+{/* zester-docgen:managed module="service.dead" */}
+{/* zester-docgen:managed module="service.enabled" */}
+{/* zester-docgen:managed module="service.running" */}
+
+| Module | Summary |
+|---|---|
+| [`service.dead`](#service-dead) | Ensure a service is stopped, optionally disabling it at boot. |
+| [`service.enabled`](#service-enabled) | Ensure a service is enabled to start at boot. |
+| [`service.running`](#service-running) | Ensure a service is running, optionally managing its boot enablement. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Parameter Types
+
+### TriState
+
+A three-valued boolean: unset, true, or false. Accepts a bool; the truthy/falsy string set (true/yes/1/on, false/no/0/off, case-insensitive); or an integer, where 1 is declared-true and 0 is declared-false — any other integer (for example 2) is a typed error, never silently ignored. The unset state lets a module tell "not specified" apart from an explicit false.
+
+
+---
+
+## `service.dead` [#service-dead]
+
+Ensure a service is stopped, optionally disabling it at boot.
+
+**Source**: `pkg/state/modules/service/service_dead.go`
+
+---
+
+`service.dead` ensures the named service is stopped. The service name defaults to the state ID. Its `enable` parameter inverts service.running's default: omitting it (or `enable: true`) stops the service but leaves its boot enablement untouched, while `enable: false` ALSO disables it at boot — the common case for retiring a unit so it does not resurrect on the next reboot.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | service unit name (defaults to the state ID) |
+| `enable` | `TriState` | No | *(none)* | boot-enablement intent: enable:false also disables the unit; unset or true leaves it alone |
+
+---
+
+### Effects
+
+#### Check
+
+Reports a change when the service is running. When `enable: false` is declared, it also reports a stopped-but-still-enabled unit as drift (it would resurrect at the next boot); an unset or true enable never compares boot state.
+
+#### Apply
+
+Stops the service if it is running. When `enable: false` is declared and the unit is still enabled, it also disables it at boot. An already stopped-and-converged service is a clean no-op. Reports the service manager in its details.
+
+#### Revert
+
+Undoes only the actions this run's Apply recorded: it re-enables a unit it disabled and restarts one it stopped. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never starts the very service the state declares dead.
+
+
+---
+
+### Examples
+
+#### Stop a service, leave boot state alone
+
+With enable unset, only the running state is managed.
+
+```yaml
+apache2:
+  service.dead: []
+```
+
+#### Stop and disable at boot
+
+enable: false is service.dead's inversion — it also disables the unit so it does not resurrect on reboot.
+
+```yaml
+apache2:
+  service.dead:
+    - enable: false
+```
+
+#### Stop a conflicting service before starting a replacement
+
+require_in orders this service.dead ahead of the replacement's service.running: apache2 is stopped and disabled at boot before nginx starts, so the two never contend for the same port.
+
+```yaml
+apache2:
+  service.dead:
+    - enable: false
+    - require_in:
+      - "service.running:nginx"
+```
+
+#### Stop a service ad hoc
+
+The bare positional argument is the service name.
+
+```bash
+zester '*' service.dead apache2
+```
+
+
+---
+
+### See Also
+
+- [service.running](/docs/guides/modules/service#service-running)
+- [service.enabled](/docs/guides/modules/service#service-enabled)
+
+---
+
+## `service.enabled` [#service-enabled]
+
+Ensure a service is enabled to start at boot.
+
+**Source**: `pkg/state/modules/service/service_enabled.go`
+
+---
+
+`service.enabled` ensures a service (`name`, defaulting to the state ID) is enabled to start at boot. It manages ONLY the boot-time enablement — it does not start, stop, or otherwise affect whether the service is currently running (use `service.running` for that).
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | service name to enable at boot; defaults to the state ID |
+
+---
+
+### Effects
+
+#### Check
+
+Reads the service's boot-enablement (via the service manager, e.g. `systemctl is-enabled --quiet <service>`). Reports no change when it is already enabled, and a change when it is not.
+
+#### Apply
+
+Re-reads the enablement (a self-contained flow: a watch-forced Apply bypasses Check). An already-enabled service is a clean no-op that does NOT arm the revert memo. Otherwise it enables the service and records that this run did so, reporting the service name and manager in its details.
+
+#### Revert
+
+Disables the service ONLY when this run's Apply actually enabled it (the revert memo). A fresh instance (a standalone revert) or a no-op Apply recorded nothing and is an explicit clean no-op — it never disables a service this run did not enable.
+
+
+---
+
+### Examples
+
+#### Enable a service at boot
+
+The service name defaults to the state ID.
+
+```yaml
+sshd:
+  service.enabled: []
+```
+
+#### Enable a service under a descriptive ID
+
+name selects the managed service when the state ID is not the service name.
+
+```yaml
+enable-nginx-boot:
+  service.enabled:
+    - name: nginx
+```
+
+#### Enable a service ad hoc
+
+The bare positional argument is the service name.
+
+```bash
+zester 'web*' service.enabled nginx
+```
+
+
+---
+
+### See Also
+
+- [service.running](/docs/guides/modules/service#service-running)
+- [service.dead](/docs/guides/modules/service#service-dead)
+
+---
+
+## `service.running` [#service-running]
+
+Ensure a service is running, optionally managing its boot enablement.
+
+**Source**: `pkg/state/modules/service/service_running.go`
+
+---
+
+`service.running` ensures the named service is started, and — when a watch requisite force-applies it — restarts it instead. The service name defaults to the state ID. The `enable` parameter is three-valued: omit it to leave the unit's boot enablement untouched, set `enable: true` to also enable it at boot, or `enable: false` to actively disable it. Converging an enable-only drift on an already-running service does NOT restart it.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | service unit name (defaults to the state ID) |
+| `enable` | `TriState` | No | *(none)* | boot-enablement intent: unset leaves it alone, true enables, false disables |
+
+---
+
+### Effects
+
+#### Check
+
+Reports a change when the service is not running. When `enable` is declared, it also compares boot enablement and reports drift (not-enabled under `enable: true`, or still-enabled under `enable: false`); an undeclared `enable` is never compared, so a running service never churns over boot state it does not manage.
+
+#### Apply
+
+Converges the declared `enable` facet first (enabling or disabling at boot as declared). Then, if the service is not running, it starts it; if it is already running and only the enable facet drifted, it enables/disables WITHOUT restarting; otherwise (a watch-forced apply on a healthy service) it restarts. Reports the action taken and the service manager in its details.
+
+#### Revert
+
+Undoes only the actions this run's Apply recorded: it re-disables a service it enabled, re-enables one it disabled, and stops one it started. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never stops a service it did not start.
+
+
+---
+
+### Examples
+
+#### Ensure a service is running
+
+The service name defaults to the state ID.
+
+```yaml
+nginx:
+  service.running: []
+```
+
+#### Run and enable at boot
+
+enable: true also enables the unit at boot; an enable-only drift converges without restarting.
+
+```yaml
+sshd:
+  service.running:
+    - enable: true
+```
+
+#### Restart on config change
+
+A watch requisite force-applies the state, which restarts (rather than starts) the running service.
+
+```yaml
+nginx:
+  service.running:
+    - watch:
+      - "file.managed:/etc/nginx/nginx.conf"
+```
+
+#### Ensure running ad hoc
+
+The bare positional argument is the service name.
+
+```bash
+zester '*' service.running nginx
+```
+
+
+---
+
+### See Also
+
+- [service.dead](/docs/guides/modules/service#service-dead)
+- [service.enabled](/docs/guides/modules/service#service-enabled)

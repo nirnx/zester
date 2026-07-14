@@ -4,6 +4,21 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Changed
+- **Module reference pages are now one page per FAMILY (Salt-style tree).**
+  `modules → pkg` renders every `pkg.*` state on a single page: a function
+  index up top, a **Family Parameters** section rendered once from the shared
+  family components (with per-member tables for member-supplied dimensions —
+  e.g. `mode` defaults 0644/0755 — and exposure lists when not every member
+  takes a parameter), then per-member sections with stable anchors
+  (`/docs/guides/modules/file#file-managed`). 44 per-module pages collapse
+  into 19 family pages; docgen deletes stale generated pages automatically.
+  Notes and Divergences (BD ids) are no longer rendered on the website pages
+  — they remain in the module `Doc` for spec bookkeeping and in the terminal
+  `sys.doc`/`zester doc` output.
+
 ## [0.6.5] - 2026-07-14
 
 ### Added

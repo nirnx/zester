@@ -1,9 +1,21 @@
 ---
-title: "archive.extracted"
-description: "Extract a tar or zip archive (from a local path or URL) into a target directory."
+title: "archive"
+description: "The archive.* family of state modules."
 ---
 
 {/* zester-docgen:managed module="archive.extracted" */}
+
+| Module | Summary |
+|---|---|
+| [`archive.extracted`](#archive-extracted) | Extract a tar or zip archive (from a local path or URL) into a target directory. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## `archive.extracted` [#archive-extracted]
+
+Extract a tar or zip archive (from a local path or URL) into a target directory.
 
 **Source**: `pkg/state/modules/archive/archive_extracted.go`
 
@@ -13,7 +25,7 @@ description: "Extract a tar or zip archive (from a local path or URL) into a tar
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -24,30 +36,28 @@ description: "Extract a tar or zip archive (from a local path or URL) into a tar
 | `source_hash` | `string` | No | *(none)* | declared hash of the source archive (e.g. sha256=&lt;hex&gt;); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes |
 | `makedirs` | `bool` | No | *(none)* | create the target directory (and parents, mode 0755) before extracting; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
-
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 With `if_missing` set: reports a change unless that path exists (the target-directory fallback is not consulted). Without it: reports a change unless the target directory exists — and a directory this run's `makedirs` created ahead of a FAILED extraction attempt does not count (a retried Apply proceeds rather than latching on its own directory). When `source_hash` is declared, ALSO requires a marker file recording that exact value to exist inside the target — an unset or mismatched marker reports a change even if the directory/`if_missing` guard passed, so bumping `source`/`source_hash` re-extracts.
 
-### Apply
+#### Apply
 
 Re-evaluates the same guard as Check (a watch-forced apply bypasses Check entirely, and an already-extracted archive must be a clean no-op — never a re-download/re-extract over local modifications). When extraction is needed: creates the target directory (mode 0755) when `makedirs` is set and it does not already exist; downloads a remote `source` (http/https/ftp) to a temp file via `curl -fSL`, falling back to `wget` when curl is unavailable; extracts with `unzip -o <archive> -d <dir>` (zip) or `tar -xf <archive> -C <dir>` (tar), inferring the format from the source name when `archive_format` is `auto` (`.zip` → zip; `.tgz`/`.tbz2`/`.txz`/anything containing `.tar` → tar; anything else defaults to tar); a non-zero exit fails the state. Only AFTER a successful extraction does it write the `source_hash` marker (a failed attempt never latches the state as done). Reports the source, target, and resolved format in its details.
 
-### Revert
+#### Revert
 
 If Apply created the target directory (via `makedirs`), removes it recursively. Otherwise an explicit no-op (`Changed: false`) — individual extracted files are not tracked, so there is nothing else safe to remove.
 
 
 ---
 
-## Examples
+### Examples
 
-### Extract a release tarball once
+#### Extract a release tarball once
 
 if_missing points at a file the archive actually creates, the real extraction marker.
 
@@ -59,7 +69,7 @@ if_missing points at a file the archive actually creates, the real extraction ma
     - makedirs: true
 ```
 
-### Extract a local zip archive
+#### Extract a local zip archive
 
 archive_format overrides auto-detection; if_missing avoids re-extracting.
 
@@ -71,7 +81,7 @@ archive_format overrides auto-detection; if_missing avoids re-extracting.
     - if_missing: /srv/webapp/index.html
 ```
 
-### Re-extract on a version bump with source_hash
+#### Re-extract on a version bump with source_hash
 
 Changing source_hash (or source) triggers re-extraction on the next run; the value is an opaque declaration, not a verified checksum.
 
@@ -83,7 +93,7 @@ Changing source_hash (or source) triggers re-extraction on the next run; the val
     - makedirs: true
 ```
 
-### Extract an archive ad hoc
+#### Extract an archive ad hoc
 
 The bare positional argument is the target directory; source is a key=value.
 
@@ -91,28 +101,3 @@ The bare positional argument is the target directory; source is a key=value.
 zester '*' archive.extracted /opt/tool source=/tmp/tool.tar.gz
 ```
 
-
----
-
-## Notes
-
-> **Set if_missing or source_hash**
->
-> Without `if_missing` or `source_hash`, an existing target directory is considered "already extracted" — even if it is empty. Point `if_missing` at a file the archive actually creates, or declare `source_hash` to force re-extraction on a version bump.
-
-> **source_hash is an opaque declaration, not a checksum**
->
-> `source_hash` is compared as a plain string against a marker recorded after the LAST successful extraction — it is never verified against the actual archive bytes. It exists purely to detect "the declared version changed since last time", not to authenticate the download.
-
-> **Divergences from Salt**
->
-> Idempotency is purely path/marker-based (`if_missing`, the `source_hash` marker, or target-directory existence, per the note above) — Salt's `enforce_toplevel`, `options`, `user`/`group`, `clean`, and `trim_output` parameters are not supported. Extraction requires `tar`/`unzip` (and `curl` or `wget` for remote sources) to be present on the peel.
-
-
----
-
-## Divergences
-
-- BD-2
-- BD-6
-- BD-7

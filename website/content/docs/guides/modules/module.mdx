@@ -1,9 +1,21 @@
 ---
-title: "module.run"
-description: "Invoke another registered state module by name (Salt-compatibility escape hatch)."
+title: "module"
+description: "The module.* family of state modules."
 ---
 
 {/* zester-docgen:managed module="module.run" */}
+
+| Module | Summary |
+|---|---|
+| [`module.run`](#module-run) | Invoke another registered state module by name (Salt-compatibility escape hatch). |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## `module.run` [#module-run]
+
+Invoke another registered state module by name (Salt-compatibility escape hatch).
 
 **Source**: `pkg/state/modules/module/module_run.go`
 
@@ -20,34 +32,32 @@ If neither a `name:` nor a dotted `<module.func>:` key is present, the build fai
 
 ---
 
-## Parameters
+### Parameters
 
 This module takes no parameters of its own.
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
-
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Delegates to the target module's Check (the target is built once at compile time with the resolved arguments).
 
-### Apply
+#### Apply
 
 Delegates to the target module's Apply.
 
-### Revert
+#### Revert
 
 Delegates to the target module's Revert.
 
 
 ---
 
-## Examples
+### Examples
 
-### Wrap a state module under a descriptive ID (classic form)
+#### Wrap a state module under a descriptive ID (classic form)
 
 name selects the target; the remaining keys (path, makedirs) are forwarded to file.touch.
 
@@ -59,7 +69,7 @@ mark-provisioned:
     - makedirs: true
 ```
 
-### Dotted-key form with a requisite
+#### Dotted-key form with a requisite
 
 The dotted key names the target; the requisite alongside it is carried through, never treated as the target.
 
@@ -71,17 +81,4 @@ refresh-cache:
     - onchanges:
       - "pkgrepo.managed:docker"
 ```
-
-
----
-
-## Notes
-
-> **State registry targets only**
->
-> The target must be a module registered in Zester's STATE registry (a built-in state module or a Starlark custom module). This diverges from Salt: Salt's `module.run` invokes EXECUTION modules, whereas Zester resolves the target in its STATE registry — Zester's remote-execution functions (`pkg.version`, `service.restart`, …) cannot be targeted here, so call them directly from the CLI instead.
-
-> **Idempotent as its target (unlike Salt)**
->
-> Unlike Salt — where `module.run` always reports a change — Zester delegates the full Check/Apply/Revert lifecycle to the target module, so `module.run` is exactly as idempotent as whatever it wraps.
 
