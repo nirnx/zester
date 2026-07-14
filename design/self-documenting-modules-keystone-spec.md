@@ -395,3 +395,182 @@ not the discipline.
 
 Every tranche: tests mandatory, full suite green, CHANGELOG only for user-visible
 activations, my gate review before the next tranche builds on it.
+
+## 13. Amendment A1 — Family-Scoped Parameter Contracts (maintainer-APPROVED 2026-07-13; implementation order approved: gate rework → file.* components → file.* member migrations → paired families)
+
+### Normative principle (maintainer-locked wording)
+
+> Shared parameter names with shared semantics must be represented by shared
+> schema components. Per-module schemas compose those components and declare
+> only genuinely module-specific fields or explicitly documented compatibility
+> exceptions.
+>
+> Defaults and parameter contracts are scoped to a MODULE FAMILY. The same
+> parameter name may carry different meanings across unrelated families, but
+> within one family the same parameter must have ONE canonical contract and
+> ONE runtime meaning across every member that exposes it, unless an
+> explicitly pinned compatibility exception says otherwise. Components are
+> STRICTLY scoped to their family: there are NO shared components across
+> families, even when two families' parameters currently look identical —
+> the same spelling across families implies neither shared ownership nor
+> shared implementation. The enforcement key is
+> (module kind, family, parameter name).
+
+### Definitions (maintainer-settled)
+
+- **Family** = the first dotted namespace segment: `file.*`, `pkg.*`,
+  `pkgrepo.*`, `ssh_auth.*` are four distinct families (`pkg` and `pkgrepo`
+  are NOT one family).
+- **Dual-surface names** (`cmd.run` state + exec): the contract scope is
+  (family, module kind). The state and execution surfaces of one name are
+  SEPARATE scopes and never couple accidentally; aligning them (as the
+  cmd/dir alias work deliberately did) is an explicit decision, recorded, not
+  an obligation.
+- **Contract** = every declaration dimension (name, Go/semantic type, default,
+  requiredness, alias set, base usage semantics) PLUS the parameter's runtime
+  meaning in Check/Apply.
+
+### The three controlled tiers
+
+1. **Semantic types** (`paramtypes`, §3 — exists): one implementation per
+   VALUE GRAMMAR (FileMode, TriState, …). Unchanged.
+2. **Family parameter components** (NEW): one declaration per family-canonical
+   PARAMETER CONTRACT — an embeddable struct (package-private inside
+   `pkg/state/modules` is sufficient; `Compile` already recurses embedded
+   structs incl. unexported ones) carrying the tagged field:
+   `type fileMakeDirsParam struct { MakeDirs bool \`zester:"makedirs" usage:"<canonical>"\` }`.
+   A component belongs to EXACTLY ONE (kind, family) scope and may not be
+   embedded outside it — `file.*` defines its own `mode` component and every
+   other family that wants a `mode` defines its own, so a change in one
+   family can never propagate into another. Identical-looking contracts in
+   two families are two components, deliberately.
+
+   **Formal dimension rule** (which dimensions a component fixes): every
+   contract dimension is classified per component as FIXED or
+   MEMBER-SUPPLIED.
+   - ALWAYS FIXED, non-negotiable: parameter name, value type (primitive or
+     semantic type), alias set, canonical usage semantics, runtime
+     behavioral contract.
+   - FIXED BY DEFAULT, declarable as MEMBER-SUPPLIED by the component:
+     default value, requiredness. When a component declares a dimension
+     MEMBER-SUPPLIED, every member MUST supply it explicitly (the gate
+     rejects a member that omits it) and all other dimensions stay fixed.
+     A member can never override a FIXED dimension — there is no override
+     syntax for them, by design.
+   Under this rule `mode` IS componentizable within `file.*`: the family
+   `mode` component fixes name/FileMode-type/usage/behavior and declares
+   the DEFAULT member-supplied (file.managed supplies 0644, file.directory
+   0755). The earlier "mode does not qualify" note is superseded by this
+   formal rule.
+3. **Module schemas** (exists): compose components + declare genuinely
+   module-specific fields. A field a module declares itself is, by that act,
+   claimed as module-local — reviewable as such.
+
+### Enforcement design
+
+- **Declaring-type stamping**: `Compile` records each field's declaring Go
+  type (the walk already traverses the path). Exposed on the compiled plan
+  (internal is enough for the gate; docs do not render it).
+- **Two-tier vocabulary gate** (rework of `TestParameterVocabularyConsistency`),
+  keyed on (module kind, family, parameter name):
+  - WITHIN a (kind, family) scope: full-contract comparison — declaring type
+    must be the family component for keys a component claims; defaults,
+    requiredness, alias sets, and usage must be identical for shared keys
+    with no component. Divergence = failure unless a participant-pinned
+    in-family compatibility exception exists. The canonical contract is the
+    family component's; an exception is explicitly OUTSIDE it — `file.line`'s
+    action-selector `mode` (Salt parity) is the first and currently only
+    pinned in-family compatibility exception, and it is not part of the
+    `file.*` `mode` canon.
+  - ACROSS families: today's shape-only check survives as a courtesy
+    tripwire with cheap pinned exceptions (`gid`, `text` reclassify from
+    "exception" to "cross-family, legitimately different" but keep entries so
+    incompatible grammar under one spelling still costs a conscious line).
+- **Behavior contract suites**: a component that promises runtime semantics
+  ships a schematest-style suite each embedder runs against its own builder
+  with the exectest fakes (makedirs: true+missing parent ⇒ created;
+  false+missing parent ⇒ error). Declarations cannot see Apply; without this
+  leg a shared declaration over divergent behavior makes the docs lie
+  UNIFORMLY — worse than honest duplication.
+- **Per-member contextual prose**: the component owns the canonical usage
+  line; member-specific nuance goes in the member's Description/Notes. If a
+  per-param context note in the Parameters table proves necessary, it is a
+  small additive framework facility (append-only; never overrides the
+  canonical contract).
+
+### Known pre-existing violations to classify during migration
+
+- `file.directory` `makedirs`: accepted-but-inert (always MkdirAll; Salt
+  fails without makedirs when parents are missing). Classify before the
+  makedirs component lands: FIX to Salt semantics (a BD with three-universe
+  fixtures — maintainer-preferred direction, mine too) or hold a pinned
+  in-family exception. This is the drift specimen that motivated A1; the
+  class, not the instance, is the target — 26 shared keys / 120 independent
+  declarations exist today, with usage text differing on 24 keys, alias sets
+  on 6, defaults on 4, requiredness on 4 (2026-07-13 survey; most variance is
+  legitimate context, but nothing today distinguishes legitimate from drift —
+  A1 makes variance DECLARED-or-error).
+
+### Proposed canonical `file.*.makedirs` runtime contract (PROPOSED — awaiting the file.directory ruling; defined independently of current implementations)
+
+- Declaration: `bool`, default `false`, not required, no aliases.
+- Semantics: "create missing parent directories required for this
+  operation's target path". It governs PARENTS of the target only — never
+  the target itself (the target is whatever the member manages; for
+  file.directory the target is the directory, so makedirs governs the
+  directories ABOVE it, per Salt).
+- `makedirs: false` (the default) + missing parent ⇒ both Check and Apply
+  FAIL the phase with an error naming the missing parent and the
+  `makedirs: true` remedy. No partial creation.
+- `makedirs: true` + missing parents ⇒ parents are created (mode 0755)
+  before the operation; existing parents untouched.
+- Revert NEVER removes parent directories that makedirs created (other
+  content may exist inside them by revert time).
+- Behavior suite pins all four arms (true/false × missing/present parents)
+  per embedding member, against the exectest fakes.
+- Member compliance is audited AT migration. MAINTAINER RULING (2026-07-13):
+  `file.directory` is FIXED to this contract — a deliberate compatibility
+  fix, CHANGELOG'd and pinned by three-universe fixtures — NOT held as an
+  exception. The contract above is APPROVED as written; it is a shared
+  RUNTIME contract, not only a shared declaration: every `file.*` member
+  embedding the makedirs component must pass the same four-case behavior
+  suite (false/present, false/missing, true/present, true/missing).
+
+### Shared declaration requirement (maintainer-locked)
+
+Where a contract is shared within a family, the SCHEMA DECLARATION and the
+RUNTIME BEHAVIOR CONTRACT are both shared — a migration outcome of shared
+parsing/tests over still-independent per-member declarations is explicitly
+REJECTED. Post-migration, a componentized parameter is declared exactly once
+(in the family's components), members embed it, and the declaring-type gate
+makes a private redeclaration a CI failure.
+
+### Intended source layout (end state; NOT blocking A1 implementation)
+
+The family is the contract boundary, so the package layout should eventually
+reflect it: one directory per family —
+
+    pkg/state/modules/file/    components.go, managed.go, directory.go, …,
+                               behavior_test.go, register.go
+    pkg/state/modules/cron/    components.go, present.go, absent.go, …
+
+giving each family a home for its parameter components, canonical runtime
+contracts, behavior suites, member schemas, compatibility exceptions, and
+registration. The flat package is NOT the permanent end state; the
+reorganization lands as its own churn-isolated tranche AFTER A1's contract
+work, not interleaved with it. Open item for that tranche: Go package naming
+for families whose names collide with keywords/conventions (`pkg`, `test`,
+`user`, `group`) — likely import-path dirs with distinct package names.
+
+### Migration order (survey-driven, per family)
+
+1. `file.*` — makedirs (after the file.directory ruling), user/group
+   (ownership pair), mode (via the member-supplied-default rule), then the
+   `path` alias review (already unified).
+2. `ssh_auth.*`, `host.*`, `cron.*`, `git.*` — the paired families' shared
+   trios (name/user/config etc.) via family common structs.
+3. Other families define their OWN components as needed (`archive.*`
+   declares its own makedirs component; no cross-family sharing, ever).
+
+Unchanged by A1: the BD process, permanent contract fixtures, the docs
+pipeline, wire formats. A1 is declaration-layer only plus gate rework.
