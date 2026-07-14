@@ -4,7 +4,15 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
-## [Unreleased]
+## [0.6.7] - 2026-07-14
+
+### Security
+- Dependency review: bumped `postcss` to 8.5.19 in the docs website (fixes a
+  CSS-stringify XSS advisory) alongside the fumadocs/lucide/@types minors, and
+  `sigstore-go` to 1.2.0 (fixes a multi-log threshold-bypass advisory;
+  integration-test-only dependency). The TypeScript 7 major was declined — it
+  breaks the Next.js 16 site build — and the remaining docker/docker advisories
+  are integration-test-only transitives with no patched release yet.
 
 ### Changed
 - **Module reference pages are now one page per FAMILY (Salt-style tree).**
