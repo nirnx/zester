@@ -1,35 +1,15 @@
 ---
-title: "user.present"
-description: "Ensure a user account exists with the specified attributes."
+title: "user"
+description: "The user.* family of state modules."
 ---
 
+{/* zester-docgen:managed module="user.absent" */}
 {/* zester-docgen:managed module="user.present" */}
 
-**Source**: `pkg/state/modules/user/user_present.go`
-
----
-
-`user.present` ensures the named account exists and converges its attributes (uid, primary group, home, shell, full name, shadow password, and supplementary groups). The username defaults to the state ID. The `gid` parameter is polymorphic: an integer — or an all-digit string — is a numeric GID, while any other string is a group NAME, which takes precedence over `primary_group` and is resolved through the group provider for drift comparison. Only attributes that are actually specified are compared, so an unset field never churns the account.
-
----
-
-## Parameters
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | `string` | No | State ID | username for the account; defaults to the state ID |
-| `uid` | `int` | No | *(none)* | numeric user ID; only compared and set when non-zero (0 auto-assigns) |
-| `gid` | `GroupRef` | No | *(none)* | primary group as a numeric GID or a group name; an integer or all-digit string is a GID, any other string is a group name (taking precedence over primary_group) |
-| `primary_group` | `string` | No | *(none)* | primary group name; used only when gid is not itself a group name |
-| `groups` | `StringList` | No | *(none)* | supplementary groups the account should belong to |
-| `optional_groups` | `StringList` | No | *(none)* | supplementary groups added only if the account is already a member (absent groups are skipped, never created) |
-| `home` | `string` | No | *(none)* | home directory path; only compared and set when non-empty |
-| `shell` | `string` | No | *(none)* | login shell path; only compared and set when non-empty |
-| `createhome` | `bool` | No | *(none)* | create the home directory when creating the account |
-| `system` | `bool` | No | *(none)* | create a system account (low UID range) |
-| `password` | `string` | No | *(sensitive — not shown)* | pre-hashed shadow password; converged by comparing the account's current shadow hash |
-| `fullname` | `string` | No | *(none)* | GECOS full-name field; only compared and set when non-empty |
-| `remove_groups` | `bool` | No | *(none)* | remove supplementary groups not listed in groups (otherwise existing groups are preserved) |
+| Module | Summary |
+|---|---|
+| [`user.absent`](#user-absent) | Ensure a user account does not exist on the system. |
+| [`user.present`](#user-present) | Ensure a user account exists with the specified attributes. |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
@@ -48,26 +28,149 @@ A list of strings. Accepts a single string (a one-element list), a list of strin
 
 ---
 
-## Effects
+## `user.absent` [#user-absent]
 
-### Check
+Ensure a user account does not exist on the system.
+
+**Source**: `pkg/state/modules/user/user_absent.go`
+
+---
+
+`user.absent` ensures the named user account is removed. The username defaults to the state ID. With `purge` the account's home directory and mail spool are removed as well (`userdel -r`); without it only the account is deleted. `force` is accepted for Salt compatibility but is not yet wired into the execution layer, so it currently has no effect.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | username of the account to remove; defaults to the state ID |
+| `purge` | `bool` | No | *(none)* | also remove the user's home directory and mail spool (userdel -r); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `force` | `bool` | No | *(none)* | parsed for Salt compatibility but not yet implemented in the execution layer — currently has no effect; a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+---
+
+### Effects
+
+#### Check
+
+Looks up the user by name and reports a change only when the account exists; an already-absent user needs no change.
+
+#### Apply
+
+Re-verifies existence (a self-contained flow: a watch-forced Apply bypasses Check, and `userdel` on a nonexistent user exits non-zero), then deletes the account through the user provider — removing the home directory and mail spool as well when `purge` is set (`userdel -r`). An already-absent user is a clean no-op. Reports the username and the purge flag in its details.
+
+#### Revert
+
+Cannot restore a deleted user: the original account data (password hash, groups, uid) is not recorded and cannot be re-derived, so Revert is an explicit no-op.
+
+
+---
+
+### Examples
+
+#### Remove a user
+
+The username defaults to the state ID; the home directory is left in place.
+
+```yaml
+olduser:
+  user.absent: []
+```
+
+#### Remove a user and purge the home directory
+
+purge runs userdel -r, removing the home directory and mail spool too.
+
+```yaml
+remove-temp-user:
+  user.absent:
+    - name: tempuser
+    - purge: true
+```
+
+#### Remove a user after stopping their service
+
+require orders the service stop ahead of the account removal.
+
+```yaml
+decommission-app:
+  user.absent:
+    - name: appuser
+    - purge: true
+    - require:
+      - "cmd.run:stop-app-service"
+```
+
+#### Remove a user ad hoc
+
+The bare positional argument is the username; purge=true also removes the home directory.
+
+```bash
+zester 'web*' user.absent olduser purge=true
+```
+
+
+---
+
+### See Also
+
+- [user.present](/docs/guides/modules/user#user-present)
+
+---
+
+## `user.present` [#user-present]
+
+Ensure a user account exists with the specified attributes.
+
+**Source**: `pkg/state/modules/user/user_present.go`
+
+---
+
+`user.present` ensures the named account exists and converges its attributes (uid, primary group, home, shell, full name, shadow password, and supplementary groups). The username defaults to the state ID. The `gid` parameter is polymorphic: an integer — or an all-digit string — is a numeric GID, while any other string is a group NAME, which takes precedence over `primary_group` and is resolved through the group provider for drift comparison. Only attributes that are actually specified are compared, so an unset field never churns the account.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | username for the account; defaults to the state ID |
+| `uid` | `int` | No | *(none)* | numeric user ID; only compared and set when non-zero (0 auto-assigns) |
+| `gid` | `GroupRef` | No | *(none)* | primary group as a numeric GID or a group name; an integer or all-digit string is a GID, any other string is a group name (taking precedence over primary_group) |
+| `primary_group` | `string` | No | *(none)* | primary group name; used only when gid is not itself a group name |
+| `groups` | `StringList` | No | *(none)* | supplementary groups the account should belong to |
+| `optional_groups` | `StringList` | No | *(none)* | supplementary groups added only if the account is already a member (absent groups are skipped, never created) |
+| `home` | `string` | No | *(none)* | home directory path; only compared and set when non-empty |
+| `shell` | `string` | No | *(none)* | login shell path; only compared and set when non-empty |
+| `createhome` | `bool` | No | *(none)* | create the home directory when creating the account |
+| `system` | `bool` | No | *(none)* | create a system account (low UID range) |
+| `password` | `string` | No | *(sensitive — not shown)* | pre-hashed shadow password; converged by comparing the account's current shadow hash |
+| `fullname` | `string` | No | *(none)* | GECOS full-name field; only compared and set when non-empty |
+| `remove_groups` | `bool` | No | *(none)* | remove supplementary groups not listed in groups (otherwise existing groups are preserved) |
+
+---
+
+### Effects
+
+#### Check
 
 Reports a change when the account does not exist. For an existing account it compares, in order: `uid` (only when non-zero); the primary group — a name-based primary group is resolved to its GID and compared (a declared name that does not exist counts as drift), taking precedence over a numeric `gid` (compared only when non-zero); `home`, `shell`, and `fullname` (each only when non-empty); the shadow `password` (its hash is compared, never shown — an unverifiable/empty provider hash under a declared password counts as drift); and the supplementary `groups` (when declared, the desired list — `groups` plus any `optional_groups` the account already belongs to, preserving existing groups unless `remove_groups` is set — is compared against current membership).
 
-### Apply
+#### Apply
 
 Creates the account with all specified attributes when it does not exist (recording the creation for revert); a create that races another state at the same DAG level re-looks-up and falls through to the modify path. For an existing account it builds a usermod set from only the drifted attributes (a declared-but-missing primary group fails loudly before the usermod); a fully converged account is a clean no-op that leaves the revert memo unarmed. Reports the action (created/modified) and, on create/modify, the affected username.
 
-### Revert
+#### Revert
 
 Undoes only what this run's Apply recorded. A user Apply created is deleted (with its home directory); a user Apply modified is restored by diffing the current account against the memoized original and reverting only the still-drifted attributes — including the password when a prior hash was recorded (a password Apply set from an empty/unreadable original hash is NOT restorable via usermod and is skipped with an explicit note rather than a false "restored" claim). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
 
 
 ---
 
-## Examples
+### Examples
 
-### Create a user account
+#### Create a user account
 
 The username defaults to the state ID; createhome makes the home directory.
 
@@ -79,7 +182,7 @@ appuser:
     - createhome: true
 ```
 
-### System account with a nologin shell
+#### System account with a nologin shell
 
 system: true allocates a low UID; the account cannot log in interactively.
 
@@ -92,7 +195,7 @@ prometheus:
     - createhome: true
 ```
 
-### Full specification with a numeric GID and groups
+#### Full specification with a numeric GID and groups
 
 gid as an integer is a numeric primary GID; groups sets supplementary membership, and optional_groups is applied only where the account already belongs.
 
@@ -114,7 +217,7 @@ deploy:
       - "group.present:docker"
 ```
 
-### Create a user ad hoc
+#### Create a user ad hoc
 
 The bare positional argument is the username; key=value pairs set attributes.
 
@@ -125,35 +228,7 @@ zester 'web*' user.present deploy uid=1500 home=/opt/deploy shell=/bin/bash crea
 
 ---
 
-## Notes
+### See Also
 
-> **gid is a GID or a group name**
->
-> An integer or all-digit `gid` (for example `gid: 1000` or `gid: "1000"`) is a numeric primary GID. Any other string is a group NAME, resolved through the group provider and taking precedence over `primary_group`; `primary_group` is only the fallback used when `gid` is not itself a name.
-
-> **optional_groups and remove_groups**
->
-> `optional_groups` adds a supplementary group only when the account is ALREADY a member of it — a listed group the account does not belong to is skipped, never created. With `remove_groups: false` (the default) existing supplementary groups are preserved; set it true to prune any group not in `groups`.
-
-> **password is a shadow hash and is sensitive**
->
-> `password` is a pre-hashed shadow value, converged by comparing the account's current shadow hash (the hash never appears in a diff). It is a sensitive parameter: its value is redacted from every decode-error message and never rendered into docs, defaults, or examples.
-
-
----
-
-## Divergences
-
-- BD-1
-- BD-2
-- BD-4
-- BD-5
-- BD-6
-- BD-7
-
----
-
-## See Also
-
-- [user.absent](/docs/guides/modules/user-absent)
-- [group.present](/docs/guides/modules/group-present)
+- [user.absent](/docs/guides/modules/user#user-absent)
+- [group.present](/docs/guides/modules/group#group-present)

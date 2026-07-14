@@ -92,9 +92,11 @@ func TestRenderExecModulesPage_Anatomy(t *testing.T) {
 	for _, want := range []string{
 		"title: \"Execution Modules\"",
 		"{/* zester-docgen:managed module=\"test.echo\" */}",
-		"## `test.echo`",
-		"## `pkg.version`",
-		"## `sys.doc`",
+		// Banners carry explicit stable anchors (Fumadocs [#id] heading ids).
+		"## `test.echo` [#test-echo]",
+		"## `pkg.version` [#pkg-version]",
+		"## `sys.doc` [#sys-doc]",
+		"## `sys.list_functions` [#sys-list-functions]",
 		"**Source**: `pkg/execmod/builtins.go`",
 		"**Source**: `pkg/execmod/sysdoc.go`", // sys.doc / sys.list_functions
 		// M5: each function's own sections nest one level BELOW its "##
@@ -105,6 +107,14 @@ func TestRenderExecModulesPage_Anatomy(t *testing.T) {
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("rendered exec page missing %q", want)
+		}
+	}
+
+	// Notes and Divergences are dropped from ALL rendered pages (maintainer
+	// decision) — they remain on the terminal sys.doc / `zester doc` surface.
+	for _, banned := range []string{"# Notes", "# Divergences"} {
+		if strings.Contains(page, banned) {
+			t.Errorf("exec page must not render a Notes/Divergences section (found %q)", banned)
 		}
 	}
 

@@ -1,0 +1,375 @@
+---
+title: "pkg"
+description: "The pkg.* family of state modules."
+---
+
+{/* zester-docgen:managed module="pkg.installed" */}
+{/* zester-docgen:managed module="pkg.latest" */}
+{/* zester-docgen:managed module="pkg.purged" */}
+{/* zester-docgen:managed module="pkg.removed" */}
+
+| Module | Summary |
+|---|---|
+| [`pkg.installed`](#pkg-installed) | Ensure a system package is installed, optionally pinned to an exact version. |
+| [`pkg.latest`](#pkg-latest) | Ensure a package is installed and kept at the newest available version. |
+| [`pkg.purged`](#pkg-purged) | Ensure a package is removed along with its configuration files. |
+| [`pkg.removed`](#pkg-removed) | Ensure a system package is not installed. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## `pkg.installed` [#pkg-installed]
+
+Ensure a system package is installed, optionally pinned to an exact version.
+
+**Source**: `pkg/state/modules/pkg/pkg_installed.go`
+
+---
+
+`pkg.installed` ensures the named package is present on the target through the peel's auto-detected package manager (apt, dnf, yum, or brew). The package name defaults to the state ID, so a bare `pkg.installed` under an `nginx:` key installs `nginx`. Declaring `version` makes exact version equality part of the desired state: Check compares the provider's installed version against the pin and reports drift for ANY other installed version, so both upgrades and downgrades converge; an undeclared `version` is satisfied by whatever version happens to be installed.
+
+The version pin's on-the-wire format depends on the detected package manager:
+
+| Manager | Format | Example |
+|---|---|---|
+| apt | `<name>=<version>` | `nginx=1.24.0-1ubuntu1` |
+| yum/dnf | `<name>-<version>` | `nginx-1.24.0` |
+| brew | `<name>@<version>` | `nginx@1.24` |
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | package to install (defaults to the state ID) |
+| `version` | `string` | No | *(none)* | exact version pin; any other installed version converges via install or downgrade (format depends on the detected package manager) |
+| `refresh` | `bool` | No | `false` | refresh the package database before installing (in Apply; a refresh failure fails the state); defaults to false; a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+---
+
+### Effects
+
+#### Check
+
+Queries the package provider whether the package is installed at all; an absent package always needs a change. When `version` is declared and the package is present, Check also compares the provider's InstalledVersion against the pin — any other installed version, newer or older, reports a got/want diff and needs a change; without a declared `version`, presence alone satisfies the state. The provider's installed-probe is status-aware on Debian: a package left in the dpkg 'rc' state (removed, conffiles remain) counts as NOT installed, so it converges by reinstalling instead of reporting "already installed" forever.
+
+The installed-probe command is manager-specific:
+
+| Manager | Installed probe |
+|---|---|
+| apt | `dpkg-query -W -f='${db:Status-Status}\n' <package>` — only a line reading `installed` counts; a package in the dpkg `rc` state (removed, conffiles remain) is NOT installed |
+| yum / dnf | `rpm -q <package>` |
+| brew | `brew list --formula <package>` |
+
+#### Apply
+
+Refreshes the package cache first when `refresh` is true. Installs the package: an undeclared `version` installs the latest available candidate; a declared `version` installs exactly that pin. The apt provider passes `--allow-downgrades` whenever a version is pinned (apt otherwise refuses a downgrade); the yum provider verifies the pin actually landed and falls back to an explicit `yum downgrade` when a plain install silently no-ops on a downgrade (`yum install pkg-<older>` prints "Nothing to do" and exits 0); dnf converges an explicit version downgrade on its own. On Debian/Ubuntu the apt provider runs the install (and the refresh and the Revert removal) fully non-interactively: `DEBIAN_FRONTEND=noninteractive` suppresses debconf prompts, and `-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold` resolves a conffile prompt automatically (the packaged default where there is no local edit, otherwise the admin's modified conffile) — without these, a prompt would hang the peel's single serialized exec worker forever, since there is no TTY to answer it. Reports Changed with the package name and manager in its details.
+
+The base install command is manager-specific (the apt non-interactive env and the `--allow-downgrades`/conffile flags described above are layered on top; a declared `version` pins the target — `<package>=<version>` on apt, `<package>-<version>` on yum/dnf, `<package>@<version>` on brew):
+
+| Manager | Install command |
+|---|---|
+| apt | `apt-get install -y <package>` |
+| yum | `yum install -y <package>` |
+| dnf | `dnf install -y <package>` |
+| brew | `brew install <package>` |
+
+#### Revert
+
+Removes the package through the detected package manager. Revert always removes — it does not check whether this run's Apply actually installed anything, and it does not restore whatever version was installed before Apply ran.
+
+The remove command is manager-specific:
+
+| Manager | Remove command |
+|---|---|
+| apt | `apt-get remove -y <package>` (same non-interactive env and dpkg conffile flags as install) |
+| yum | `yum remove -y <package>` |
+| dnf | `dnf remove -y <package>` |
+| brew | `brew uninstall <package>` |
+
+
+---
+
+### Examples
+
+#### Install a package ad hoc
+
+The bare positional argument is the package name.
+
+```bash
+zester 'web-01' pkg.installed nginx
+```
+
+#### Install with a cache refresh
+
+refresh: true refreshes the package cache before installing.
+
+```yaml
+install_nginx:
+  pkg.installed:
+    - name: nginx
+    - refresh: true
+```
+
+#### Pin an exact version
+
+A declared version is part of the desired state: any other installed version converges via install or downgrade.
+
+```yaml
+install_specific_version:
+  pkg.installed:
+    - name: nginx
+    - version: "1.24.0-1ubuntu1"
+```
+
+#### Order installs with requisites
+
+require orders this install after a prerequisite package.
+
+```yaml
+install_curl:
+  pkg.installed:
+    - name: curl
+    - require:
+      - "pkg.installed:install_build_tools"
+```
+
+
+---
+
+### See Also
+
+- [pkg.latest](/docs/guides/modules/pkg#pkg-latest)
+- [pkg.purged](/docs/guides/modules/pkg#pkg-purged)
+- [pkg.removed](/docs/guides/modules/pkg#pkg-removed)
+
+---
+
+## `pkg.latest` [#pkg-latest]
+
+Ensure a package is installed and kept at the newest available version.
+
+**Source**: `pkg/state/modules/pkg/pkg_latest.go`
+
+---
+
+`pkg.latest` ensures the named package is installed and upgraded to the newest version the package manager can see, refreshing its cache before deciding (by default) so a release published since the box's last refresh is never invisible. The package name defaults to the state ID. Upgradability is probed by shelling out to the package manager CLI (`apt-get -s install`, `dnf`/`yum check-update`); when the probe cannot determine an answer — no command provider, or an OS family Zester does not know how to probe (for example macOS/Homebrew) — an already-installed package is treated as satisfied rather than forced to churn.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | package to keep at the newest available version (defaults to the state ID) |
+| `refresh` | `bool` | No | `true` | refresh the package database at the start of both Check and Apply (a failure warns and proceeds on possibly-stale indexes); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+---
+
+### Effects
+
+#### Check
+
+Refreshes the package cache first when `refresh` is true (Check and Apply refresh independently — a stale index at Check time, before Apply's refresh ever ran, was the field bug this default fixes: a release published since the box's last refresh was invisible forever). Reports a change when the package is not installed. When installed, runs an upgradability probe keyed off the detected OS family (the `os.family` fact, falling back to the active provider's name): on Debian/Ubuntu, `apt-get -s install <pkg>` — an `Inst ` line means an upgrade is available, "is already the newest version" means up to date; on the RedHat family, `<mgr> check-update <pkg>` — exit code 100 means an upgrade is available, 0 means up to date, anything else is inconclusive. When the probe cannot run or answer at all (no command provider, unknown family, or an inconclusive exit code) an installed package is reported as satisfied rather than forced to churn.
+
+#### Apply
+
+Refreshes the package cache first when `refresh` is true, then installs the package with no version pin — which the detected provider resolves to the latest available candidate (apt, dnf, yum, or brew). A FAILED refresh only warns and proceeds to the install (a rotted third-party repo makes `apt-get update` exit non-zero even though the reachable repos still updated — refusing to proceed would break every `pkg.latest` on a host with one dead repo). On Debian/Ubuntu the install (and the refresh, and Revert's removal) goes through the same apt provider `pkg.installed` uses, which runs fully non-interactively: `DEBIAN_FRONTEND=noninteractive` suppresses debconf prompts, and `-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold` resolves a conffile prompt automatically — without these, a prompt would hang the peel's single serialized exec worker forever. Reports Changed with the package name and manager in its details.
+
+#### Revert
+
+Removes the package through the detected package manager. Revert always removes — it does not check whether this run's Apply actually installed anything, and it does not restore whatever version was installed before Apply ran.
+
+
+---
+
+### Examples
+
+#### Keep a package current ad hoc
+
+The bare positional argument is the package name.
+
+```bash
+zester 'web*' pkg.latest nginx
+```
+
+#### Keep a package current
+
+The package name defaults to the state ID; refresh defaults to true.
+
+```yaml
+nginx:
+  pkg.latest: []
+```
+
+#### Skip the cache refresh
+
+refresh: false answers from the existing cache only.
+
+```yaml
+htop:
+  pkg.latest:
+    - refresh: false
+```
+
+
+---
+
+### See Also
+
+- [pkg.installed](/docs/guides/modules/pkg#pkg-installed)
+- [pkg.purged](/docs/guides/modules/pkg#pkg-purged)
+- [pkg.removed](/docs/guides/modules/pkg#pkg-removed)
+
+---
+
+## `pkg.purged` [#pkg-purged]
+
+Ensure a package is removed along with its configuration files.
+
+**Source**: `pkg/state/modules/pkg/pkg_purged.go`
+
+---
+
+`pkg.purged` ensures the named package is fully gone — not just removed, but purged of residual package-manager state. On Debian, `apt-get purge` clears the conffiles a plain remove leaves behind in dpkg's 'rc' status; RedHat's rpm has no separate purge concept, so purge is identical to remove there. The package name defaults to the state ID. Purging shells out to the package-manager CLI directly (via `CommandExec`), independent of whatever the injected `PackageExec` provider's `Remove` does — so it works even when `pkg.installed`'s and `pkg.removed`'s presence probe would already call the package "not installed".
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | package to purge, including its configuration files (defaults to the state ID) |
+
+---
+
+### Effects
+
+#### Check
+
+Reports converged only when NO package-manager record exists at all. On Debian the probe is `dpkg-query -W -f='${db:Status-Status}' <pkg>` (one status line per installed instance, so multi-arch packages are handled correctly): any live status — `installed`, the residual `config-files` ('rc') state, `half-installed`, or similar — needs a purge; only `not-installed` or no dpkg record at all is converged. On the RedHat family the probe is `rpm -q <pkg>` (rpm has no 'rc' equivalent, so a query hit alone means installed). On an unknown OS family, Check falls back to the injected `PackageExec`'s installed probe (no residual-config concept there either, e.g. brew); without a provider, Check errors rather than silently reporting converged. A probe that never runs at all (spawn failure, context death) is also a real error, never reported as converged — that would silently skip the purge on a broken host.
+
+#### Apply
+
+Purges the package via the manager-specific CLI command: `apt-get purge -y <pkg>` on Debian, `<mgr> remove -y <pkg>` on the RedHat family (dnf or yum — identical to a plain remove there). On an unknown OS family it falls back to the injected `PackageExec`'s `Remove`; without either a command provider or a package provider, Apply errors. Reports Changed with the package name and manager in its details.
+
+#### Revert
+
+Explicit no-op (same contract as `pkg.removed`): the purged version and the purged configuration files are never recorded and cannot be reconstructed, so a reinstall here would only guess at whatever the repo's current latest candidate is — not the inverse of Apply. Reinstall explicitly with `pkg.installed`.
+
+
+---
+
+### Examples
+
+#### Purge a package ad hoc
+
+The bare positional argument is the package name.
+
+```bash
+zester 'web-01' pkg.purged apache2
+```
+
+#### Purge a package
+
+The package name defaults to the state ID.
+
+```yaml
+apache2:
+  pkg.purged: []
+```
+
+#### Purge before installing a replacement
+
+require_in orders this purge ahead of a replacement's install: apache2's package and configuration are fully gone before nginx's pkg.installed runs.
+
+```yaml
+remove-old-webserver:
+  pkg.purged:
+    - name: apache2
+    - require_in:
+      - "pkg.installed:nginx"
+```
+
+
+---
+
+### See Also
+
+- [pkg.installed](/docs/guides/modules/pkg#pkg-installed)
+- [pkg.latest](/docs/guides/modules/pkg#pkg-latest)
+- [pkg.removed](/docs/guides/modules/pkg#pkg-removed)
+
+---
+
+## `pkg.removed` [#pkg-removed]
+
+Ensure a system package is not installed.
+
+**Source**: `pkg/state/modules/pkg/pkg_removed.go`
+
+---
+
+`pkg.removed` ensures the named package is absent from the target, removing it through the host's detected package manager (apt, dnf, yum, or brew). The package name defaults to the state ID, so a bare `pkg.removed` under an `nginx:` key removes `nginx`.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | package to remove (defaults to the state ID) |
+
+---
+
+### Effects
+
+#### Check
+
+Queries the package provider whether the named package is installed and needs a change only when it is. The provider's probe is status-aware, so a Debian package left in the config-files ("rc") state after removal reads as not installed and does not re-trigger removal.
+
+#### Apply
+
+Removes the package through the detected package manager. Reports Changed with the package name and the manager in its details.
+
+#### Revert
+
+Cannot restore the package: the version that was removed is not recorded and cannot be re-derived, so Revert is an explicit no-op rather than a guessed reinstall — reinstall explicitly with pkg.installed.
+
+
+---
+
+### Examples
+
+#### Remove a package by name
+
+The name parameter selects the package to remove.
+
+```yaml
+remove-telnet:
+  pkg.removed:
+    - name: telnet
+```
+
+#### Remove a package ad hoc
+
+The bare positional argument is the package name.
+
+```bash
+zester '*' pkg.removed nginx
+```
+
+#### Stop dependent services before removing
+
+Use require to ensure a dependent service is stopped before its package is removed.
+
+```yaml
+remove-old-client:
+  pkg.removed:
+    - name: curl
+    - require:
+      - "cmd.run:stop-service"
+```
+

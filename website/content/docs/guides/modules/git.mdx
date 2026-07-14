@@ -1,0 +1,196 @@
+---
+title: "git"
+description: "The git.* family of state modules."
+---
+
+{/* zester-docgen:managed module="git.cloned" */}
+{/* zester-docgen:managed module="git.latest" */}
+
+| Module | Summary |
+|---|---|
+| [`git.cloned`](#git-cloned) | Ensure a Git repository is cloned at a target path, optionally pinned to a branch or revision. |
+| [`git.latest`](#git-latest) | Ensure a Git repository is cloned at a target directory and kept up to date with its remote. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## `git.cloned` [#git-cloned]
+
+Ensure a Git repository is cloned at a target path, optionally pinned to a branch or revision.
+
+**Source**: `pkg/state/modules/git/git_cloned.go`
+
+---
+
+`git.cloned` ensures a Git repository is present at `name` (the clone PATH, defaulting to the state ID — NOTE: this is the opposite of `git.latest`, whose `name`/primary is the remote URL). `url` is required. `branch` or `rev` optionally pins the checkout; `rev` takes precedence when both are set. `depth` shallow-clones (0 is a full clone) and `force` discards local changes before checkout. Unlike `git.latest`, an existing clone is never fetched/updated unless a declared `rev`/`branch` requires a different checkout — `git.cloned` only ensures presence at a revision, it does not track a moving branch tip.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | filesystem path where the repo should be cloned; defaults to the state ID (contrast with git.latest, whose name/primary is the remote URL) |
+| `url` | `string` | Yes | *(none)* | remote repository URL; required |
+| `branch` | `string` | No | *(none)* | branch or tag to checkout after cloning |
+| `rev` | `string` | No | *(none)* | specific commit sha (full or abbreviated), tag, or any locally-resolvable rev to check out; takes precedence over branch for comparison |
+| `depth` | `int` | No | *(none)* | shallow clone depth passed to git clone --depth; 0 (the default) means a full clone |
+| `force` | `bool` | No | *(none)* | reset local changes (git reset --hard HEAD) before checkout; a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+---
+
+### Effects
+
+#### Check
+
+Reports a change when the target directory does not exist (any stat error OTHER than not-exist fails the phase, rather than risking a blind clone over an unreadable existing checkout). Otherwise compares `git -C <path> remote get-url origin` against `url`; a mismatch needs a change. With `rev` or `branch` declared, also compares HEAD: a hex `rev` matches by sha PREFIX (no subprocess); a tag or other symbolic rev/branch is resolved LOCALLY (`git rev-parse --verify <rev>^{commit}`, no network) and compared by commit id, so a checked-out tag CONVERGES rather than perpetually reporting a change. `branch` also documents tags: `git clone --branch <tag>` leaves a detached HEAD with no local branch, so branch comparison falls back to the same symbolic-rev resolution when no matching local branch ref exists.
+
+#### Apply
+
+Clones with `git clone [--depth N] [--branch B] <url> <path>` when the directory is missing; otherwise corrects the remote URL with `git remote set-url origin <url>` if it drifted (same not-exist discrimination as Check). When `rev` or `branch` is set: optionally `git reset --hard HEAD` first when `force` is set, then `git fetch origin` and `git checkout <rev-or-branch>`. Reports the url and path in its details.
+
+#### Revert
+
+Removes the directory with `RemoveAll` ONLY if this run's Apply created it (a same-instance memo). If the directory existed before Apply (for example only the remote URL was fixed), Revert is an explicit clean no-op — it never deletes a pre-existing checkout.
+
+
+---
+
+### Examples
+
+#### Clone a public repo with no pinned version
+
+name is the clone path (defaults to the state ID); url is required.
+
+```yaml
+/opt/myapp:
+  git.cloned:
+    - url: https://github.com/example/myapp
+```
+
+#### Clone a specific branch with shallow depth
+
+branch checks out a branch/tag; depth shallow-clones.
+
+```yaml
+/srv/deploy/myapp:
+  git.cloned:
+    - url: git@github.com:example/myapp.git
+    - branch: production
+    - depth: 1
+```
+
+#### Pin to a specific commit
+
+rev takes precedence over branch for the HEAD comparison; require orders git installation first.
+
+```yaml
+/opt/tools/mylib:
+  git.cloned:
+    - url: https://github.com/example/mylib
+    - rev: a1b2c3d4e5f6
+    - require:
+      - pkg.installed:git
+```
+
+#### Clone a repo ad hoc
+
+The bare positional argument is the clone PATH; url is a key=value.
+
+```bash
+zester '*' git.cloned /opt/myapp url=https://github.com/example/myapp
+```
+
+
+---
+
+### See Also
+
+- [git.latest](/docs/guides/modules/git#git-latest)
+
+---
+
+## `git.latest` [#git-latest]
+
+Ensure a Git repository is cloned at a target directory and kept up to date with its remote.
+
+**Source**: `pkg/state/modules/git/git_latest.go`
+
+---
+
+`git.latest` ensures a repository is present at `target` (required) AND keeps it current with its remote: an existing clone is fetched and fast-forwarded (or hard-reset with `force`). `name` (defaulting to the state ID) is the remote URL — NOTE: this is the opposite of `git.cloned`, whose `name`/primary is the clone PATH and whose `target`-equivalent is instead folded into `name`. Compare with [`git.cloned`](/docs/guides/modules/git#git-cloned), which only ensures the clone exists at a revision and never updates a moving branch tip. `name`'s state-ID fallback still applies, but a state declaring neither `name` NOR a non-empty state ID has no URL at all — that combination is rejected with a required-parameter error.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | remote repository URL; defaults to the state ID (contrast with git.cloned, whose name/primary is the clone path); required if the state ID is also empty |
+| `target` | `string` | Yes | *(none)* | filesystem path for the working tree; required |
+| `branch` | `string` | No | *(none)* | branch to track; used for git clone --branch, checkout, and the remote-tip comparison |
+| `rev` | `string` | No | *(none)* | pin to a specific commit/ref; when set, the up-to-date check is a local HEAD comparison (no network) |
+| `force` | `bool` | No | *(none)* | discard local changes: update with git reset --hard (to rev, origin/&lt;branch&gt;, or origin/HEAD) instead of a fast-forward merge; a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+---
+
+### Effects
+
+#### Check
+
+Reports a change when `target` does not exist (any stat error OTHER than not-exist fails the phase). Otherwise compares `git remote get-url origin` against `name`; a mismatch needs a change. With `rev` set: no change needed if local `HEAD` matches `rev` — a hex-looking rev by sha PREFIX (no subprocess), a tag or other symbolic rev resolved LOCALLY via `git rev-parse --verify <rev>^{commit}` (no network) and compared by commit id, so a checked-out tag CONVERGES rather than perpetually reporting a change. Without `rev`: `git ls-remote origin <branch|HEAD>` is compared against the local `HEAD`; a differing remote tip needs a change.
+
+#### Apply
+
+Fresh clone (target missing): `git clone [--branch <branch>] <name> <target>`, then `git checkout <rev>` when `rev` is set. Existing clone: corrects the origin URL with `git remote set-url` if it drifted, records the current HEAD (for revert), then `git fetch origin`. Update strategy: `force: true` → `git reset --hard` to `rev`, `origin/<branch>`, or `origin/HEAD`; `rev` set → `git checkout <rev>`; `branch` set → `git checkout <branch>` + `git merge --ff-only origin/<branch>`; neither → `git merge --ff-only` (fails if the local branch diverged — use `force`). Reports the url and target in its details.
+
+#### Revert
+
+If Apply cloned the repository, removes the target directory recursively. If Apply updated an existing clone, runs `git reset --hard <previous HEAD>` to the HEAD recorded before the update. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Track a branch
+
+name (the state ID here) is the remote URL; target is the clone path.
+
+```yaml
+https://github.com/example/app.git:
+  git.latest:
+    - target: /opt/app
+    - branch: main
+```
+
+#### Force-sync, discarding local changes
+
+force replaces a fast-forward merge with a hard reset when the local branch has diverged.
+
+```yaml
+deploy-config:
+  git.latest:
+    - name: git@git.internal:ops/config.git
+    - target: /etc/app-config
+    - branch: production
+    - force: true
+    - require:
+      - pkg.installed:git
+```
+
+#### Clone/update ad hoc
+
+The bare positional argument is the remote URL; target is a key=value.
+
+```bash
+zester '*' git.latest https://github.com/example/app.git target=/opt/app
+```
+
+
+---
+
+### See Also
+
+- [git.cloned](/docs/guides/modules/git#git-cloned)

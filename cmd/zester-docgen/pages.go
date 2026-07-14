@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -12,7 +13,9 @@ import (
 )
 
 // managedMarkerPrefix identifies a docgen-owned MDX page. Any file lacking it
-// is presumed hand-written and is never blindly overwritten (§8 marker guard).
+// is presumed hand-written and is never blindly overwritten (§8 marker guard);
+// the stale-page cleanup (cleanupStalePages) likewise deletes ONLY
+// marker-carrying files.
 //
 // MDX (unlike plain Markdown) parses `<...>` as JSX, so a raw HTML comment
 // (`<!-- ... -->`) is a hard build error ("Unexpected character `!`") — the
@@ -32,22 +35,21 @@ func hasManagedMarker(content []byte) bool {
 }
 
 // requisitesBoilerplate is the auto-inserted requisites paragraph (§8 page
-// anatomy: "auto requisites boilerplate"), verbatim from the existing
-// hand-written pages so the wording stays familiar across generated and
-// not-yet-migrated pages. State modules only — exec/dispatch surfaces have no
-// requisites.
+// anatomy: "auto requisites boilerplate"), verbatim from the pre-family-tree
+// pages so the wording stays familiar. Every family-page member is a state
+// module, so it renders ONCE per family page (in the lede, after the function
+// index) rather than once per member.
 const requisitesBoilerplate = "All states also accept the full set of requisite parameters and " +
 	"Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies)."
 
-// Heading-level constants for the shared section renderers (M5: function
-// banners H2, their sections H3 — no colliding H2s). A standalone single-module
-// page (renderModulePage) and a page group's ONE shared Parameters/Parameter
-// Types section (renderSharedParamPageGroup — not nested under any module
-// banner) render their sections at pageSectionLevel ("## Parameters"). Anything
-// rendered UNDER a "## `module`" banner — a page group's per-module behavior
-// sections, and the combined execution-modules page's per-function body — must
-// nest one level deeper (nestedSectionLevel, "### Parameters") so the section
-// heading never collides with the module banner's own H2.
+// Heading-level constants for the shared section renderers: member banners H2,
+// their sections H3 — no colliding H2s. A family page's shared sections
+// (Family Parameters, Parameter Types) render at pageSectionLevel
+// ("## Family Parameters"); anything rendered UNDER a "## `module`" banner —
+// a member's body on a family page, and the combined execution-modules page's
+// per-function body — nests one level deeper (nestedSectionLevel,
+// "### Parameters") so a section heading never collides with the banner's own
+// H2.
 const (
 	moduleBannerLevel  = 2
 	pageSectionLevel   = 2
@@ -56,230 +58,325 @@ const (
 
 // heading returns a Markdown ATX heading prefix of level hashes: heading(2) is
 // "##", heading(3) is "###". Every shared section renderer takes its own
-// heading level as a parameter and renders its subsections one level deeper, so
-// the same renderer produces a correctly nested anatomy whether it is called at
-// the top of a standalone page or underneath a "## `module`" banner.
+// heading level as a parameter and renders its subsections one level deeper.
 func heading(level int) string {
 	return strings.Repeat("#", level)
 }
 
-// renderModulePage renders the full MDX page for mi per the §8 page anatomy:
-// frontmatter → marker → **Source**: → Description → Parameters table →
-// auto requisites boilerplate → Parameter Types → Effects (by kind) →
-// Examples → Notes → Divergences → See Also. Empty sections are omitted.
-func renderModulePage(mi modschema.ModuleInfo) (string, error) {
+// memberLink renders an intra-page link to a member's banner anchor.
+func memberLink(module string) string {
+	return fmt.Sprintf("[`%s`](#%s)", module, memberAnchor(module))
+}
+
+// familyDescription is the family page's frontmatter description — short and
+// deterministic.
+func familyDescription(family string) string {
+	return fmt.Sprintf("The %s.* family of state modules.", family)
+}
+
+// renderFamilyPage renders ONE MDX page for a whole module family (Salt-style
+// family tree): frontmatter (title = family name) → one managed marker per
+// member → function index table (linking each member's stable anchor) → the
+// requisites boilerplate (once — every member is a state) → Family Parameters
+// (the component-declared params, rendered once) → Parameter Types (the
+// members' semantic types, deduplicated) → per-member sections under
+// "## `module.function` [#module-function]" banners (Fumadocs custom heading
+// ids, so the anchors are stable regardless of slugger behavior). Rendered
+// pages carry NO Notes and NO Divergences sections (maintainer decision) —
+// those Doc fields remain on the terminal sys.doc / `zester doc` surface.
+func renderFamilyPage(family string, mis []modschema.ModuleInfo) (string, error) {
+	if len(mis) == 0 {
+		return "", fmt.Errorf("docgen: family %s has no members to render", family)
+	}
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "---\ntitle: %q\ndescription: %q\n---\n\n", mi.Module, mi.Doc.Summary)
-	b.WriteString(managedMarker(mi.Module))
-	b.WriteString("\n\n")
-	fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(mi.Kind, mi.Module))
-
-	renderDescriptionSection(&b, mi.Doc.Description)
-	renderParamsSection(&b, mi, pageSectionLevel)
-	renderParamTypesSection(&b, mi, pageSectionLevel)
-	renderPageEffects(&b, mi.Doc.Effects, pageSectionLevel)
-	renderExamplesSection(&b, mi.Doc.Examples, pageSectionLevel)
-	renderNotesSection(&b, mi.Doc.Notes, pageSectionLevel)
-	renderDivergencesSection(&b, mi.Doc.Divergences, pageSectionLevel)
-	if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso, pageSectionLevel); err != nil {
-		return "", err
-	}
-
-	rendered := b.String()
-	if err := assertNoJSX(mi.Module, rendered); err != nil {
-		return "", err
-	}
-	return rendered, nil
-}
-
-// renderModulePageGroup renders ONE MDX page shared by the N modules that map to
-// a single page slug (the §8 N:1 PageGroups). For a single-member group it is
-// byte-identical to renderModulePage. For a multi-member group the caller states,
-// via distinctParams, whether the members share a parameter surface:
-//
-//   - distinctParams=false — SHARED params (file.comment/file.uncomment, one
-//     FileComment proto): the page renders one Parameters/Parameter Types section
-//     for all members, then a per-module behavior section (Description → Effects →
-//     … → See Also). assertSharedParams verifies the surface genuinely matches;
-//     a mismatch is a LOUD generation error, never a silent fallback — a
-//     shared-proto group that diverges is a real bug the flag must not mask.
-//   - distinctParams=true — DISTINCT params (host.present/host.absent — present
-//     has `ip`; ssh_auth.present/ssh_auth.absent — present has `enc`/`comment`;
-//     the test-helpers group — 0..3 params): the page renders each member's FULL
-//     body (Source → Description → Parameters → Parameter Types → Effects → … →
-//     See Also) under its own banner, because a single shared Parameters table
-//     would be wrong for at least one member. This is an EXPLICIT opt-in
-//     (isDistinctParamSlug), not an error-triggered fallback.
-func renderModulePageGroup(mis []modschema.ModuleInfo, distinctParams bool) (string, error) {
-	if len(mis) == 1 {
-		return renderModulePage(mis[0])
-	}
-	if distinctParams {
-		return renderDistinctParamPageGroup(mis)
-	}
-	if err := assertSharedParams(mis); err != nil {
-		return "", err
-	}
-	return renderSharedParamPageGroup(mis)
-}
-
-// renderSharedParamPageGroup renders a multi-member page whose members share one
-// parameter surface (they share a Go proto): a joined title, one managed marker
-// per module, the shared Source line, ONE Parameters and Parameter Types section,
-// then a per-module behavior section (Description → Effects → Examples → Notes →
-// Divergences → See Also) under a "## `<module>`" banner.
-func renderSharedParamPageGroup(mis []modschema.ModuleInfo) (string, error) {
-	var b strings.Builder
-	head := mis[0]
-	names := make([]string, len(mis))
-	quoted := make([]string, len(mis))
-	for i, mi := range mis {
-		names[i] = mi.Module
-		quoted[i] = "`" + mi.Module + "`"
-	}
-
-	renderGroupFrontmatter(&b, mis)
-	fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(head.Kind, head.Module))
-
-	// Shared parameters note + one Parameters/Parameter Types section (the
-	// members share one proto, asserted by the caller).
-	b.WriteString("\n---\n\n")
-	fmt.Fprintf(&b, "%s share the same parameters and implementation.\n", joinWithAnd(quoted))
-	renderParamsSection(&b, head, pageSectionLevel)
-	renderParamTypesSection(&b, head, pageSectionLevel)
-
-	// Per-module behavior sections under a module banner: nested one level
-	// deeper than the shared Parameters section above, so "### Effects" never
-	// collides with the "## `module`" banner it sits under (M5).
-	for _, mi := range mis {
-		fmt.Fprintf(&b, "\n---\n\n## `%s`\n\n", mi.Module)
-		if mi.Doc.Description != "" {
-			b.WriteString(mi.Doc.Description)
-			b.WriteString("\n")
-		}
-		renderPageEffects(&b, mi.Doc.Effects, nestedSectionLevel)
-		renderExamplesSection(&b, mi.Doc.Examples, nestedSectionLevel)
-		renderNotesSection(&b, mi.Doc.Notes, nestedSectionLevel)
-		renderDivergencesSection(&b, mi.Doc.Divergences, nestedSectionLevel)
-		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso, nestedSectionLevel); err != nil {
-			return "", err
-		}
-	}
-
-	rendered := b.String()
-	if err := assertNoJSX(strings.Join(names, "/"), rendered); err != nil {
-		return "", err
-	}
-	return rendered, nil
-}
-
-// renderDistinctParamPageGroup renders a multi-member page whose members do NOT
-// share a parameter surface (distinct Go protos — host.present/host.absent,
-// ssh_auth.present/ssh_auth.absent). The shared header carries the joined title
-// and one managed marker per module; each member then contributes its FULL body
-// (Source → Description → Parameters → Parameter Types → Effects → Examples →
-// Notes → Divergences → See Also, identical to a standalone page's body) under a
-// "## `<module>`" banner, so each member's own parameter table is documented.
-func renderDistinctParamPageGroup(mis []modschema.ModuleInfo) (string, error) {
-	var b strings.Builder
-	names := make([]string, len(mis))
-	quoted := make([]string, len(mis))
-	for i, mi := range mis {
-		names[i] = mi.Module
-		quoted[i] = "`" + mi.Module + "`"
-	}
-
-	renderGroupFrontmatter(&b, mis)
-	fmt.Fprintf(&b, "%s are documented together on this page; each has its own parameters.\n", joinWithAnd(quoted))
-
-	for _, mi := range mis {
-		fmt.Fprintf(&b, "\n---\n\n## `%s`\n\n", mi.Module)
-		fmt.Fprintf(&b, "**Source**: `%s`\n", sourcePath(mi.Kind, mi.Module))
-		renderDescriptionSection(&b, mi.Doc.Description)
-		renderParamsSection(&b, mi, nestedSectionLevel)
-		renderParamTypesSection(&b, mi, nestedSectionLevel)
-		renderPageEffects(&b, mi.Doc.Effects, nestedSectionLevel)
-		renderExamplesSection(&b, mi.Doc.Examples, nestedSectionLevel)
-		renderNotesSection(&b, mi.Doc.Notes, nestedSectionLevel)
-		renderDivergencesSection(&b, mi.Doc.Divergences, nestedSectionLevel)
-		if err := renderSeeAlsoSection(&b, mi.Module, mi.Doc.SeeAlso, nestedSectionLevel); err != nil {
-			return "", err
-		}
-	}
-
-	rendered := b.String()
-	if err := assertNoJSX(strings.Join(names, "/"), rendered); err != nil {
-		return "", err
-	}
-	return rendered, nil
-}
-
-// renderGroupFrontmatter writes the shared frontmatter (a "a / b" title, the
-// space-joined member summaries as the description) and one managed marker per
-// member, followed by a blank line — the common header of both multi-member page
-// shapes.
-func renderGroupFrontmatter(b *strings.Builder, mis []modschema.ModuleInfo) {
-	names := make([]string, len(mis))
-	summaries := make([]string, len(mis))
-	for i, mi := range mis {
-		names[i] = mi.Module
-		summaries[i] = mi.Doc.Summary
-	}
-	fmt.Fprintf(b, "---\ntitle: %q\ndescription: %q\n---\n\n",
-		strings.Join(names, " / "), strings.Join(summaries, " "))
+	fmt.Fprintf(&b, "---\ntitle: %q\ndescription: %q\n---\n\n", family, familyDescription(family))
 	for _, mi := range mis {
 		b.WriteString(managedMarker(mi.Module))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
+
+	// Function index: every member with its summary, linked to its anchor.
+	b.WriteString("| Module | Summary |\n|---|---|\n")
+	for _, mi := range mis {
+		fmt.Fprintf(&b, "| %s | %s |\n", memberLink(mi.Module), escapeSummaryCell(mi.Doc.Summary))
+	}
+	b.WriteString("\n")
+	b.WriteString(requisitesBoilerplate)
+	b.WriteString("\n")
+
+	fps, err := collectFamilyParams(mis)
+	if err != nil {
+		return "", err
+	}
+	renderFamilyParamsSection(&b, fps, len(mis), pageSectionLevel)
+	renderFamilySemTypes(&b, mis, pageSectionLevel)
+
+	for _, mi := range mis {
+		if err := renderMemberSection(&b, mi); err != nil {
+			return "", err
+		}
+	}
+
+	rendered := b.String()
+	if err := assertNoJSX(family, rendered); err != nil {
+		return "", err
+	}
+	return rendered, nil
 }
 
-// assertSharedParams verifies every module in an N:1 page group exposes the same
-// parameter surface (name/type/required/default/aliases) — the invariant that
-// lets the combined page render a SINGLE shared Parameters table. Members of a
-// PageGroup share one Go proto, so this holds by construction; the check turns a
-// future divergence into a loud generation failure rather than a silently wrong
-// page.
-func assertSharedParams(mis []modschema.ModuleInfo) error {
-	head := mis[0]
-	for _, mi := range mis[1:] {
-		if len(mi.Params) != len(head.Params) {
-			return fmt.Errorf("docgen: page group %v: members expose different parameter counts (%d vs %d)",
-				groupNames(mis), len(mi.Params), len(head.Params))
+// renderMemberSection renders one member's body under its anchored banner:
+// summary → Source → description → Parameters (module-declared params only,
+// with a pointer to Family Parameters for the component-declared ones) →
+// Effects → Examples → See Also. No Notes, no Divergences.
+func renderMemberSection(b *strings.Builder, mi modschema.ModuleInfo) error {
+	fmt.Fprintf(b, "\n---\n\n%s `%s` [#%s]\n\n", heading(moduleBannerLevel), mi.Module, memberAnchor(mi.Module))
+	if mi.Doc.Summary != "" {
+		b.WriteString(mi.Doc.Summary)
+		b.WriteString("\n\n")
+	}
+	fmt.Fprintf(b, "**Source**: `%s`\n", sourcePath(mi.Kind, mi.Module))
+	renderDescriptionSection(b, mi.Doc.Description)
+	renderMemberParams(b, mi, nestedSectionLevel)
+	renderPageEffects(b, mi.Doc.Effects, nestedSectionLevel)
+	renderExamplesSection(b, mi.Doc.Examples, nestedSectionLevel)
+	return renderSeeAlsoSection(b, mi.Module, mi.Doc.SeeAlso, nestedSectionLevel)
+}
+
+// renderMemberParams renders a member's Parameters section: a table of the
+// params the module declares ITSELF, excluding the component-declared ones,
+// which are documented once in the page's Family Parameters section — members
+// exposing any get a one-line pointer instead of duplicate rows.
+func renderMemberParams(b *strings.Builder, mi modschema.ModuleInfo, level int) {
+	var own []modschema.Field
+	var shared []string
+	for _, f := range mi.Params {
+		if f.DeclaredBy != "" {
+			shared = append(shared, "`"+f.Name+"`")
+			continue
 		}
-		for i := range mi.Params {
-			a, c := head.Params[i], mi.Params[i]
-			if a.Name != c.Name || a.GoType != c.GoType || a.Required != c.Required ||
-				a.Primary != c.Primary || a.Default != c.Default || a.SemanticType != c.SemanticType ||
-				!slices.Equal(a.Aliases, c.Aliases) {
-				return fmt.Errorf("docgen: page group %v: parameter %q differs across members — a shared page needs one parameter surface",
-					groupNames(mis), a.Name)
+		own = append(own, f)
+	}
+
+	fmt.Fprintf(b, "\n---\n\n%s Parameters\n\n", heading(level))
+	if len(own) == 0 && len(shared) == 0 {
+		b.WriteString("This module takes no parameters of its own.\n")
+		return
+	}
+	if len(own) > 0 {
+		b.WriteString("| Parameter | Type | Required | Default | Description |\n")
+		b.WriteString("|---|---|---|---|---|\n")
+		for _, f := range own {
+			required := "No"
+			if f.Required {
+				required = "Yes"
 			}
+			fmt.Fprintf(b, "| `%s` | `%s` | %s | %s | %s |\n",
+				f.Name, displayParamType(f), required, paramDefaultCellKind(f, mi.Kind), escapeUsageCell(f.Usage))
 		}
+	}
+	if len(shared) > 0 {
+		if len(own) > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(b, "`%s` also accepts the family parameter%s %s — see [Family Parameters](#family-parameters).\n",
+			mi.Module, plural(len(shared)), strings.Join(shared, ", "))
+	}
+}
+
+// plural returns "s" for n != 1.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// memberFieldRef pairs an exposing member with its concrete Field copy — the
+// member-supplied default/requiredness dimensions (§13) live on the member's
+// own copy of a component field.
+type memberFieldRef struct {
+	module string
+	field  modschema.Field
+}
+
+// familyParam is one component-declared parameter (Field.DeclaredBy non-empty
+// — only available on LIVE-registry ModuleInfos; DeclaredBy is json:"-" and
+// absent from docdata) aggregated across the family members that expose it.
+type familyParam struct {
+	// field is the canonical contract — the first exposing member's copy.
+	field modschema.Field
+	// members are the exposing members in page order.
+	members []memberFieldRef
+}
+
+// collectFamilyParams gathers the component-declared parameters across the
+// family's members, in first-appearance order, verifying every exposing member
+// carries the identical contract (assertComponentParam) — the invariant that
+// lets the page render each ONCE.
+func collectFamilyParams(mis []modschema.ModuleInfo) ([]familyParam, error) {
+	var order []string
+	byName := map[string]*familyParam{}
+	for _, mi := range mis {
+		for _, f := range mi.Params {
+			if f.DeclaredBy == "" {
+				continue
+			}
+			fp, ok := byName[f.Name]
+			if !ok {
+				order = append(order, f.Name)
+				byName[f.Name] = &familyParam{field: f, members: []memberFieldRef{{mi.Module, f}}}
+				continue
+			}
+			if err := assertComponentParam(fp.field, f, fp.members[0].module, mi.Module); err != nil {
+				return nil, err
+			}
+			fp.members = append(fp.members, memberFieldRef{mi.Module, f})
+		}
+	}
+	out := make([]familyParam, 0, len(order))
+	for _, name := range order {
+		out = append(out, *byName[name])
+	}
+	return out, nil
+}
+
+// assertComponentParam verifies two members' copies of a component-declared
+// parameter agree on every dimension the component fixes: declarer, type,
+// aliases, usage, primary/lazy/sensitive, and — unless the component declares
+// the dimension member-supplied (§13 memberdefault/memberrequired) — the
+// default and requiredness too. A divergence is a LOUD generation error: a
+// component's contract is identical by construction, so disagreement means the
+// page would document a lie.
+func assertComponentParam(a, c modschema.Field, aMod, cMod string) error {
+	mismatch := func(dim string) error {
+		return fmt.Errorf("docgen: family parameter %q differs between %s and %s on %s — component-declared parameters must carry one contract",
+			a.Name, aMod, cMod, dim)
+	}
+	switch {
+	case a.DeclaredBy != c.DeclaredBy:
+		return mismatch("declaring component")
+	case a.GoType != c.GoType || a.SemanticType != c.SemanticType:
+		return mismatch("type")
+	case !slices.Equal(a.Aliases, c.Aliases):
+		return mismatch("aliases")
+	case a.Usage != c.Usage:
+		return mismatch("usage")
+	case a.Primary != c.Primary || a.Lazy != c.Lazy || a.Sensitive != c.Sensitive:
+		return mismatch("primary/lazy/sensitive flags")
+	case a.DefaultMemberSupplied != c.DefaultMemberSupplied || a.RequiredMemberSupplied != c.RequiredMemberSupplied:
+		return mismatch("member-supplied dimension declarations")
+	case !a.RequiredMemberSupplied && a.Required != c.Required:
+		return mismatch("requiredness")
+	case !a.DefaultMemberSupplied && (a.HasDefault != c.HasDefault || a.Default != c.Default):
+		return mismatch("default")
 	}
 	return nil
 }
 
-func groupNames(mis []modschema.ModuleInfo) []string {
-	out := make([]string, len(mis))
-	for i, mi := range mis {
-		out[i] = mi.Module
+// renderFamilyParamsSection renders the Family Parameters section: one table
+// row per component-declared parameter (rendered once for the whole family),
+// an exposure list for params not on every member, and per-member sub-tables
+// for the member-supplied dimensions (defaults / requiredness).
+func renderFamilyParamsSection(b *strings.Builder, fps []familyParam, memberCount, level int) {
+	if len(fps) == 0 {
+		return
 	}
-	return out
+	h, sub := heading(level), heading(level+1)
+	fmt.Fprintf(b, "\n---\n\n%s Family Parameters\n\n", h)
+	b.WriteString("These parameters are declared once by the family's shared parameter components — " +
+		"every member that exposes one accepts the identical contract.\n\n")
+
+	b.WriteString("| Parameter | Type | Required | Default | Description |\n")
+	b.WriteString("|---|---|---|---|---|\n")
+	for _, fp := range fps {
+		f := fp.field
+		name := "`" + f.Name + "`"
+		if len(f.Aliases) > 0 {
+			quoted := make([]string, len(f.Aliases))
+			for i, a := range f.Aliases {
+				quoted[i] = "`" + a + "`"
+			}
+			name += fmt.Sprintf(" (alias%s %s)", plural(len(f.Aliases)), strings.Join(quoted, ", "))
+		}
+		required := "No"
+		switch {
+		case f.RequiredMemberSupplied:
+			required = "member-specific (see below)"
+		case f.Required:
+			required = "Yes"
+		}
+		def := paramDefaultCell(f)
+		if f.DefaultMemberSupplied {
+			def = "member-specific (see below)"
+		}
+		fmt.Fprintf(b, "| %s | `%s` | %s | %s | %s |\n",
+			name, displayParamType(f), required, def, escapeUsageCell(f.Usage))
+	}
+
+	var partial []familyParam
+	for _, fp := range fps {
+		if len(fp.members) < memberCount {
+			partial = append(partial, fp)
+		}
+	}
+	if len(partial) > 0 {
+		b.WriteString("\nNot every member exposes every family parameter:\n\n")
+		for _, fp := range partial {
+			links := make([]string, len(fp.members))
+			for i, m := range fp.members {
+				links[i] = memberLink(m.module)
+			}
+			fmt.Fprintf(b, "- `%s` — %s\n", fp.field.Name, strings.Join(links, ", "))
+		}
+	}
+
+	for _, fp := range fps {
+		if fp.field.DefaultMemberSupplied {
+			fmt.Fprintf(b, "\n%s `%s` defaults\n\n", sub, fp.field.Name)
+			b.WriteString("| Module | Default |\n|---|---|\n")
+			for _, m := range fp.members {
+				fmt.Fprintf(b, "| %s | %s |\n", memberLink(m.module), paramDefaultCell(m.field))
+			}
+		}
+		if fp.field.RequiredMemberSupplied {
+			fmt.Fprintf(b, "\n%s `%s` requiredness\n\n", sub, fp.field.Name)
+			b.WriteString("| Module | Required |\n|---|---|\n")
+			for _, m := range fp.members {
+				required := "No"
+				if m.field.Required {
+					required = "Yes"
+				}
+				fmt.Fprintf(b, "| %s | %s |\n", memberLink(m.module), required)
+			}
+		}
+	}
 }
 
-// joinWithAnd renders items as "a and b", "a, b, and c", or a single item.
-func joinWithAnd(items []string) string {
-	switch len(items) {
-	case 0:
-		return ""
-	case 1:
-		return items[0]
-	case 2:
-		return items[0] + " and " + items[1]
-	default:
-		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
+// renderFamilySemTypes renders ONE Parameter Types section for the whole
+// family page: the union of the members' semantic types, deduplicated by name
+// (the vocabulary is sealed, so one name is one registered type), in
+// first-appearance order.
+func renderFamilySemTypes(b *strings.Builder, mis []modschema.ModuleInfo, level int) {
+	seen := map[string]bool{}
+	var union []modschema.SemanticTypeInfo
+	for _, mi := range mis {
+		for _, st := range mi.SemTypes {
+			if seen[st.Name] {
+				continue
+			}
+			seen[st.Name] = true
+			union = append(union, st)
+		}
+	}
+	if len(union) == 0 {
+		return
+	}
+	h, sub := heading(level), heading(level+1)
+	fmt.Fprintf(b, "\n---\n\n%s Parameter Types\n\n", h)
+	for _, st := range union {
+		fmt.Fprintf(b, "%s %s\n\n%s\n\n", sub, st.Name, st.Doc)
 	}
 }
 
@@ -292,39 +389,24 @@ func renderDescriptionSection(b *strings.Builder, description string) {
 	b.WriteString("\n")
 }
 
+// renderParamsSection renders a plain Parameters table for every param the
+// module exposes. It backs the combined execution-modules page (exec functions
+// have no family components and no requisites); family pages render members
+// through renderMemberParams instead.
 func renderParamsSection(b *strings.Builder, mi modschema.ModuleInfo, level int) {
-	h := heading(level)
 	if len(mi.Params) == 0 {
-		// A parameterless STATE module (test.ping, test.nop, module.run) still
-		// documents that it accepts the requisite / Salt-parity attribute set —
-		// every state does — so the page must not silently drop the requisites
-		// boilerplate. A non-state surface (dispatch/exec) has no requisites, so
-		// it renders nothing here.
-		if mi.Kind == modschema.KindState {
-			fmt.Fprintf(b, "\n---\n\n%s Parameters\n\n", h)
-			b.WriteString("This module takes no parameters of its own.\n")
-			b.WriteString("\n")
-			b.WriteString(requisitesBoilerplate)
-			b.WriteString("\n")
-		}
 		return
 	}
-	fmt.Fprintf(b, "\n---\n\n%s Parameters\n\n", h)
+	fmt.Fprintf(b, "\n---\n\n%s Parameters\n\n", heading(level))
 	b.WriteString("| Parameter | Type | Required | Default | Description |\n")
 	b.WriteString("|---|---|---|---|---|\n")
 	for _, f := range mi.Params {
-		typ := displayParamType(f)
 		required := "No"
 		if f.Required {
 			required = "Yes"
 		}
-		def := paramDefaultCellKind(f, mi.Kind)
-		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s | %s |\n", f.Name, typ, required, def, escapeUsageCell(f.Usage))
-	}
-	if mi.Kind == modschema.KindState {
-		b.WriteString("\n")
-		b.WriteString(requisitesBoilerplate)
-		b.WriteString("\n")
+		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s | %s |\n",
+			f.Name, displayParamType(f), required, paramDefaultCellKind(f, mi.Kind), escapeUsageCell(f.Usage))
 	}
 }
 
@@ -358,42 +440,23 @@ func renderExamplesSection(b *strings.Builder, examples []modschema.Example, lev
 	}
 }
 
-func renderNotesSection(b *strings.Builder, notes []modschema.Note, level int) {
-	if len(notes) == 0 {
-		return
-	}
-	fmt.Fprintf(b, "\n---\n\n%s Notes\n\n", heading(level))
-	for _, n := range notes {
-		fmt.Fprintf(b, "> **%s**\n>\n%s\n\n", n.Title, blockquoteBody(n.Body))
-	}
-}
-
-func renderDivergencesSection(b *strings.Builder, divergences []string, level int) {
-	if len(divergences) == 0 {
-		return
-	}
-	fmt.Fprintf(b, "\n---\n\n%s Divergences\n\n", heading(level))
-	for _, d := range divergences {
-		fmt.Fprintf(b, "- %s\n", d)
-	}
-}
-
 func renderSeeAlsoSection(b *strings.Builder, module string, seeAlso []string, level int) error {
 	if len(seeAlso) == 0 {
 		return nil
 	}
 	fmt.Fprintf(b, "\n---\n\n%s See Also\n\n", heading(level))
 	for _, s := range seeAlso {
-		// A state module resolves to its own page; an execution-only module
-		// resolves to the shared execution-modules page. cmd.run is in
-		// moduleToSlug (the state page is its canonical surface), so it resolves
-		// as a state target even when named from an execution spec.
-		if slug, ok := moduleToSlug[s]; ok {
-			fmt.Fprintf(b, "- [%s](/docs/guides/modules/%s)\n", s, slug)
+		// A state module resolves to its family page + member anchor; an
+		// execution-only module resolves to the shared execution-modules page +
+		// its function anchor. cmd.run is a state module (the family page is its
+		// canonical surface), so it resolves as a state target even when named
+		// from an execution spec.
+		if stateModules[s] {
+			fmt.Fprintf(b, "- [%s](%s)\n", s, modulePageURL(s))
 			continue
 		}
 		if execModuleSet[s] {
-			fmt.Fprintf(b, "- [%s](%s)\n", s, execPageURL)
+			fmt.Fprintf(b, "- [%s](%s#%s)\n", s, execPageURL, memberAnchor(s))
 			continue
 		}
 		return fmt.Errorf("docgen: module %s: see-also target %q does not resolve to any page", module, s)
@@ -408,20 +471,20 @@ var importLineRE = regexp.MustCompile(`^\s*import\b`)
 
 // assertNoJSX enforces the CommonMark-only prose contract (§4/§8): a docgen
 // page must never carry raw MDX/JSX. Doc prose is rendered as plain CommonMark
-// — `{/* */}` comments, Note blockquotes, and fenced code — so an `import`
-// line or an unescaped `<Component` open tag can only have leaked in from an
-// un-migrated hand page (§4: `<Tabs>` → sequential fenced blocks, `<Callout>` →
-// Note blockquotes). Left in place it would silently break the website's MDX
-// build; here it fails generation loudly instead. Fenced code blocks and inline
-// `code` spans are literal in MDX, so their contents are exempt.
+// — `{/* */}` comments and fenced code — so an `import` line or an unescaped
+// `<Component` open tag can only have leaked in from an un-migrated hand page
+// (§4: `<Tabs>` → sequential fenced blocks). Left in place it would silently
+// break the website's MDX build; here it fails generation loudly instead.
+// Fenced code blocks and inline `code` spans are literal in MDX, so their
+// contents are exempt.
 func assertNoJSX(module, rendered string) error {
 	inFence := false
 	for i, line := range strings.Split(rendered, "\n") {
 		trimmed := strings.TrimSpace(line)
-		// A Note body renders inside a blockquote, so its fenced-code delimiters
-		// arrive prefixed with "> "; strip an optional leading blockquote marker
-		// before the fence check so code inside a Note toggles the fence and is
-		// still skipped.
+		// Blockquoted prose arrives with fenced-code delimiters prefixed by
+		// "> "; strip an optional leading blockquote marker before the fence
+		// check so code inside a blockquote toggles the fence and is still
+		// skipped.
 		fenceProbe := strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))
 		if strings.HasPrefix(fenceProbe, "```") || strings.HasPrefix(fenceProbe, "~~~") {
 			inFence = !inFence
@@ -436,7 +499,7 @@ func assertNoJSX(module, rendered string) error {
 		}
 		if col, ok := unescapedJSXComponent(line); ok {
 			return fmt.Errorf("docgen: module %s: generated line %d has an unescaped JSX element at column %d (%q) — "+
-				"migrate <Component> prose to CommonMark (fenced blocks / Note blockquotes)", module, i+1, col+1, trimmed)
+				"migrate <Component> prose to CommonMark (fenced blocks)", module, i+1, col+1, trimmed)
 		}
 	}
 	return nil
@@ -488,53 +551,29 @@ func displayParamType(f modschema.Field) string {
 	}
 }
 
-// blockquoteBody prefixes EVERY line of a Note body with a blockquote marker so
-// a multi-paragraph or fenced-code body stays inside ONE `>` callout. In
-// CommonMark a bare blank line (no `>`) terminates a blockquote, so a body with
-// a fenced code block or a trailing paragraph would otherwise escape the callout
-// after its first line (the file.managed "Worked source-template render" bug):
-// blank lines render as a lone `>` and every other line — fenced-code delimiters
-// and their contents included — as `> <line>`.
-func blockquoteBody(body string) string {
-	lines := strings.Split(body, "\n")
-	var b strings.Builder
-	for i, line := range lines {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		if line == "" {
-			b.WriteByte('>')
-			continue
-		}
-		b.WriteString("> ")
-		b.WriteString(line)
-	}
-	return b.String()
-}
-
 // paramDefaultCell renders the Default column. A sensitive parameter's
 // Default is already redacted to empty by the schema layer (§2.5); this never
 // prints a value for one regardless.
 // usageCellEscaper escapes a Field.Usage string for embedding, verbatim, into
 // a generated Markdown table cell. Usage is plain help prose from a module's
-// `usage:"..."` tag, not authored CommonMark (unlike Description/Effects/
-// Notes, whose authors deliberately backtick-wrap any placeholder like
-// `<hex>` or `<branch>`) — a usage string is free to contain a BARE
-// "<placeholder>" token (see archive.extracted's "sha256=<hex>", cmd.run's
-// "name: <command>", git.latest's "origin/<branch>") or a bare "${name}"-style
-// backreference token (see file.replace's "$1/${name} backreferences"). MDX
-// (unlike plain Markdown, see the managedMarkerPrefix comment above for the
-// same class of gotcha) parses a bare "<word>" ANYWHERE in the document as an
-// unclosed JSX tag, and a bare "{word}" as a JavaScript expression container
-// (evaluated as a reference to an undefined identifier at prerender time) —
-// either fails the site build outright rather than just rendering oddly, so
-// every angle bracket and curly brace in this untrusted-w.r.t.-markup text
-// must be escaped. Curly braces use numeric character references (no named
-// HTML entity exists for them). "&" is escaped too (so an already-escaped
-// sequence is never double-unescaped) and "|" is escaped (a literal pipe
-// would otherwise terminate the table cell early). Entities decode back to
-// the literal characters in the rendered page, so this is visually a no-op
-// for any usage string that happens not to need it.
+// `usage:"..."` tag, not authored CommonMark (unlike Description/Effects,
+// whose authors deliberately backtick-wrap any placeholder like `<hex>` or
+// `<branch>`) — a usage string is free to contain a BARE "<placeholder>"
+// token (see archive.extracted's "sha256=<hex>", cmd.run's "name: <command>",
+// git.latest's "origin/<branch>") or a bare "${name}"-style backreference
+// token (see file.replace's "$1/${name} backreferences"). MDX (unlike plain
+// Markdown, see the managedMarkerPrefix comment above for the same class of
+// gotcha) parses a bare "<word>" ANYWHERE in the document as an unclosed JSX
+// tag, and a bare "{word}" as a JavaScript expression container (evaluated as
+// a reference to an undefined identifier at prerender time) — either fails
+// the site build outright rather than just rendering oddly, so every angle
+// bracket and curly brace in this untrusted-w.r.t.-markup text must be
+// escaped. Curly braces use numeric character references (no named HTML
+// entity exists for them). "&" is escaped too (so an already-escaped sequence
+// is never double-unescaped) and "|" is escaped (a literal pipe would
+// otherwise terminate the table cell early). Entities decode back to the
+// literal characters in the rendered page, so this is visually a no-op for
+// any usage string that happens not to need it.
 var usageCellEscaper = strings.NewReplacer(
 	"&", "&amp;",
 	"<", "&lt;",
@@ -548,6 +587,14 @@ var usageCellEscaper = strings.NewReplacer(
 // embedded in a generated Markdown table cell.
 func escapeUsageCell(usage string) string {
 	return usageCellEscaper.Replace(usage)
+}
+
+// escapeSummaryCell escapes a Doc.Summary for the function-index table cell.
+// Unlike usage strings, summaries ARE authored CommonMark (inline code spans
+// are legitimate and must render), so only a literal pipe — which would
+// terminate the table cell early — is escaped.
+func escapeSummaryCell(summary string) string {
+	return strings.ReplaceAll(summary, "|", "\\|")
 }
 
 func paramDefaultCell(f modschema.Field) string {
@@ -595,29 +642,20 @@ func renderPageEffects(b *strings.Builder, e modschema.Effects, level int) {
 	}
 }
 
-// writeModulePage writes the rendered page for a single mi to path. It is the
-// single-module convenience wrapper over writeModulePageGroup (a single-member
-// group never renders per-member, so distinctParams is irrelevant here).
-func writeModulePage(path string, mi modschema.ModuleInfo, claim bool) error {
-	return writeModulePageGroup(path, []modschema.ModuleInfo{mi}, claim, false)
-}
-
-// writeModulePageGroup writes the rendered page for the N modules sharing a page
-// slug (see renderModulePageGroup). distinctParams is the caller's explicit
-// declaration (isDistinctParamSlug) that the members do NOT share a parameter
-// surface. If path already exists without the managed marker, it refuses to
-// overwrite it UNLESS claim is true (the one-time adoption a module's migration
-// PR performs explicitly) — the markerless-overwrite guard (§8) that protects
-// hand-written pages for modules that have not been migrated yet.
-func writeModulePageGroup(path string, mis []modschema.ModuleInfo, claim, distinctParams bool) error {
-	rendered, err := renderModulePageGroup(mis, distinctParams)
+// writeFamilyPage writes the rendered family page for the members of family.
+// If path already exists without the managed marker, it refuses to overwrite
+// it UNLESS claim is true (the one-time adoption a migration PR performs
+// explicitly) — the markerless-overwrite guard (§8) that protects hand-written
+// pages.
+func writeFamilyPage(path, family string, mis []modschema.ModuleInfo, claim bool) error {
+	rendered, err := renderFamilyPage(family, mis)
 	if err != nil {
 		return err
 	}
 	if existing, err := os.ReadFile(path); err == nil {
 		if !hasManagedMarker(existing) && !claim {
-			return fmt.Errorf("docgen: refusing to overwrite markerless page %s for %v "+
-				"(pass --claim to adopt it)", path, groupNames(mis))
+			return fmt.Errorf("docgen: refusing to overwrite markerless page %s for family %s "+
+				"(pass --claim to adopt it)", path, family)
 		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("docgen: read %s: %w", path, err)
@@ -626,4 +664,40 @@ func writeModulePageGroup(path string, mis []modschema.ModuleInfo, claim, distin
 		return fmt.Errorf("docgen: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// cleanupStalePages deletes previously generated pages whose slug is no longer
+// produced: any .mdx directly in dir that carries the managed marker and is
+// not in produced. Hand-written pages (query.mdx, starlark.mdx,
+// developing.mdx, index.mdx — no marker) are never touched. Returns the
+// removed slugs, sorted by directory order (ReadDir sorts by name).
+func cleanupStalePages(dir string, produced map[string]bool) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("docgen: read %s: %w", dir, err)
+	}
+	var removed []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".mdx") {
+			continue
+		}
+		slug := strings.TrimSuffix(name, ".mdx")
+		if produced[slug] {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return removed, fmt.Errorf("docgen: read %s: %w", path, err)
+		}
+		if !hasManagedMarker(content) {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return removed, fmt.Errorf("docgen: remove stale page %s: %w", path, err)
+		}
+		removed = append(removed, slug)
+	}
+	return removed, nil
 }

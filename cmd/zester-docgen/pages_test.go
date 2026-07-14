@@ -9,28 +9,22 @@ import (
 	"github.com/nirnx/zester/pkg/modschema"
 )
 
-func samplePkgRemovedInfo(t *testing.T) modschema.ModuleInfo {
+func samplePkgInfos(t *testing.T) []modschema.ModuleInfo {
 	t.Helper()
-	reg := buildStateRegistry()
-	mi, ok := reg.Describe("pkg.removed")
-	if !ok {
-		t.Fatal("pkg.removed has no registered spec")
-	}
-	return mi
+	return familyInfos(t, "pkg")
 }
 
-func TestWriteModulePage_RefusesMarkerlessOverwriteWithoutClaim(t *testing.T) {
+func TestWriteFamilyPage_RefusesMarkerlessOverwriteWithoutClaim(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pkg-removed.mdx")
+	path := filepath.Join(dir, "pkg.mdx")
 	original := "---\ntitle: hand-written\n---\n\nDo not touch me.\n"
 	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	mi := samplePkgRemovedInfo(t)
 
-	err := writeModulePage(path, mi, false)
+	err := writeFamilyPage(path, "pkg", samplePkgInfos(t), false)
 	if err == nil {
-		t.Fatal("writeModulePage: expected refusal for markerless existing page, got nil error")
+		t.Fatal("writeFamilyPage: expected refusal for markerless existing page, got nil error")
 	}
 	got, readErr := os.ReadFile(path)
 	if readErr != nil {
@@ -41,17 +35,16 @@ func TestWriteModulePage_RefusesMarkerlessOverwriteWithoutClaim(t *testing.T) {
 	}
 }
 
-func TestWriteModulePage_ClaimAdoptsMarkerlessPage(t *testing.T) {
+func TestWriteFamilyPage_ClaimAdoptsMarkerlessPage(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pkg-removed.mdx")
+	path := filepath.Join(dir, "pkg.mdx")
 	original := "---\ntitle: hand-written\n---\n\nDo not touch me.\n"
 	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	mi := samplePkgRemovedInfo(t)
 
-	if err := writeModulePage(path, mi, true); err != nil {
-		t.Fatalf("writeModulePage with claim=true: %v", err)
+	if err := writeFamilyPage(path, "pkg", samplePkgInfos(t), true); err != nil {
+		t.Fatalf("writeFamilyPage with claim=true: %v", err)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -65,13 +58,13 @@ func TestWriteModulePage_ClaimAdoptsMarkerlessPage(t *testing.T) {
 	}
 }
 
-func TestWriteModulePage_RegeneratesAlreadyManagedPageWithoutClaim(t *testing.T) {
+func TestWriteFamilyPage_RegeneratesAlreadyManagedPageWithoutClaim(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pkg-removed.mdx")
-	mi := samplePkgRemovedInfo(t)
+	path := filepath.Join(dir, "pkg.mdx")
+	mis := samplePkgInfos(t)
 
-	// First write must claim (markerless).
-	if err := writeModulePage(path, mi, true); err != nil {
+	// First write to a fresh file needs no claim.
+	if err := writeFamilyPage(path, "pkg", mis, false); err != nil {
 		t.Fatal(err)
 	}
 	firstGen, err := os.ReadFile(path)
@@ -81,8 +74,8 @@ func TestWriteModulePage_RegeneratesAlreadyManagedPageWithoutClaim(t *testing.T)
 
 	// A second run with claim=false must succeed (marker already present) and
 	// be byte-identical (deterministic).
-	if err := writeModulePage(path, mi, false); err != nil {
-		t.Fatalf("writeModulePage on an already-managed page without claim: %v", err)
+	if err := writeFamilyPage(path, "pkg", mis, false); err != nil {
+		t.Fatalf("writeFamilyPage on an already-managed page without claim: %v", err)
 	}
 	secondGen, err := os.ReadFile(path)
 	if err != nil {
@@ -91,63 +84,104 @@ func TestWriteModulePage_RegeneratesAlreadyManagedPageWithoutClaim(t *testing.T)
 	if string(firstGen) != string(secondGen) {
 		t.Errorf("regeneration is not deterministic:\n--- first ---\n%s\n--- second ---\n%s", firstGen, secondGen)
 	}
-}
-
-func TestWriteModulePage_NewFileNeedsNoClaimGuardBypass(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "brand-new.mdx")
-	mi := samplePkgRemovedInfo(t)
-	if err := writeModulePage(path, mi, false); err != nil {
-		t.Fatalf("writeModulePage on a nonexistent file should not require --claim: %v", err)
+	for _, mi := range mis {
+		if !strings.Contains(string(firstGen), managedMarker(mi.Module)) {
+			t.Errorf("family page missing managed marker for %s", mi.Module)
+		}
 	}
 }
 
-func TestRenderModulePage_PkgRemoved_AnatomySections(t *testing.T) {
-	mi := samplePkgRemovedInfo(t)
-	got, err := renderModulePage(mi)
+// TestCleanupStalePages pins the stale-page sweep: a marker-carrying page whose
+// slug is no longer produced is deleted; hand-written (markerless) pages and
+// still-produced pages survive; non-.mdx files are ignored.
+func TestCleanupStalePages(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("file.mdx", managedMarker("file.managed")+"\nproduced page\n")
+	write("file-managed.mdx", managedMarker("file.managed")+"\nstale per-module page\n")
+	write("query.mdx", "---\ntitle: hand-written\n---\n")
+	write("meta.json", `{"title":"Modules"}`)
+
+	removed, err := cleanupStalePages(dir, map[string]bool{"file": true})
 	if err != nil {
-		t.Fatalf("renderModulePage: %v", err)
+		t.Fatalf("cleanupStalePages: %v", err)
+	}
+	if strings.Join(removed, ",") != "file-managed" {
+		t.Errorf("removed = %v, want [file-managed]", removed)
+	}
+	for _, survivor := range []string{"file.mdx", "query.mdx", "meta.json"} {
+		if _, err := os.Stat(filepath.Join(dir, survivor)); err != nil {
+			t.Errorf("%s should have survived cleanup: %v", survivor, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "file-managed.mdx")); !os.IsNotExist(err) {
+		t.Error("stale marker-carrying file-managed.mdx should have been deleted")
+	}
+}
+
+// TestRenderFamilyPage_PkgAnatomySections pins the per-member anatomy on the
+// live pkg family page, including that pkg.removed's Notes and Divergences —
+// both present in its Doc — do NOT reach the rendered page.
+func TestRenderFamilyPage_PkgAnatomySections(t *testing.T) {
+	mis := samplePkgInfos(t)
+	var removed *modschema.ModuleInfo
+	for i := range mis {
+		if mis[i].Module == "pkg.removed" {
+			removed = &mis[i]
+		}
+	}
+	if removed == nil {
+		t.Fatal("pkg.removed not in the pkg family")
+	}
+	if len(removed.Doc.Notes) == 0 || len(removed.Doc.Divergences) == 0 {
+		t.Fatal("fixture drift: pkg.removed's Doc no longer carries Notes/Divergences — pick another module for this pin")
+	}
+
+	got, err := renderFamilyPage("pkg", mis)
+	if err != nil {
+		t.Fatalf("renderFamilyPage: %v", err)
 	}
 
 	mustContain := []string{
-		`title: "pkg.removed"`,
+		`title: "pkg"`,
 		managedMarker("pkg.removed"),
+		"## `pkg.removed` [#pkg-removed]",
 		"**Source**: `pkg/state/modules/pkg/pkg_removed.go`",
-		"## Parameters",
+		"### Parameters",
 		"| `name` | `string` |",
-		requisitesBoilerplate,
-		"## Effects",
-		"### Check",
-		"### Apply",
-		"### Revert",
-		"## Examples",
-		"### Remove a package by name",
+		"### Effects",
+		"#### Check",
+		"#### Apply",
+		"#### Revert",
+		"### Examples",
+		"#### Remove a package by name",
 		"```yaml",
-		"### Remove a package ad hoc",
+		"#### Remove a package ad hoc",
 		"```bash",
-		"## Notes",
-		"## Divergences",
-		"- BD-6",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(got, want) {
-			t.Errorf("rendered page missing %q\n--- full page ---\n%s", want, got)
+			t.Errorf("rendered page missing %q", want)
 		}
 	}
-	// pkg.removed has no semantic-typed params and no SeeAlso: those sections
-	// must be omitted entirely.
-	for _, section := range []string{"## Parameter Types", "## See Also"} {
-		if strings.Contains(got, section) {
-			t.Errorf("rendered page has empty section %q that should be omitted", section)
+	// Notes and Divergences are dropped from rendered pages.
+	for _, banned := range []string{"# Notes", "# Divergences", removed.Doc.Notes[0].Title, "- " + removed.Doc.Divergences[0]} {
+		if strings.Contains(got, banned) {
+			t.Errorf("rendered page must not carry Notes/Divergences content (found %q)", banned)
 		}
 	}
 }
 
-// TestRenderModulePage_RejectsJSXInPoisonedDoc is the §4/§8 assertNoJSX guard:
+// TestRenderFamilyPage_RejectsJSXInPoisonedDoc is the §4/§8 assertNoJSX guard:
 // a Doc whose prose carries raw MDX/JSX (an `import` line or an unescaped
 // `<Component>` open tag — the shape a hand-page migration could leave behind)
 // must FAIL generation rather than emit a page that breaks the website build.
-func TestRenderModulePage_RejectsJSXInPoisonedDoc(t *testing.T) {
+func TestRenderFamilyPage_RejectsJSXInPoisonedDoc(t *testing.T) {
 	cases := []struct {
 		name        string
 		description string
@@ -163,8 +197,8 @@ func TestRenderModulePage_RejectsJSXInPoisonedDoc(t *testing.T) {
 				Kind:   modschema.KindState,
 				Doc:    modschema.Doc{Summary: "demo", Description: tc.description},
 			}
-			if _, err := renderModulePage(mi); err == nil {
-				t.Fatalf("renderModulePage: expected assertNoJSX to fail generation for %q", tc.description)
+			if _, err := renderFamilyPage("demo", []modschema.ModuleInfo{mi}); err == nil {
+				t.Fatalf("renderFamilyPage: expected assertNoJSX to fail generation for %q", tc.description)
 			}
 		})
 	}
@@ -199,84 +233,6 @@ func TestAssertNoJSX_ExemptsLiteralAndSafeForms(t *testing.T) {
 	}
 }
 
-// TestBlockquoteBody_PrefixesEveryLine pins the multi-paragraph / fenced-code
-// Note fix: every line of a Note body — content, fenced-code delimiters, and
-// blank lines — must carry a `>` marker so the whole body stays in ONE
-// blockquote. A blank line renders as a lone `>` (a bare newline would end the
-// blockquote in CommonMark and let the rest of the body escape the callout).
-func TestBlockquoteBody_PrefixesEveryLine(t *testing.T) {
-	body := "Intro paragraph.\n\n```nginx\nworker_processes 4;\n```\n\nClosing paragraph."
-	got := blockquoteBody(body)
-	for i, line := range strings.Split(got, "\n") {
-		if !strings.HasPrefix(line, ">") {
-			t.Errorf("line %d is not blockquoted: %q\n--- full ---\n%s", i, line, got)
-		}
-	}
-	if !strings.Contains(got, "\n>\n") {
-		t.Errorf("a blank body line was not rendered as a lone '>':\n%s", got)
-	}
-	for _, want := range []string{
-		"> Intro paragraph.",
-		"> ```nginx",
-		"> worker_processes 4;",
-		"> ```",
-		"> Closing paragraph.",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("blockquoteBody dropped the `>` on %q:\n%s", want, got)
-		}
-	}
-}
-
-// TestRenderModulePage_MultiParagraphFencedNoteStaysInOneBlockquote is the
-// end-to-end guard for the docgen Note renderer bug: a Note whose body carries a
-// fenced code block plus a trailing paragraph must render entirely inside its
-// `>` callout (the file.managed "Worked source-template render" note previously
-// let the fenced block and closing paragraph escape the blockquote), and the
-// page must still pass the assertNoJSX fence-skipping guard.
-func TestRenderModulePage_MultiParagraphFencedNoteStaysInOneBlockquote(t *testing.T) {
-	mi := modschema.ModuleInfo{
-		Module: "demo.notes",
-		Kind:   modschema.KindState,
-		Doc: modschema.Doc{
-			Summary: "demo",
-			Notes: []modschema.Note{{
-				Level: "info",
-				Title: "Worked example",
-				Body:  "Intro paragraph.\n\n```nginx\nworker_processes 4;\n```\n\nClosing paragraph.",
-			}},
-		},
-	}
-	got, err := renderModulePage(mi)
-	if err != nil {
-		t.Fatalf("renderModulePage: %v", err)
-	}
-	notesIdx := strings.Index(got, "## Notes")
-	if notesIdx < 0 {
-		t.Fatalf("rendered page has no Notes section:\n%s", got)
-	}
-	noteRegion := got[notesIdx:]
-	for _, want := range []string{
-		"> **Worked example**",
-		"> Intro paragraph.",
-		"> ```nginx",
-		"> worker_processes 4;",
-		"> ```",
-		"> Closing paragraph.",
-	} {
-		if !strings.Contains(noteRegion, want) {
-			t.Errorf("note body line escaped the blockquote: missing %q\n--- notes ---\n%s", want, noteRegion)
-		}
-	}
-	// Regression guard: no body line may appear UNquoted (immediately after a
-	// newline with no `>`), which is exactly how the bug manifested.
-	for _, bad := range []string{"\n```nginx", "\nworker_processes 4;", "\nClosing paragraph."} {
-		if strings.Contains(noteRegion, bad) {
-			t.Errorf("note body escaped the blockquote (found unquoted %q):\n--- notes ---\n%s", bad, noteRegion)
-		}
-	}
-}
-
 // TestDisplayParamType_FriendlyCompositeNames pins the friendly display names for
 // the composite primitive passthroughs (map[string]any / []any) in the
 // Parameters table, and that a semantic type's registered name and scalar
@@ -302,30 +258,26 @@ func TestDisplayParamType_FriendlyCompositeNames(t *testing.T) {
 	}
 }
 
-// TestRenderModulePage_FileManaged_CompositeTypesRenderFriendly ties the friendly
-// display names to the real file.managed page: its context/defaults parameters
-// must render as `map`, never leaking Go's `map[string]interface {}` spelling.
-func TestRenderModulePage_FileManaged_CompositeTypesRenderFriendly(t *testing.T) {
-	reg := buildStateRegistry()
-	mi, ok := reg.Describe("file.managed")
-	if !ok {
-		t.Fatal("file.managed has no registered spec")
-	}
-	got, err := renderModulePage(mi)
+// TestRenderFamilyPage_FileManaged_CompositeTypesRenderFriendly ties the
+// friendly display names to the real file family page: file.managed's
+// context/defaults parameters must render as `map`, never leaking Go's
+// `map[string]interface {}` spelling.
+func TestRenderFamilyPage_FileManaged_CompositeTypesRenderFriendly(t *testing.T) {
+	got, err := renderFamilyPage("file", familyInfos(t, "file"))
 	if err != nil {
-		t.Fatalf("renderModulePage: %v", err)
+		t.Fatalf("renderFamilyPage: %v", err)
 	}
 	if strings.Contains(got, "map[string]interface {}") {
-		t.Errorf("file.managed page still leaks the raw Go map type:\n%s", got)
+		t.Errorf("file family page still leaks the raw Go map type")
 	}
 	for _, want := range []string{"| `context` | `map` |", "| `defaults` | `map` |"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("file.managed composite param not rendered with friendly `map` type: missing %q\n%s", want, got)
+			t.Errorf("file.managed composite param not rendered with friendly `map` type: missing %q", want)
 		}
 	}
 }
 
-func TestRenderModulePage_UnresolvableSeeAlsoFailsGeneration(t *testing.T) {
+func TestRenderFamilyPage_UnresolvableSeeAlsoFailsGeneration(t *testing.T) {
 	mi := modschema.ModuleInfo{
 		Module: "demo.thing",
 		Kind:   modschema.KindState,
@@ -334,7 +286,33 @@ func TestRenderModulePage_UnresolvableSeeAlsoFailsGeneration(t *testing.T) {
 			SeeAlso: []string{"nonexistent.module"},
 		},
 	}
-	if _, err := renderModulePage(mi); err == nil {
-		t.Fatal("renderModulePage: expected error for an unresolvable See Also target")
+	if _, err := renderFamilyPage("demo", []modschema.ModuleInfo{mi}); err == nil {
+		t.Fatal("renderFamilyPage: expected error for an unresolvable See Also target")
+	}
+}
+
+// TestRenderFamilyPage_SeeAlsoTargets pins the see-also link forms: a state
+// target links its family page + member anchor; an execution-only target links
+// the combined execution-modules page + function anchor.
+func TestRenderFamilyPage_SeeAlsoTargets(t *testing.T) {
+	mi := modschema.ModuleInfo{
+		Module: "demo.thing",
+		Kind:   modschema.KindState,
+		Doc: modschema.Doc{
+			Summary: "demo",
+			SeeAlso: []string{"ssh_auth.present", "pkg.version"},
+		},
+	}
+	got, err := renderFamilyPage("demo", []modschema.ModuleInfo{mi})
+	if err != nil {
+		t.Fatalf("renderFamilyPage: %v", err)
+	}
+	for _, want := range []string{
+		"- [ssh_auth.present](/docs/guides/modules/ssh-auth#ssh-auth-present)",
+		"- [pkg.version](/docs/guides/execution-modules#pkg-version)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("see-also link missing %q", want)
+		}
 	}
 }

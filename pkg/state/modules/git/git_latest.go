@@ -80,7 +80,7 @@ var gitLatestSpec = regdef.MustSpec("git.latest", modschema.KindState, GitLatest
 		"current with its remote: an existing clone is fetched and fast-forwarded (or hard-reset with " +
 		"`force`). `name` (defaulting to the state ID) is the remote URL — NOTE: this is the opposite of " +
 		"`git.cloned`, whose `name`/primary is the clone PATH and whose `target`-equivalent is instead " +
-		"folded into `name`. Compare with [`git.cloned`](/docs/guides/modules/git-cloned), which only " +
+		"folded into `name`. Compare with [`git.cloned`](/docs/guides/modules/git#git-cloned), which only " +
 		"ensures the clone exists at a revision and never updates a moving branch tip. `name`'s state-ID " +
 		"fallback still applies, but a state declaring neither `name` NOR a non-empty state ID has no URL " +
 		"at all — that combination is rejected with a required-parameter error.",

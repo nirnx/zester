@@ -1,0 +1,1358 @@
+---
+title: "file"
+description: "The file.* family of state modules."
+---
+
+{/* zester-docgen:managed module="file.absent" */}
+{/* zester-docgen:managed module="file.append" */}
+{/* zester-docgen:managed module="file.blockreplace" */}
+{/* zester-docgen:managed module="file.comment" */}
+{/* zester-docgen:managed module="file.copy" */}
+{/* zester-docgen:managed module="file.directory" */}
+{/* zester-docgen:managed module="file.keyvalue" */}
+{/* zester-docgen:managed module="file.line" */}
+{/* zester-docgen:managed module="file.managed" */}
+{/* zester-docgen:managed module="file.recurse" */}
+{/* zester-docgen:managed module="file.replace" */}
+{/* zester-docgen:managed module="file.symlink" */}
+{/* zester-docgen:managed module="file.touch" */}
+{/* zester-docgen:managed module="file.uncomment" */}
+
+| Module | Summary |
+|---|---|
+| [`file.absent`](#file-absent) | Ensure a file or directory does not exist. |
+| [`file.append`](#file-append) | Ensure specific lines are present in a file, appending any that are missing. |
+| [`file.blockreplace`](#file-blockreplace) | Manage a block of content between marker lines in a file. |
+| [`file.comment`](#file-comment) | Comment out lines matching a regular expression. |
+| [`file.copy`](#file-copy) | Copy a source file that already exists on the peel to a destination path. |
+| [`file.directory`](#file-directory) | Ensure a directory exists with the desired permissions and ownership. |
+| [`file.keyvalue`](#file-keyvalue) | Ensure key/value lines are present in a file, updating values in place. |
+| [`file.line`](#file-line) | Ensure, replace, insert, or delete a single line in a file. |
+| [`file.managed`](#file-managed) | Ensure a file exists with the desired content, permissions, and ownership. |
+| [`file.recurse`](#file-recurse) | Recursively copy a source directory tree to a destination directory. |
+| [`file.replace`](#file-replace) | Regular-expression search-and-replace within a file. |
+| [`file.symlink`](#file-symlink) | Ensure a symbolic link exists at a path, pointing to a target. |
+| [`file.touch`](#file-touch) | Create an empty file when missing, or update its modification time. |
+| [`file.uncomment`](#file-uncomment) | Uncomment lines matching a regular expression. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Family Parameters
+
+These parameters are declared once by the family's shared parameter components — every member that exposes one accepts the identical contract.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `source` | `string` | member-specific (see below) | *(none)* | source path content is taken from; whether it is required is member-specific |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `mode` | `FileMode` | No | member-specific (see below) | permission mode for the target in octal ("0644", "0755", "4755"); setuid/setgid/sticky bits are honored; the default is member-specific |
+| `user` | `string` | No | *(none)* | owner username for the target; ownership is left unchanged when unset |
+| `group` | `string` | No | *(none)* | group name for the target; ownership is left unchanged when unset |
+
+Not every member exposes every family parameter:
+
+- `source` — [`file.copy`](#file-copy), [`file.managed`](#file-managed), [`file.recurse`](#file-recurse)
+- `makedirs` — [`file.copy`](#file-copy), [`file.directory`](#file-directory), [`file.managed`](#file-managed), [`file.recurse`](#file-recurse), [`file.symlink`](#file-symlink), [`file.touch`](#file-touch)
+- `mode` — [`file.directory`](#file-directory), [`file.managed`](#file-managed)
+- `user` — [`file.directory`](#file-directory), [`file.managed`](#file-managed), [`file.recurse`](#file-recurse)
+- `group` — [`file.directory`](#file-directory), [`file.managed`](#file-managed), [`file.recurse`](#file-recurse)
+
+### `source` requiredness
+
+| Module | Required |
+|---|---|
+| [`file.copy`](#file-copy) | Yes |
+| [`file.managed`](#file-managed) | No |
+| [`file.recurse`](#file-recurse) | No |
+
+### `mode` defaults
+
+| Module | Default |
+|---|---|
+| [`file.directory`](#file-directory) | `0755` (lazy) |
+| [`file.managed`](#file-managed) | `0644` (lazy) |
+
+---
+
+## Parameter Types
+
+### StringList
+
+A list of strings. Accepts a single string (a one-element list), a list of strings, or a mixed scalar list whose elements are rendered to strings. A nested list or map element is rejected rather than dropped.
+
+### FileMode
+
+A Unix file-permission mode. Accepts an octal string ("0644", "755", "4755") or an integer whose value is the octal mode number (a YAML octal literal such as 0644 parses to 420). The setuid, setgid, and sticky bits (4000/2000/1000) are honored.
+
+### StringMap
+
+A map of string keys to string values. Scalar values are rendered to strings; a nested map or list value is rejected. Not expressible as a CLI key=value argument.
+
+### TemplateFlag
+
+A template-rendering flag. Accepts a bool, the string "jinja", or any truthy/falsy string (true/yes/1/on, false/no/0/off). Zester renders with Jinja, so any enabling value means "render with Jinja".
+
+
+---
+
+## `file.absent` [#file-absent]
+
+Ensure a file or directory does not exist.
+
+**Source**: `pkg/state/modules/file/file_absent.go`
+
+---
+
+`file.absent` ensures nothing exists at the given path, removing a file or an entire directory tree. The path defaults to the state ID, so a bare `file.absent` under an `/opt/old-app:` key removes `/opt/old-app`.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the file or directory to remove (defaults to the state ID); the path alias is accepted |
+
+---
+
+### Effects
+
+#### Check
+
+Stats the path. A stat error (the common case: the path does not exist) means no change is needed; any successful stat — file or directory — needs a change.
+
+#### Apply
+
+Removes the path via `RemoveAll`, which recursively deletes a directory tree. Reports the removed path in its details.
+
+#### Revert
+
+Cannot restore the removed content: nothing is captured before removal, so Revert is an explicit no-op rather than a guessed re-creation.
+
+
+---
+
+### Examples
+
+#### Remove a file by state ID
+
+The state ID is the path to remove; no parameters are needed.
+
+```yaml
+/etc/nginx/sites-enabled/default:
+  file.absent: []
+```
+
+#### Remove a named path after stopping a dependent
+
+name overrides the path; require ensures the dependent service is stopped first.
+
+```yaml
+remove_old_app:
+  file.absent:
+    - name: /opt/old-app
+    - require:
+      - "cmd.run:stop_old_app"
+```
+
+#### Remove a path ad hoc
+
+The bare positional argument is the path.
+
+```bash
+zester 'web-01' file.absent /tmp/old-config.txt
+```
+
+
+---
+
+### See Also
+
+- [file.managed](/docs/guides/modules/file#file-managed)
+- [file.touch](/docs/guides/modules/file#file-touch)
+
+---
+
+## `file.append` [#file-append]
+
+Ensure specific lines are present in a file, appending any that are missing.
+
+**Source**: `pkg/state/modules/file/file_append.go`
+
+---
+
+`file.append` ensures every line listed in `text` is present somewhere in the file at the given path (defaulting to the state ID). Each line is checked independently by substring match; only the lines that are missing are appended, in declared order, each followed by a newline.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target file (defaults to the state ID); the path alias is accepted |
+| `text` | `StringList` | No | *(none)* | lines that must be present in the file; each line is checked independently and only missing lines are appended |
+
+---
+
+### Effects
+
+#### Check
+
+A missing file needs a change (it will be created and populated on apply). For an existing file, each declared line is checked for presence as a substring of the file's content; any missing line needs a change.
+
+#### Apply
+
+Reads the current content (capturing it as the revert backup on first capture, if the file exists). For each declared line not already present, appends it followed by a newline — inserting a separating newline first if the existing content does not already end with one. A run where every line was already present is a no-op. Reports the count of appended lines in its details.
+
+#### Revert
+
+A file this run's Apply created is removed (tolerating an already-missing file); a file that pre-existed is restored to its captured original content. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Add entries to /etc/hosts
+
+Each listed line is appended only if not already present.
+
+```yaml
+/etc/hosts:
+  file.append:
+    - text:
+      - "192.168.1.10 db-master"
+      - "192.168.1.11 db-replica"
+```
+
+#### Append configuration after package install
+
+require ensures the package is installed before the config file is touched.
+
+```yaml
+/etc/security/limits.conf:
+  file.append:
+    - text:
+      - "* soft nofile 65535"
+      - "* hard nofile 65535"
+    - require:
+      - "pkg.installed:base-packages"
+```
+
+#### Append a line ad hoc
+
+The bare positional argument is the path. The CLI leg passes `text` as a plain string — one line — so a single line is given directly; a multi-line list is YAML-only (a bracketed value on the CLI is taken literally, not parsed as a list).
+
+```bash
+zester 'web-01' file.append /etc/hosts text='192.168.1.10 db-master'
+```
+
+
+---
+
+### See Also
+
+- [file.managed](/docs/guides/modules/file#file-managed)
+- [file.line](/docs/guides/modules/file#file-line)
+
+---
+
+## `file.blockreplace` [#file-blockreplace]
+
+Manage a block of content between marker lines in a file.
+
+**Source**: `pkg/state/modules/file/file_blockreplace.go`
+
+---
+
+`file.blockreplace` keeps the content between a start and end marker line in sync with `content`. The path defaults to the state ID (this module has no `path` alias). The markers default to `# START managed zone` / `# END managed zone` and can be overridden with `marker_start`/`marker_end`. When the markers are absent, `append_if_not_found` appends the whole block (creating the file if it does not exist); without it, a file or block that is missing is a clean no-op.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target file; defaults to the state ID; the path alias is accepted |
+| `content` | `string` | No | *(none)* | desired content placed between the marker lines |
+| `marker_start` | `string` | No | `# START managed zone` | line that starts the managed block |
+| `marker_end` | `string` | No | `# END managed zone` | line that ends the managed block |
+| `append_if_not_found` | `bool` | No | *(none)* | append (or create) the managed block when the markers are absent; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `append_newline` | `bool` | No | *(none)* | add a trailing newline after an appended block; a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+---
+
+### Effects
+
+#### Check
+
+Reads the file and locates the marker block. When the block is present, it reports a change only if the content between the markers differs from `content` (normalized to a trailing newline). When the file or block is absent, a change is needed only if `append_if_not_found` is set. Any read error other than not-exist fails the check.
+
+#### Apply
+
+Re-derives existence from a fresh read every invocation (never from a stale instance flag). On a missing file it creates the block when `append_if_not_found` is set (else no-op). On a present file it replaces the content between the markers, or — when the markers are absent and `append_if_not_found` is set — appends the block (adding a trailing newline when `append_newline` is set). Captures the original for revert on the first write and writes with mode 0644.
+
+#### Revert
+
+Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Manage a marked block in a config file
+
+The default markers delimit the managed zone; append_if_not_found seeds the block on first run.
+
+```yaml
+/etc/hosts:
+  file.blockreplace:
+    - content: |
+        10.0.0.1 app
+        10.0.0.2 db
+    - append_if_not_found: true
+```
+
+#### Custom markers
+
+marker_start/marker_end override the default managed-zone markers.
+
+```yaml
+/etc/nginx/nginx.conf:
+  file.blockreplace:
+    - content: "    include /etc/nginx/managed/*.conf;"
+    - marker_start: "# BEGIN zester"
+    - marker_end: "# END zester"
+    - append_if_not_found: true
+```
+
+#### Manage a block ad hoc
+
+The bare positional is the path; content and flags are key=value args.
+
+```bash
+zester 'web*' file.blockreplace /etc/hosts content='10.0.0.1 app' append_if_not_found=true
+```
+
+
+---
+
+### See Also
+
+- [file.line](/docs/guides/modules/file#file-line)
+- [file.replace](/docs/guides/modules/file#file-replace)
+- [file.managed](/docs/guides/modules/file#file-managed)
+
+---
+
+## `file.comment` [#file-comment]
+
+Comment out lines matching a regular expression.
+
+**Source**: `pkg/state/modules/file/file_comment.go`
+
+---
+
+`file.comment` prefixes every line matching `regex` with a comment character (`#` by default), skipping lines that are already commented. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). `regex` is matched against the UNCOMMENTED line content and is required. A missing file is a clean no-op.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `char` | `string` | No | `#` | comment prefix added (file.comment) or stripped (file.uncomment); defaults to # |
+| `regex` | `string` | Yes | *(none)* | Go regular expression matched against the uncommented line content |
+
+---
+
+### Effects
+
+#### Check
+
+Reads the file (a missing file needs no change; any other read error fails the check) and computes the result in memory: a change is needed when any uncommented line matching `regex` would be prefixed with the comment character.
+
+#### Apply
+
+Reads the file (capturing the original for revert). Prefixes every uncommented line matching `regex` with `char`, leaving already-commented lines untouched, and writes the result with mode 0644, preserving the trailing newline. A missing file is a no-op.
+
+#### Revert
+
+Restores the file's captured prior content from this run's Apply. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Disable a directive by commenting it
+
+Lines matching regex are prefixed with the comment character.
+
+```yaml
+/etc/ssh/sshd_config:
+  file.comment:
+    - regex: "^PermitRootLogin"
+```
+
+#### Comment with a custom character
+
+char overrides the default # prefix (here a semicolon for an INI file).
+
+```yaml
+/etc/php.ini:
+  file.comment:
+    - regex: "^expose_php"
+    - char: ";"
+```
+
+#### Comment a line ad hoc
+
+The bare positional is the path; regex is a key=value arg.
+
+```bash
+zester 'web*' file.comment /etc/fstab regex='\sswap\s'
+```
+
+
+---
+
+### See Also
+
+- [file.uncomment](/docs/guides/modules/file#file-uncomment)
+- [file.line](/docs/guides/modules/file#file-line)
+- [file.replace](/docs/guides/modules/file#file-replace)
+
+---
+
+## `file.copy` [#file-copy]
+
+Copy a source file that already exists on the peel to a destination path.
+
+**Source**: `pkg/state/modules/file/file_copy.go`
+
+---
+
+`file.copy` copies `source` (a path local to the peel) to the destination. The destination path defaults to the state ID; `path` is accepted as an alias. Without `force`, an existing destination is left untouched (the copy is a one-time seed); with `force`, the destination is kept in sync with the source by content hash.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | destination path; the path alias is accepted for Salt compatibility (defaults to the state ID) |
+| `force` | `bool` | No | *(none)* | overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `preserve` | `bool` | No | *(none)* | copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+`file.copy` also accepts the family parameters `source`, `makedirs` — see [Family Parameters](#family-parameters).
+
+---
+
+### Effects
+
+#### Check
+
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.
+
+#### Apply
+
+Reads the source file. If the destination exists and `force` is not set, Apply is a no-op. With `force` on an existing destination, the current content is captured for revert (a non-not-exist read error fails the apply rather than overwriting content it could not capture) before it is overwritten. Creates missing parent directories when `makedirs` is set, then writes the destination with mode 0644, or the source's permission mode (via an explicit chmod) when `preserve` is set. Reports the byte count in its details.
+
+#### Revert
+
+Restores what this run's Apply changed: a destination that pre-existed (and was overwritten under `force`) is rewritten with its captured prior content; a destination this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Back up a config file before editing it
+
+A one-time seed copy: without force, the backup is created once and never overwritten.
+
+```yaml
+/etc/nginx/nginx.conf.bak:
+  file.copy:
+    - source: /etc/nginx/nginx.conf
+```
+
+#### Deploy from a staging area, keeping it in sync
+
+force keeps the destination synced to the source; preserve copies the source's permission mode; makedirs creates missing parent directories.
+
+```yaml
+/opt/app/config.yaml:
+  file.copy:
+    - source: /opt/staging/config.yaml
+    - force: true
+    - preserve: true
+    - makedirs: true
+```
+
+#### Copy a file ad hoc
+
+The bare positional argument is the destination path; source is a key=value arg.
+
+```bash
+zester 'web-01' file.copy /etc/nginx/nginx.conf.bak source=/etc/nginx/nginx.conf
+```
+
+
+---
+
+### See Also
+
+- [file.managed](/docs/guides/modules/file#file-managed)
+- [file.touch](/docs/guides/modules/file#file-touch)
+
+---
+
+## `file.directory` [#file-directory]
+
+Ensure a directory exists with the desired permissions and ownership.
+
+**Source**: `pkg/state/modules/file/file_directory.go`
+
+---
+
+`file.directory` ensures a directory exists at its path with the desired permission mode and ownership. The path defaults to the state ID. The `mode` parameter sets the directory's permission bits and defaults to `0755`; `dir_mode` is a standalone fallback source for the same mode, with `mode` winning when both are given. It honors an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0700` applies 0700. `user`/`group` converge ownership only when declared. `makedirs` follows the file.* family's canonical contract: it governs missing PARENTS of the managed directory (created at 0755 when true); when false — the default — a missing parent fails the apply instead of being silently created, while a dry run reports it as a would-change (a deliberate compatibility fix; see the changelog).
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target directory (defaults to the state ID); the path alias is accepted |
+| `dir_mode` | `FileMode` | No | `0755` (lazy) | fallback source for mode (Salt compatibility): applied as the directory's permission mode when mode is not declared; defaults to 0755 |
+
+`file.directory` also accepts the family parameters `mode`, `user`, `group`, `makedirs` — see [Family Parameters](#family-parameters).
+
+---
+
+### Effects
+
+#### Check
+
+Reports a would-change first — naming the missing parent and the remedy — when a parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create the parent, so dry runs of ordered trees stay valid; the strict failure happens at apply). Then compares, in order: path existence (a genuine not-exist means the directory must be created, while any other stat error fails the check rather than reporting phantom drift); that the path is a directory (an existing non-directory needs a change); the permission mode (the managed facets — permission bits plus setuid/setgid/sticky) against the desired mode, defaulting to 0755; and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.
+
+#### Apply
+
+Ensures parents per the canonical makedirs contract (missing parents are created at 0755 only when `makedirs` is true; otherwise a missing parent fails before anything is created). Probes existence for the revert memo — a non-not-exist stat error fails the apply rather than poisoning the memo, since a pre-existing tree must never be recorded as created (a same-instance Revert would RemoveAll it). Creates the directory itself, records the created memo only when it did not pre-exist, sets the mode via Chmod, and — when `user`/`group` is declared — converges ownership via Chown. Reports the applied mode. Revert removes only the managed directory, never parents makedirs created.
+
+#### Revert
+
+Removes a directory this run's Apply created (RemoveAll). A directory that pre-existed (only its mode or ownership changed) is left untouched, and a fresh instance (a standalone revert) recorded nothing and is a no-op — it never removes a directory it did not create.
+
+
+---
+
+### Examples
+
+#### Create a directory with ownership
+
+The state ID is the target path; mode and ownership are set inline.
+
+```yaml
+/opt/myapp:
+  file.directory:
+    - mode: "0755"
+    - user: root
+    - group: root
+```
+
+#### Private application data directory
+
+A restrictive 0700 mode with a service account owner; the require pulls in the user first.
+
+```yaml
+/var/lib/prometheus/data:
+  file.directory:
+    - mode: "0700"
+    - user: prometheus
+    - group: prometheus
+    - require:
+      - "user.present:prometheus"
+```
+
+#### Create a directory ad hoc
+
+The bare positional argument is the path; mode and ownership are key=value args.
+
+```bash
+zester 'web*' file.directory /var/log/myapp mode=0750 user=appuser group=appuser
+```
+
+
+---
+
+### See Also
+
+- [file.managed](/docs/guides/modules/file#file-managed)
+- [file.recurse](/docs/guides/modules/file#file-recurse)
+- [file.absent](/docs/guides/modules/file#file-absent)
+
+---
+
+## `file.keyvalue` [#file-keyvalue]
+
+Ensure key/value lines are present in a file, updating values in place.
+
+**Source**: `pkg/state/modules/file/file_keyvalue.go`
+
+---
+
+`file.keyvalue` ensures one or more `key<separator>value` lines exist in a file, updating the value in place when the key already exists (for `sysctl.conf`, `os-release`, or environment files). The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). Supply the pairs as a `key_values` map (Salt's name), an `entries` map, a single `key`/`value` pair, or any combination — `key_values` and `entries` are UNIONED (they are two separate parameters, not aliases), with `entries` winning a per-key collision, and the single `key`/`value` pair overriding both for its key. The `separator` defaults to `=` and is matched trimmed, so an existing `k = v` line (with surrounding spaces) is recognized and updated rather than duplicated.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `separator` | `string` | No | `=` | literal token written between key and value; defaults to = |
+| `key_values` | `StringMap` | No | *(none)* | map of keys to their desired values (Salt's key_values); unioned with entries, which wins a per-key collision |
+| `entries` | `StringMap` | No | *(none)* | map of keys to their desired values; unioned with key_values, winning a per-key collision |
+| `key` | `string` | No | *(none)* | a single key to manage (used with value); merged into the entries map |
+| `value` | `string` | No | *(none)* | the desired value for key; required when key is set |
+
+---
+
+### Effects
+
+#### Check
+
+Reads the file (a missing file needs a change — it will be created; any other read error fails the check) and computes the result in memory: a change is needed when any managed key is absent or its current value differs from the desired one.
+
+#### Apply
+
+Reads the file (capturing the original for revert on the first write when it already exists). For each key, updates the matching line's value in place (preserving its leading whitespace) or appends `key<separator>value` when absent, then writes the result with mode 0644 (preserving the trailing newline). Creates the file with the managed lines when it does not exist.
+
+#### Revert
+
+Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Set kernel parameters
+
+key_values sets multiple entries; an existing line's value is updated in place.
+
+```yaml
+/etc/sysctl.conf:
+  file.keyvalue:
+    - key_values:
+        net.ipv4.ip_forward: "1"
+        vm.swappiness: "10"
+```
+
+#### Set a single value with a custom separator
+
+key/value is the single-entry form; separator overrides the default = (a spaced separator here).
+
+```yaml
+/etc/login.defs:
+  file.keyvalue:
+    - key: UMASK
+    - value: "027"
+    - separator: "   "
+```
+
+#### Set a value ad hoc
+
+The bare positional is the path; key and value are key=value args.
+
+```bash
+zester 'web*' file.keyvalue /etc/os-release key=PRETTY_NAME value='Zester Linux'
+```
+
+
+---
+
+### See Also
+
+- [file.line](/docs/guides/modules/file#file-line)
+- [file.replace](/docs/guides/modules/file#file-replace)
+- [sysctl.present](/docs/guides/modules/sysctl#sysctl-present)
+
+---
+
+## `file.line` [#file-line]
+
+Ensure, replace, insert, or delete a single line in a file.
+
+**Source**: `pkg/state/modules/file/file_line.go`
+
+---
+
+`file.line` manages one line within a file. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). The `mode` parameter selects the action — `ensure` (the default: the line exists — it replaces the first matched line, or, when nothing matches, inserts the line positioned by `before`/`after`, appending it at the end when neither anchor matches), `replace` (rewrite a matched line, never adding one), `insert` (add the line if absent, positioned by `before`/`after`), or `delete` (remove every matching line; `absent` is a synonym). `match` is a regular expression identifying the target line (falling back to a literal substring test when it is not a valid regex); with no `match`, the exact `content` line is the target.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `content` | `string` | No | *(none)* | the line content to ensure, replace, insert, or delete |
+| `mode` | `string` | No | `ensure` | operation to perform: ensure (default), replace, insert, or delete (absent = delete); case-insensitive |
+| `match` | `string` | No | *(none)* | regular expression (or literal substring fallback) identifying the target line; when empty, the exact Content line is matched |
+| `before` | `string` | No | *(none)* | regular expression (or substring); on insert/ensure the new line is placed before the first matching line |
+| `after` | `string` | No | *(none)* | regular expression (or substring); on insert/ensure the new line is placed after the first matching line (takes precedence over before) |
+
+---
+
+### Effects
+
+#### Check
+
+Reads the file and computes the resulting lines in memory. A change is needed only when the computed content differs. When the file does not exist, a change is needed only for the content-adding actions (`ensure`/`insert`); `replace`/`delete` on a missing file need no change. Any read error other than not-exist fails the check rather than risking a blind write.
+
+#### Apply
+
+Reads the file (capturing the original for revert on the first write). A missing file is created with the single line for the content-adding actions, and is a no-op for `replace`/`delete`. Otherwise it applies the action — `ensure` replaces the first matched line, or, when no line matches, inserts `content` after the first `after` match, else before the first `before` match, else appends it at the end; `replace` rewrites matched lines in place; `insert` adds `content` after the first `after` match, else before the first `before` match, else at end; `delete` drops every matching line — and writes the result with mode 0644, preserving the trailing newline.
+
+#### Revert
+
+Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Ensure a directive is present
+
+With no match, the exact content line is ensured — appended if it is not already present.
+
+```yaml
+/etc/sysctl.conf:
+  file.line:
+    - content: "net.ipv4.ip_forward=1"
+```
+
+#### Replace a matched line
+
+match selects the line to rewrite; mode: replace never adds a line when the match is absent.
+
+```yaml
+/etc/ssh/sshd_config:
+  file.line:
+    - content: "PermitRootLogin no"
+    - match: "^PermitRootLogin"
+    - mode: replace
+```
+
+#### Insert a line after an anchor
+
+mode: insert places the line after the first line matching after (before is the fallback anchor).
+
+```yaml
+/etc/hosts:
+  file.line:
+    - content: "10.0.0.5 db"
+    - after: "^127\\.0\\.0\\.1"
+    - mode: insert
+```
+
+#### Delete a matching line ad hoc
+
+mode=delete removes every line matching match; the bare positional is the path.
+
+```bash
+zester 'web*' file.line /etc/fstab mode=delete match='\sswap\s'
+```
+
+
+---
+
+### See Also
+
+- [file.replace](/docs/guides/modules/file#file-replace)
+- [file.blockreplace](/docs/guides/modules/file#file-blockreplace)
+- [file.managed](/docs/guides/modules/file#file-managed)
+
+---
+
+## `file.managed` [#file-managed]
+
+Ensure a file exists with the desired content, permissions, and ownership.
+
+**Source**: `pkg/state/modules/file/file_managed.go`
+
+---
+
+`file.managed` ensures a file exists at its path with the desired content, permission mode, and ownership. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). Supply the content inline with `content` or copy it from a local file with `source` — these are alternatives, and if both are given `source` wins (there is no parse-time mutual-exclusion check). Setting `template` renders the content or source through the Jinja2 engine before writing (opt-in, so files that legitimately contain `{{ }}` are left untouched by default). The `mode` parameter defaults to `0644` and honors an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0755` applies 0755. `user`/`group` converge ownership only when declared.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `content` | `string` | No | *(none)* | desired inline file content; provide either content or source (source wins if both are set) |
+| `template` | `TemplateFlag` | No | *(none)* | render source/content as a Jinja2 template before writing (a bool, the string "jinja", or a truthy/falsy string); defaults to off |
+| `context` | `map` | No | *(none)* | extra template variables, available as top-level names; override defaults; only used when template is enabled |
+| `defaults` | `map` | No | *(none)* | fallback template variables; context takes precedence; only used when template is enabled |
+
+`file.managed` also accepts the family parameters `source`, `mode`, `user`, `group`, `makedirs` — see [Family Parameters](#family-parameters).
+
+---
+
+### Effects
+
+#### Check
+
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Resolves the desired content (reading `source` or using `content`, rendering the template when enabled) and compares, in order: file existence (a genuine not-exist means the file must be created, while any other read error fails the check rather than risking a blind overwrite); the SHA-256 content hash; the permission mode (comparing the managed facets — permission bits plus setuid/setgid/sticky); and, only when `user`/`group` are declared, ownership drift. Reports a change on the first mismatch.
+
+#### Apply
+
+Probes the prior state for revert (a non-not-exist read error fails the apply rather than overwriting content it could not capture), resolves the desired content and mode, creates missing parent directories with mode 0755 when `makedirs` is set, then writes the content. It records the revert memo on the first write only (first-capture-wins; a file it created stays marked created). Ownership is applied BEFORE the mode — chown clears the setuid/setgid bits, so the mode is chmod'd last — and the mode is enforced on pre-existing files too (os.WriteFile only applies perms at creation), so a mode-only drift converges. Reports the byte count and the applied mode.
+
+#### Revert
+
+Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content AND prior mode (never the mode Apply set); a file this instance created is removed. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op — it never destroys a file it did not touch.
+
+
+---
+
+### Examples
+
+#### Write a file with inline content
+
+The state ID is the target path; content and mode are set inline.
+
+```yaml
+/etc/motd:
+  file.managed:
+    - content: "Welcome to Zester"
+    - mode: "0644"
+```
+
+#### Copy from a source file with ownership
+
+source copies a local file; makedirs creates any missing parent directories; user/group set ownership.
+
+```yaml
+deploy-nginx-config:
+  file.managed:
+    - path: /etc/nginx/nginx.conf
+    - source: /srv/zester/files/nginx.conf
+    - mode: "0644"
+    - user: root
+    - group: root
+    - makedirs: true
+```
+
+#### Create directories on demand
+
+makedirs creates the whole parent chain (with mode 0755) before writing, so the state does not depend on a separate file.directory for /opt/myapp/config.
+
+```yaml
+app_config:
+  file.managed:
+    - path: /opt/myapp/config/settings.yml
+    - content: |
+        port: 8080
+        log_level: info
+    - mode: "0600"
+    - user: myapp
+    - group: myapp
+    - makedirs: true
+```
+
+#### Render a source template with variables
+
+template: true renders the source through Jinja2; context overrides defaults (worker_count becomes 8).
+
+```yaml
+/etc/nginx/nginx.conf:
+  file.managed:
+    - source: /srv/zester/files/nginx.conf.jinja
+    - template: true
+    - defaults:
+        worker_count: 4
+    - context:
+        worker_count: 8
+    - mode: "0644"
+```
+
+#### Render inline content as a template
+
+template: jinja renders the inline content; facts and settings are available under their own namespaces.
+
+```yaml
+/etc/motd:
+  file.managed:
+    - template: jinja
+    - content: |
+        Welcome to {{ facts.hostname }}.
+        Role: {{ settings.role }}
+    - mode: "0644"
+```
+
+#### Write a file ad hoc
+
+The bare positional argument is the path; content and mode are key=value args.
+
+```bash
+zester 'web*' file.managed /etc/motd content="Welcome to Zester" mode=0644
+```
+
+
+---
+
+### See Also
+
+- [file.directory](/docs/guides/modules/file#file-directory)
+- [file.copy](/docs/guides/modules/file#file-copy)
+- [file.absent](/docs/guides/modules/file#file-absent)
+
+---
+
+## `file.recurse` [#file-recurse]
+
+Recursively copy a source directory tree to a destination directory.
+
+**Source**: `pkg/state/modules/file/file_recurse.go`
+
+---
+
+`file.recurse` mirrors a `source` directory tree onto the destination, creating directories and copying files by SHA-256 content. The destination path defaults to the state ID. `file_mode` (default `0644`) is enforced on every copied file. `dir_mode` (default `0755`) is DECLARED-ONLY: when it is omitted, existing directory modes are left alone (it is used only as the creation mode for directories the copy makes); when it is set, managed directory modes are compared and enforced. `user`/`group` set ownership on copied files only. `clean` removes destination files absent from the source, and `makedirs` creates the destination's parent chain. Both mode parameters honor an octal string or an octal integer of any kind.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | destination directory path (defaults to the state ID); the path alias is accepted |
+| `dir_mode` | `FileMode` | No | `0755` (lazy) | directory permission mode for managed directories (octal); DECLARED-ONLY — undeclared, existing directory modes are left alone (used only as the creation mode for new directories, defaulting to 0755) |
+| `file_mode` | `FileMode` | No | `0644` (lazy) | permission mode for copied files in octal ("0644"); always enforced; defaults to 0644 |
+| `clean` | `bool` | No | *(none)* | remove files in the destination that are not present in the source (regular files only; directories are never removed); a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+`file.recurse` also accepts the family parameters `source`, `user`, `group`, `makedirs` — see [Family Parameters](#family-parameters).
+
+---
+
+### Effects
+
+#### Check
+
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Requires a source (an empty source is an error). Walks the source tree: a missing destination entry, a non-directory where a directory is expected, a content-hash difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are declared — a file-ownership difference each count as drift. Directory modes are compared ONLY when `dir_mode` is declared (an undeclared dir_mode never churns an operator-set mode, including a pre-existing dest root). With `clean`, extra regular files in the destination (never directories, matching Apply) also count as drift. Reports a change when any drift is found.
+
+#### Apply
+
+Requires a source. When `makedirs` is set, creates the destination's parent chain. Walks the source: creates each directory with MkdirAll (chmod'ing it to `dir_mode` ONLY when dir_mode is declared — an undeclared dir_mode never rewrites a pre-existing directory's mode), and writes each file with `file_mode`, recording newly created files for revert (a non-not-exist stat error fails the apply rather than mis-memoizing a pre-existing file), chmod'ing it to `file_mode`, and chowning it when ownership is declared. With `clean`, removes destination regular files not present in the source (directories are never removed). Reports the copied and cleaned counts.
+
+#### Revert
+
+Removes only the files this run's Apply created (best-effort; files that already existed before Apply are left untouched). A fresh instance (a standalone revert, e.g. after a peel restart) recorded nothing and is a clean no-op — it never removes a file it did not create.
+
+
+---
+
+### Examples
+
+#### Deploy a config directory tree
+
+Copies a whole tree with explicit modes and ownership; clean prunes stray destination files; makedirs creates the parent chain.
+
+```yaml
+/etc/app:
+  file.recurse:
+    - source: /srv/config/app
+    - file_mode: "0640"
+    - dir_mode: "0750"
+    - user: appuser
+    - group: appgroup
+    - clean: true
+    - makedirs: true
+    - require:
+      - "pkg.installed:myapp"
+```
+
+#### Mirror a tree, leaving directory modes alone
+
+With no dir_mode declared, existing directory modes are never touched — only file content and file_mode converge.
+
+```yaml
+/opt/app/static:
+  file.recurse:
+    - source: /srv/static
+    - file_mode: "0644"
+```
+
+#### Copy a tree ad hoc
+
+The bare positional argument is the destination; source is a key=value arg.
+
+```bash
+zester 'web*' file.recurse /etc/app source=/srv/config/app clean=true
+```
+
+
+---
+
+### See Also
+
+- [file.managed](/docs/guides/modules/file#file-managed)
+- [file.directory](/docs/guides/modules/file#file-directory)
+- [file.copy](/docs/guides/modules/file#file-copy)
+
+---
+
+## `file.replace` [#file-replace]
+
+Regular-expression search-and-replace within a file.
+
+**Source**: `pkg/state/modules/file/file_replace.go`
+
+---
+
+`file.replace` rewrites every match of a regular expression in a file, expanding backreferences in the replacement. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). The pattern is anchored per line (Salt's `re.MULTILINE` default), so `^`/`$` bind to line boundaries. `count` caps the number of replacements (0 replaces all). When the pattern is not found, `append_if_not_found` or `prepend_if_not_found` adds `not_found_content` (falling back to `repl`) — and, on a missing file, creates it with that content.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `pattern` | `string` | Yes | *(none)* | search regular expression (RE2); anchored per-line (Salt's re.MULTILINE default) |
+| `repl` | `string` | No | *(none)* | replacement text; $1/$&#123;name&#125; backreferences are expanded |
+| `count` | `int` | No | *(none)* | maximum number of replacements to perform; 0 (the default) replaces every match |
+| `append_if_not_found` | `bool` | No | *(none)* | when the pattern is not found, append not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `prepend_if_not_found` | `bool` | No | *(none)* | when the pattern is not found, prepend not_found_content (or repl); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `not_found_content` | `string` | No | *(none)* | text used for append_if_not_found/prepend_if_not_found; defaults to repl when empty |
+
+---
+
+### Effects
+
+#### Check
+
+Reads the file (a not-exist read is treated as empty content; any other read error fails the check) and computes the transformed content in memory: it reports a change when a match would be rewritten, or when the pattern is absent and an append/prepend would add content that is not already present.
+
+#### Apply
+
+Reads the file (capturing the original for revert on the first write). If the pattern matches, it performs up to `count` replacements. If the pattern is absent, it appends or prepends `not_found_content`/`repl` (creating a missing file with that content when append/prepend is enabled). Writes the result with mode 0644. Note the replacement is not guaranteed idempotent: if the replacement text still matches the pattern, a re-run replaces again.
+
+#### Revert
+
+Restores what this run's Apply changed: a file that pre-existed is rewritten with its captured prior content; a file this instance created (via append/prepend on a missing file) is removed (tolerating an already-missing file). A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Rewrite a config value
+
+The pattern matches the whole line; repl replaces it.
+
+```yaml
+/etc/rsyslog.conf:
+  file.replace:
+    - pattern: "^\\$ModLoad imudp"
+    - repl: "#$ModLoad imudp"
+```
+
+#### Ensure a setting exists, appending if absent
+
+append_if_not_found adds the line when the pattern matches nothing; not_found_content is the text to add.
+
+```yaml
+/etc/security/limits.conf:
+  file.replace:
+    - pattern: "^\\* soft nofile"
+    - repl: "* soft nofile 65535"
+    - append_if_not_found: true
+    - not_found_content: "* soft nofile 65535"
+```
+
+#### Replace only the first match
+
+count caps the number of replacements; here only the first occurrence is rewritten.
+
+```yaml
+/etc/hosts:
+  file.replace:
+    - pattern: "localhost"
+    - repl: "localhost.localdomain"
+    - count: 1
+```
+
+#### Search-and-replace ad hoc
+
+The bare positional is the path; pattern/repl are key=value args.
+
+```bash
+zester 'web*' file.replace /etc/motd pattern='old text' repl='new text'
+```
+
+
+---
+
+### See Also
+
+- [file.line](/docs/guides/modules/file#file-line)
+- [file.blockreplace](/docs/guides/modules/file#file-blockreplace)
+- [file.managed](/docs/guides/modules/file#file-managed)
+
+---
+
+## `file.symlink` [#file-symlink]
+
+Ensure a symbolic link exists at a path, pointing to a target.
+
+**Source**: `pkg/state/modules/file/file_symlink.go`
+
+---
+
+`file.symlink` ensures a symbolic link exists at the path (defaulting to the state ID) pointing to `target`. Without `force`, a pre-existing file or wrong-target symlink at the path is an error rather than being replaced.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path for the symbolic link (defaults to the state ID); the path alias is accepted |
+| `target` | `string` | No | *(none)* | destination the symlink should point to |
+| `force` | `bool` | No | *(none)* | replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false) |
+
+`file.symlink` also accepts the family parameter `makedirs` — see [Family Parameters](#family-parameters).
+
+---
+
+### Effects
+
+#### Check
+
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Reads the link at the path. A missing link, or one whose current target differs from the declared `target`, needs a change; a matching link needs none.
+
+#### Apply
+
+Creates missing parent directories first when `makedirs` is set. If a symlink already points to `target`, Apply is a no-op. If something else exists at the path (a wrong-target symlink, or a non-symlink file/directory), it is only removed when `force` is set — otherwise Apply fails with an error naming what is in the way. Reports the created link and its target in its details.
+
+#### Revert
+
+Removes the symlink unconditionally. It does not restore any file that `force` replaced, and a fresh instance's Revert still removes the symlink at the path (Revert is not gated on this instance having run Apply).
+
+
+---
+
+### Examples
+
+#### Create a symlink using the state ID as the link path
+
+The state ID is the link path; target is the only parameter needed.
+
+```yaml
+/usr/local/bin/python:
+  file.symlink:
+    - target: /usr/bin/python3
+```
+
+#### Replace whatever exists, creating parent directories
+
+force replaces an existing mismatched file or symlink; makedirs creates missing parent directories.
+
+```yaml
+/opt/app/config:
+  file.symlink:
+    - target: /etc/app/config
+    - force: true
+    - makedirs: true
+    - require:
+      - "file.directory:/opt/app"
+```
+
+#### Create a symlink ad hoc
+
+The bare positional argument is the link path; target is a key=value arg.
+
+```bash
+zester 'web-01' file.symlink /usr/local/bin/python target=/usr/bin/python3
+```
+
+
+---
+
+### See Also
+
+- [file.managed](/docs/guides/modules/file#file-managed)
+- [file.absent](/docs/guides/modules/file#file-absent)
+
+---
+
+## `file.touch` [#file-touch]
+
+Create an empty file when missing, or update its modification time.
+
+**Source**: `pkg/state/modules/file/file_touch.go`
+
+---
+
+`file.touch` ensures a file exists, creating it empty when missing. The path defaults to the state ID; `path` is accepted as an alias for Salt compatibility. If the file already exists, Check reports no change is needed regardless of its timestamp — the modification-time update only runs when the state is force-applied (for example by a `watch` requisite).
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the file to touch; the path alias is accepted for Salt compatibility (defaults to the state ID) |
+
+`file.touch` also accepts the family parameter `makedirs` — see [Family Parameters](#family-parameters).
+
+---
+
+### Effects
+
+#### Check
+
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Stats the path. An existing file (any content) needs no change; a missing path needs a change.
+
+#### Apply
+
+Creates missing parent directories first when `makedirs` is set. If the file is missing, creates it empty with the default file mode. If the file already exists (only reached on a force-apply), runs the system `touch` command to update its modification time — a no-op (`Changed: false`) when no command provider is available.
+
+#### Revert
+
+A file this run's Apply created is removed. A file that already existed (Apply only updated its mtime) is left alone — the previous timestamp is not restored, so Revert is a clean no-op.
+
+
+---
+
+### Examples
+
+#### Create a marker file
+
+makedirs creates any missing parent directories before the empty file is created.
+
+```yaml
+/var/lib/myapp/.provisioned:
+  file.touch:
+    - makedirs: true
+```
+
+#### Bump a reload trigger whenever config changes
+
+A watch requisite force-applies the state, which updates the file's mtime via the system touch command.
+
+```yaml
+/etc/myapp/reload-trigger:
+  file.touch:
+    - watch:
+      - "file.managed:/etc/myapp/config.yaml"
+```
+
+#### Touch a file ad hoc
+
+The bare positional argument is the path.
+
+```bash
+zester 'web-01' file.touch /var/run/myapp/.initialized
+```
+
+
+---
+
+### See Also
+
+- [file.managed](/docs/guides/modules/file#file-managed)
+- [file.absent](/docs/guides/modules/file#file-absent)
+
+---
+
+## `file.uncomment` [#file-uncomment]
+
+Uncomment lines matching a regular expression.
+
+**Source**: `pkg/state/modules/file/file_uncomment.go`
+
+---
+
+`file.uncomment` strips a single leading comment character (`#` by default, after optional indentation) from every commented line whose UNCOMMENTED content matches `regex`. The path defaults to the state ID (the `path` alias is accepted for Salt compatibility). `regex` is required and is matched against the line WITHOUT its comment prefix. A missing file is a clean no-op.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
+| `char` | `string` | No | `#` | comment prefix added (file.comment) or stripped (file.uncomment); defaults to # |
+| `regex` | `string` | Yes | *(none)* | Go regular expression matched against the uncommented line content |
+
+---
+
+### Effects
+
+#### Check
+
+Reads the file (a missing file needs no change; any other read error fails the check) and computes the result in memory: a change is needed when a commented line, once its comment character is stripped, matches `regex`.
+
+#### Apply
+
+Reads the file (capturing the original for revert). Removes a single leading `char` (after optional whitespace, preserving indentation) from every commented line whose uncommented text matches `regex`, and writes the result with mode 0644, preserving the trailing newline. A missing file is a no-op.
+
+#### Revert
+
+Restores the file's captured prior content from this run's Apply. A fresh instance (a standalone revert) recorded nothing and is an explicit clean no-op.
+
+
+---
+
+### Examples
+
+#### Re-enable a commented directive
+
+regex is matched against the uncommented text, so the leading # is stripped from the matching line.
+
+```yaml
+/etc/sysctl.conf:
+  file.uncomment:
+    - regex: "net.ipv4.ip_forward"
+```
+
+#### Uncomment with a custom character
+
+char selects which comment prefix to strip (a semicolon here).
+
+```yaml
+/etc/samba/smb.conf:
+  file.uncomment:
+    - regex: "load printers"
+    - char: ";"
+```
+
+#### Uncomment a line ad hoc
+
+The bare positional is the path; regex is a key=value arg.
+
+```bash
+zester 'web*' file.uncomment /etc/apt/sources.list regex='deb-src'
+```
+
+
+---
+
+### See Also
+
+- [file.comment](/docs/guides/modules/file#file-comment)
+- [file.line](/docs/guides/modules/file#file-line)
+- [file.replace](/docs/guides/modules/file#file-replace)

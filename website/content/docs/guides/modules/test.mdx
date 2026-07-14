@@ -1,18 +1,29 @@
 ---
-title: "test.configurable_test_state / test.fail_without_changes / test.nop / test.succeed_with_changes"
-description: "Result and change reporting fully driven by config. Always fails, reporting no changes. A no-op that always succeeds and reports no changes. Always succeeds and reports that changes were made."
+title: "test"
+description: "The test.* family of state modules."
 ---
 
 {/* zester-docgen:managed module="test.configurable_test_state" */}
 {/* zester-docgen:managed module="test.fail_without_changes" */}
 {/* zester-docgen:managed module="test.nop" */}
+{/* zester-docgen:managed module="test.ping" */}
 {/* zester-docgen:managed module="test.succeed_with_changes" */}
 
-`test.configurable_test_state`, `test.fail_without_changes`, `test.nop`, and `test.succeed_with_changes` are documented together on this page; each has its own parameters.
+| Module | Summary |
+|---|---|
+| [`test.configurable_test_state`](#test-configurable-test-state) | Result and change reporting fully driven by config. |
+| [`test.fail_without_changes`](#test-fail-without-changes) | Always fails, reporting no changes. |
+| [`test.nop`](#test-nop) | A no-op that always succeeds and reports no changes. |
+| [`test.ping`](#test-ping) | A simple liveness check that always succeeds. |
+| [`test.succeed_with_changes`](#test-succeed-with-changes) | Always succeeds and reports that changes were made. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## `test.configurable_test_state`
+## `test.configurable_test_state` [#test-configurable-test-state]
+
+Result and change reporting fully driven by config.
 
 **Source**: `pkg/state/modules/test/test_configurable_test_state.go`
 
@@ -29,8 +40,6 @@ description: "Result and change reporting fully driven by config. Always fails, 
 | `result` | `bool` | No | `true` | whether the state succeeds; false makes it fail (with the comment message, or "configured failure"); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
 | `changes` | `bool` | No | `true` | whether the state reports Changed: true (honored on both success and failure); defaults to true; a boolean that also accepts the integers 1 (true) and 0 (false) |
 | `comment` | `string` | No | *(none)* | message included in the result details and, on failure, the error |
-
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
@@ -68,31 +77,16 @@ scenario:
 
 ---
 
-### Notes
-
-> **Boolean parameters accept 1/0 and truthy strings**
->
-> Under the uniform decoder `result` and `changes` accept a real boolean, the integers `1` (true) and `0` (false), and the case-insensitive truthy/falsy strings (`true`/`yes`/`on` and `false`/`no`/`off`) — so a reactor-dispatched or CLI value is honored where the legacy `.(bool)` assertion silently kept the default. Any other value (for example the integer `2`, or Salt's `Sometimes`/`Random`) is a decode error, not a silent fallback.
-
-
----
-
-### Divergences
-
-- BD-2
-- BD-6
-- BD-7
-
----
-
 ### See Also
 
-- [test.succeed_with_changes](/docs/guides/modules/test-helpers)
-- [test.fail_without_changes](/docs/guides/modules/test-helpers)
+- [test.succeed_with_changes](/docs/guides/modules/test#test-succeed-with-changes)
+- [test.fail_without_changes](/docs/guides/modules/test#test-fail-without-changes)
 
 ---
 
-## `test.fail_without_changes`
+## `test.fail_without_changes` [#test-fail-without-changes]
+
+Always fails, reporting no changes.
 
 **Source**: `pkg/state/modules/test/test_fail_without_changes.go`
 
@@ -107,8 +101,6 @@ scenario:
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `comment` | `string` | No | *(none)* | message included in the error and result details; defaults to "failure without changes" |
-
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
@@ -144,37 +136,16 @@ simulated-failure:
 
 ---
 
-### Notes
-
-> **Use in onfail chains**
->
-> Hang an `onfail` requisite on another state so it runs only when this one fails:
->
-> ```yaml
-> fallback:
->   cmd.run:
->     - command: /usr/local/bin/failover.sh
->     - onfail:
->       - "test.fail_without_changes:simulated-failure"
-> ```
-
-
----
-
-### Divergences
-
-- BD-6
-
----
-
 ### See Also
 
-- [test.succeed_with_changes](/docs/guides/modules/test-helpers)
-- [test.configurable_test_state](/docs/guides/modules/test-helpers)
+- [test.succeed_with_changes](/docs/guides/modules/test#test-succeed-with-changes)
+- [test.configurable_test_state](/docs/guides/modules/test#test-configurable-test-state)
 
 ---
 
-## `test.nop`
+## `test.nop` [#test-nop]
+
+A no-op that always succeeds and reports no changes.
 
 **Source**: `pkg/state/modules/test/test_nop.go`
 
@@ -187,8 +158,6 @@ simulated-failure:
 ### Parameters
 
 This module takes no parameters of its own.
-
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
@@ -223,25 +192,80 @@ placeholder:
 
 ---
 
-### Notes
+### See Also
 
-> **Unimplemented Salt test states**
->
-> Salt's `test.show_notification` and `test.mod_watch` behaviors are not implemented; the Zester test helpers are `test.ping`, `test.nop`, `test.fail_without_changes`, `test.succeed_with_changes`, and `test.configurable_test_state`.
+- [test.ping](/docs/guides/modules/test#test-ping)
+- [test.succeed_with_changes](/docs/guides/modules/test#test-succeed-with-changes)
+- [test.fail_without_changes](/docs/guides/modules/test#test-fail-without-changes)
+- [test.configurable_test_state](/docs/guides/modules/test#test-configurable-test-state)
+
+---
+
+## `test.ping` [#test-ping]
+
+A simple liveness check that always succeeds.
+
+**Source**: `pkg/state/modules/test/test_ping.go`
+
+---
+
+`test.ping` is a no-op "are you alive?" check — the Zester equivalent of Salt's `test.ping`. It takes no parameters of its own and always succeeds, returning `{"result": "true"}` in its result details.
+
+---
+
+### Parameters
+
+This module takes no parameters of its own.
+
+---
+
+### Effects
+
+#### Check
+
+Always reports that a change is needed, so the runner proceeds to Apply and the result is returned.
+
+#### Apply
+
+Performs no work: returns Changed: false with Details `{"result": "true"}`.
+
+#### Revert
+
+No-op (Changed: false) — there is nothing to undo.
+
+
+---
+
+### Examples
+
+#### Ping all peels
+
+The bare invocation checks liveness across every matched peel.
+
+```bash
+zester '*' test.ping
+```
+
+#### Ping a specific peel
+
+Target a single peel by id.
+
+```bash
+zester 'web-01' test.ping
+```
 
 
 ---
 
 ### See Also
 
-- [test.ping](/docs/guides/modules/test-ping)
-- [test.succeed_with_changes](/docs/guides/modules/test-helpers)
-- [test.fail_without_changes](/docs/guides/modules/test-helpers)
-- [test.configurable_test_state](/docs/guides/modules/test-helpers)
+- [test.nop](/docs/guides/modules/test#test-nop)
 
 ---
 
-## `test.succeed_with_changes`
+## `test.succeed_with_changes` [#test-succeed-with-changes]
+
+Always succeeds and reports that changes were made.
 
 **Source**: `pkg/state/modules/test/test_succeed_with_changes.go`
 
@@ -256,8 +280,6 @@ placeholder:
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `comment` | `string` | No | *(none)* | optional message included in the result details |
-
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
@@ -292,30 +314,7 @@ simulated-change:
 
 ---
 
-### Notes
-
-> **Use in watch / onchanges chains**
->
-> Hang a `watch` or `onchanges` requisite on another state so it reacts to this one's reported change:
->
-> ```yaml
-> reactor:
->   cmd.run:
->     - command: echo "reacting to change"
->     - onchanges:
->       - "test.succeed_with_changes:simulated-change"
-> ```
-
-
----
-
-### Divergences
-
-- BD-6
-
----
-
 ### See Also
 
-- [test.fail_without_changes](/docs/guides/modules/test-helpers)
-- [test.configurable_test_state](/docs/guides/modules/test-helpers)
+- [test.fail_without_changes](/docs/guides/modules/test#test-fail-without-changes)
+- [test.configurable_test_state](/docs/guides/modules/test#test-configurable-test-state)

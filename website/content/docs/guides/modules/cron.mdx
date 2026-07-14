@@ -1,9 +1,103 @@
 ---
-title: "cron.present"
-description: "Ensure a crontab entry exists for a user with the given schedule and command."
+title: "cron"
+description: "The cron.* family of state modules."
 ---
 
+{/* zester-docgen:managed module="cron.absent" */}
 {/* zester-docgen:managed module="cron.present" */}
+
+| Module | Summary |
+|---|---|
+| [`cron.absent`](#cron-absent) | Ensure a crontab entry does not exist for a user. |
+| [`cron.present`](#cron-present) | Ensure a crontab entry exists for a user with the given schedule and command. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+
+---
+
+## Family Parameters
+
+These parameters are declared once by the family's shared parameter components — every member that exposes one accepts the identical contract.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `user` | `string` | No | `root` | user whose crontab is managed; defaults to root |
+| `command` | `string` | Yes | *(none)* | command line of the managed crontab entry; required |
+
+---
+
+## `cron.absent` [#cron-absent]
+
+Ensure a crontab entry does not exist for a user.
+
+**Source**: `pkg/state/modules/cron/cron_absent.go`
+
+---
+
+`cron.absent` ensures no crontab entry with the given `command` exists in the target user's crontab. `command` is required and identifies the line to remove; `user` defaults to `root`. The `name` parameter is a label for the state only (defaulting to the state ID) — removal matches on the command, not the label.
+
+---
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | `string` | No | State ID | label for the state; defaults to the state ID |
+
+`cron.absent` also accepts the family parameters `user`, `command` — see [Family Parameters](#family-parameters).
+
+---
+
+### Effects
+
+#### Check
+
+Lists the user's crontab and reports a change when any entry's command matches the declared command; otherwise it reports no change.
+
+#### Apply
+
+Removes the crontab entry matching the command through the cron provider. Reports the user and command in its details.
+
+#### Revert
+
+Cannot restore a deleted crontab entry (the removed line's schedule is not recorded), so Revert is an explicit no-op rather than a guessed re-creation.
+
+
+---
+
+### Examples
+
+#### Remove a legacy backup job
+
+The entry is identified by its command.
+
+```yaml
+remove-legacy-backup:
+  cron.absent:
+    - user: root
+    - command: /usr/local/bin/old_backup.sh
+```
+
+#### Remove a cron entry ad hoc
+
+The bare positional argument is the state's name; command is a key=value.
+
+```bash
+zester '*' cron.absent old-job command=/usr/local/bin/old_backup.sh
+```
+
+
+---
+
+### See Also
+
+- [cron.present](/docs/guides/modules/cron#cron-present)
+
+---
+
+## `cron.present` [#cron-present]
+
+Ensure a crontab entry exists for a user with the given schedule and command.
 
 **Source**: `pkg/state/modules/cron/cron_present.go`
 
@@ -13,43 +107,41 @@ description: "Ensure a crontab entry exists for a user with the given schedule a
 
 ---
 
-## Parameters
+### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | identifier comment stamped on the crontab line (its Salt-identifier identity); defaults to the state ID |
-| `user` | `string` | No | `root` | user whose crontab is managed; defaults to root |
-| `command` | `string` | Yes | *(none)* | command line of the managed crontab entry; required |
 | `minute` | `string` | No | `*` | minute field (0-59 or *); defaults to * |
 | `hour` | `string` | No | `*` | hour field (0-23 or *); defaults to * |
 | `daymonth` | `string` | No | `*` | day-of-month field (1-31 or *); defaults to * |
 | `month` | `string` | No | `*` | month field (1-12 or *); defaults to * |
 | `dayweek` | `string` | No | `*` | day-of-week field (0-7 or *); defaults to * |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+`cron.present` also accepts the family parameters `user`, `command` — see [Family Parameters](#family-parameters).
 
 ---
 
-## Effects
+### Effects
 
-### Check
+#### Check
 
 Lists the user's crontab and locates the entry sharing this state's identity — the marker comment when present, or, as an adoption fallback, an exact command match among label-less (hand-written) lines. Reports a change when no such entry exists, or when the located entry's command (compared with internal whitespace collapsed, matching the crontab parser), schedule fields, or identifier comment drift from the declared values.
 
-### Apply
+#### Apply
 
 Re-lists the crontab (a self-contained flow: a watch-forced Apply bypasses Check). An already-converged entry is a clean no-op — no crontab rewrite, no lying change. Otherwise it writes the desired entry, stamping the identifier comment (adopting a matching label-less line rather than duplicating it), and memoizes the replaced or adopted original for revert. Reports the user, command, and schedule in its details.
 
-### Revert
+#### Revert
 
 Undoes only what this run's Apply wrote. An entry created under the same identity as a prior one is restored in place; an adopted label-less line is put back; a freshly created entry is removed by its (command-scoped) line, preserving other names' same-command entries which are re-added. A fresh instance (a standalone revert) recorded nothing and is an explicit no-op — it never deletes an entry by bare command.
 
 
 ---
 
-## Examples
+### Examples
 
-### Nightly database backup
+#### Nightly database backup
 
 command is required; the schedule fields default to * where omitted.
 
@@ -64,7 +156,7 @@ backup-db:
       - "pkg.installed:postgresql"
 ```
 
-### Run a command every five minutes
+#### Run a command every five minutes
 
 A numeric minute is coerced to its string form (minute 5, not every minute — see the BD-3 divergence).
 
@@ -75,7 +167,7 @@ poll:
     - minute: 5
 ```
 
-### Create a cron entry ad hoc
+#### Create a cron entry ad hoc
 
 The bare positional argument is the entry's name (its identifier comment); command is a key=value.
 
@@ -86,26 +178,6 @@ zester 'web*' cron.present nightly command=/usr/local/bin/nightly.sh hour=2 minu
 
 ---
 
-## Notes
+### See Also
 
-> **Identity is the name, not the command**
->
-> The entry's identity is its `name` (stamped as a `# ZESTER_CRON_ID:` marker). Editing the `command` under an unchanged name replaces the line in place; two states with distinct names and the same command coexist as separate entries.
-
-> **An integer minute now means that minute**
->
-> Under the uniform decoder a YAML/msgpack integer schedule value (for example `minute: 5`) coerces to "5". The legacy parser dropped a non-string value to "" and then to `*`, so `minute: 5` used to run EVERY minute. Quote schedule values you intend as strings; a numeric value now maps to that exact field (BD-3).
-
-
----
-
-## Divergences
-
-- BD-3
-- BD-6
-
----
-
-## See Also
-
-- [cron.absent](/docs/guides/modules/cron-absent)
+- [cron.absent](/docs/guides/modules/cron#cron-absent)

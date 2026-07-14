@@ -1,16 +1,33 @@
 ---
-title: "host.absent / host.present"
-description: "Ensure a hostname is absent from the hosts file. Ensure a hostname maps to an IP address in the hosts file."
+title: "host"
+description: "The host.* family of state modules."
 ---
 
 {/* zester-docgen:managed module="host.absent" */}
 {/* zester-docgen:managed module="host.present" */}
 
-`host.absent` and `host.present` are documented together on this page; each has its own parameters.
+| Module | Summary |
+|---|---|
+| [`host.absent`](#host-absent) | Ensure a hostname is absent from the hosts file. |
+| [`host.present`](#host-present) | Ensure a hostname maps to an IP address in the hosts file. |
+
+All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 
 ---
 
-## `host.absent`
+## Family Parameters
+
+These parameters are declared once by the family's shared parameter components — every member that exposes one accepts the identical contract.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `config` (alias `path`) | `string` | No | `/etc/hosts` | hosts file path; the path alias is also accepted; defaults to /etc/hosts |
+
+---
+
+## `host.absent` [#host-absent]
+
+Ensure a hostname is absent from the hosts file.
 
 **Source**: `pkg/state/modules/host/host_absent.go`
 
@@ -25,9 +42,8 @@ description: "Ensure a hostname is absent from the hosts file. Ensure a hostname
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | host name to remove from the hosts file; defaults to the state ID |
-| `config` | `string` | No | `/etc/hosts` | hosts file path; the path alias is also accepted; defaults to /etc/hosts |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+`host.absent` also accepts the family parameter `config` — see [Family Parameters](#family-parameters).
 
 ---
 
@@ -70,28 +86,15 @@ zester '*' host.absent old-host
 
 ---
 
-### Notes
-
-> **Comment and blank lines are preserved**
->
-> The hosts file is rewritten in memory with existing comment (`#`) and blank lines kept verbatim; the hostname is removed from every line it appears on and a line left with no remaining names is dropped. A missing hosts file is a clean no-op.
-
-
----
-
-### Divergences
-
-- BD-6
-
----
-
 ### See Also
 
-- [host.present](/docs/guides/modules/host)
+- [host.present](/docs/guides/modules/host#host-present)
 
 ---
 
-## `host.present`
+## `host.present` [#host-present]
+
+Ensure a hostname maps to an IP address in the hosts file.
 
 **Source**: `pkg/state/modules/host/host_present.go`
 
@@ -107,9 +110,8 @@ zester '*' host.absent old-host
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | host name to manage; defaults to the state ID |
 | `ip` | `string` | Yes | *(none)* | IP address the hostname should map to; required |
-| `config` | `string` | No | `/etc/hosts` | hosts file path; the path alias is also accepted; defaults to /etc/hosts |
 
-All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
+`host.present` also accepts the family parameter `config` — see [Family Parameters](#family-parameters).
 
 ---
 
@@ -164,33 +166,6 @@ zester '*' host.present web1 ip=10.0.0.5
 
 ---
 
-### Notes
-
-> **A hostname is moved, not duplicated**
->
-> If the hostname already appears on a line for a DIFFERENT IP, host.present removes it there and maps it to the declared IP, so a name is never resolvable to two addresses at once. A line left with no remaining names is dropped.
-
-> **The hosts-file path: config, path, or the default**
->
-> The managed file defaults to `/etc/hosts`. Override it with `config`; the legacy `path` alias is also accepted. `config` takes precedence over `path`, and either takes precedence over the `/etc/hosts` default.
-
-> **Comment and blank lines are preserved**
->
-> The hosts file is rewritten in memory: existing comment (`#`) and blank lines are kept verbatim. The hostname is added to the existing line for its IP or appended as a new tab-separated line for that IP, and a missing hosts file is created.
-
-> **Divergences from Salt**
->
-> `host.present` enforces exactly ONE IP per hostname — any line mapping the hostname to a different IP has the name removed — whereas Salt's `host.present` accepts a LIST of IPs and only cleans up other mappings under `clean: True`. Salt's per-entry `comment` parameter is not supported.
-
-
----
-
-### Divergences
-
-- BD-6
-
----
-
 ### See Also
 
-- [host.absent](/docs/guides/modules/host)
+- [host.absent](/docs/guides/modules/host#host-absent)
