@@ -40,15 +40,18 @@ import (
 
 // fileMakeDirsParam is the file.* family's canonical `makedirs` component.
 //
-// CANONICAL RUNTIME CONTRACT (§13, maintainer-approved): `makedirs` controls
-// creation of missing PARENT directories of the operation's target — never
-// the target itself. When false (the default), a missing parent fails BOTH
-// Check and Apply with an error naming the parent and the remedy, and nothing
-// is partially created. When true, missing parents are created (mode 0755)
-// before the operation; existing parents are never modified. Revert never
-// removes parent directories that makedirs created. Every embedding member
-// must pass the shared four-case behavior suite
-// (TestFileFamily_MakeDirsContract).
+// CANONICAL RUNTIME CONTRACT (§13; Check semantics re-ruled 2026-07-14,
+// Salt-aligned): `makedirs` controls creation of missing PARENT directories
+// of the operation's target — never the target itself. When false (the
+// default): CHECK reports a would-change result whose detail names the
+// missing parent and the remedy (an earlier state in the run may create it —
+// dry runs must stay valid for correctly ordered trees); APPLY fails with an
+// error naming the parent and the remedy, and nothing is partially created.
+// When true, missing parents are created (mode 0755) before the operation;
+// existing parents are never modified. Revert never removes parent
+// directories that makedirs created. Every embedding member must pass the
+// shared behavior suite (TestFileFamily_MakeDirsContract) including the
+// ordered-tree dry-run pin.
 type fileMakeDirsParam struct {
 	MakeDirs bool `zester:"makedirs,default=false" usage:"create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 }
@@ -82,9 +85,41 @@ type fileSourceParam struct {
 // fileParentMode is the fixed mode for parent directories makedirs creates.
 const fileParentMode fs.FileMode = 0o755
 
-// requireParentDirs is the CHECK-side arm of the canonical makedirs contract:
-// it FAILS (never creates) when makedirs is false and the target's parent is
-// missing. With makedirs true it is a no-op — creation happens in Apply.
+// checkParentDirs is the CHECK-side arm of the canonical makedirs contract
+// (maintainer re-ruling 2026-07-14, Salt-aligned): a missing parent with
+// makedirs unset is a WOULD-CHANGE condition, never a Check failure — a
+// dry run does not materialize changes from earlier required states, so the
+// parent may legitimately be created by a state ordered before this one. It
+// returns a non-empty would-change detail (naming the parent and the remedy)
+// for the member's CheckResult, and errors only on a genuine stat failure.
+// The STRICT arm lives in Apply (requireParentDirs): if the parent is still
+// missing when the operation actually runs, it fails without partial
+// creation.
+func checkParentDirs(ctx context.Context, file exec.FileExec, module, target string, makedirs bool) (string, error) {
+	if makedirs {
+		return "", nil
+	}
+	parent := targetParent(target)
+	if parent == "" {
+		return "", nil
+	}
+	info, err := file.Stat(ctx, parent)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Sprintf("parent directory %s is missing — it must be created by an earlier state in the run, or set makedirs: true (apply fails otherwise)", parent), nil
+		}
+		return "", fmt.Errorf("%s: stat parent %s: %w", module, parent, err)
+	}
+	if !info.IsDir() {
+		return fmt.Sprintf("parent path %s exists but is not a directory — it must be replaced by an earlier state in the run (apply fails otherwise)", parent), nil
+	}
+	return "", nil
+}
+
+// requireParentDirs is the APPLY-side STRICT arm of the canonical makedirs
+// contract: when makedirs is false and the target's parent is missing (or not
+// a directory) at the moment the operation actually runs, it FAILS with the
+// contract error — no partial creation.
 func requireParentDirs(ctx context.Context, file exec.FileExec, module, target string, makedirs bool) error {
 	if makedirs {
 		return nil

@@ -2,6 +2,8 @@ package filemod
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -17,9 +19,12 @@ import (
 // embedding fileMakeDirsParam runs the same four cases:
 //
 //	makedirs=false, parents present  -> operation proceeds (no parent error)
-//	makedirs=false, parents missing  -> BOTH Check and Apply fail, naming the
-//	                                    parent and the `makedirs: true` remedy,
-//	                                    with nothing partially created
+//	makedirs=false, parents missing  -> Check reports WOULD-CHANGE with detail
+//	                                    naming the parent and the remedy
+//	                                    (re-ruled 2026-07-14: dry runs of
+//	                                    ordered trees stay valid); Apply FAILS
+//	                                    with the contract error, nothing
+//	                                    partially created
 //	makedirs=true,  parents present  -> operation proceeds
 //	makedirs=true,  parents missing  -> parents created (0755), operation
 //	                                    proceeds
@@ -82,11 +87,21 @@ func TestFileFamily_MakeDirsContract(t *testing.T) {
 			t.Run("false parents-missing", func(t *testing.T) {
 				fs := exectest.NewFakeFileExec()
 				s := sub.build(t, fs, false)
-				if _, err := s.Check(context.Background()); !isParentContractErr(err) {
-					t.Fatalf("Check: err=%v, want the canonical parent error", err)
-				} else if !strings.Contains(err.Error(), parent) {
-					t.Fatalf("Check error does not NAME the missing parent %q: %v", parent, err)
+				// Re-ruled 2026-07-14 (Salt-aligned): Check reports WOULD-CHANGE
+				// with structured detail naming the parent and the remedy —
+				// never an error (an earlier state in the run may create it).
+				cr, err := s.Check(context.Background())
+				if err != nil {
+					t.Fatalf("Check errored (must report would-change): %v", err)
 				}
+				if !cr.NeedsChange {
+					t.Fatal("Check did not report a would-change for the missing parent")
+				}
+				if !strings.Contains(cr.Diff, parent) || !strings.Contains(cr.Diff, "makedirs: true") {
+					t.Fatalf("Check detail must NAME the parent and the remedy; got %q", cr.Diff)
+				}
+				// Apply stays STRICT: the canonical contract error, no partial
+				// creation.
 				if _, err := s.Apply(context.Background()); !isParentContractErr(err) {
 					t.Fatalf("Apply: err=%v, want the canonical parent error", err)
 				}
@@ -151,6 +166,84 @@ func TestFileFamily_MakeDirsContract(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// TestFileFamily_MakeDirsOrderedTreeDryRun pins the 2026-07-14 re-ruling: a
+// correctly ORDERED tree — A (file.directory) creates the parent, B
+// (file.managed, require A) writes a file inside it — must (1) pass a full
+// ModeCheck dry run with B reporting would-change (never an error), and
+// (2) apply cleanly in ModeApply. The standalone strict-apply case (no A) is
+// pinned alongside.
+func TestFileFamily_MakeDirsOrderedTreeDryRun(t *testing.T) {
+	build := func(fs *exectest.FakeFileExec) []state.State {
+		seedParent(t, fs, "/srv")
+		mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fs}}
+		a, err := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})("/srv/app", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := NewFileManagedBuilder(mctx, modschema.DecodeOptions{})("/srv/app/conf", map[string]any{
+			"content": "x",
+			"require": []any{"file.directory:/srv/app"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []state.State{a, b}
+	}
+
+	// (1) Full-check dry run: SUCCEEDS; B is a would-change naming the parent.
+	fs := exectest.NewFakeFileExec()
+	states := build(fs)
+	runner := state.NewRunner(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	res, err := runner.Run(context.Background(), states, state.ModeCheck)
+	if err != nil {
+		t.Fatalf("dry run errored: %v", err)
+	}
+	if !res.Success() {
+		t.Fatalf("dry run of a correctly ordered tree FAILED: %+v", res.States)
+	}
+	var bDiff string
+	for name, r := range res.States {
+		if strings.Contains(name, "/srv/app/conf") {
+			bDiff = r.Diff
+		}
+	}
+	if !strings.Contains(bDiff, "/srv/app") {
+		t.Fatalf("B's dry-run detail does not name the pending parent: %q", bDiff)
+	}
+
+	// (2) Real apply of the same tree: both states converge.
+	fs2 := exectest.NewFakeFileExec()
+	states2 := build(fs2)
+	res2, err := runner.Run(context.Background(), states2, state.ModeApply)
+	if err != nil {
+		t.Fatalf("apply run errored: %v", err)
+	}
+	if !res2.Success() {
+		for name, r := range res2.States {
+			t.Logf("state %s: err=%v skipped=%v reason=%s", name, r.Error, r.Skipped, r.SkipReason)
+		}
+		t.Fatal("apply of the ordered tree failed")
+	}
+	if _, err := fs2.Stat(context.Background(), "/srv/app/conf"); err != nil {
+		t.Fatalf("B's file was not written: %v", err)
+	}
+
+	// (3) Standalone strict apply: B alone, parent missing, makedirs unset —
+	// the canonical contract error at the point the operation actually runs.
+	fs3 := exectest.NewFakeFileExec()
+	mctx3 := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fs3}}
+	b3, err := NewFileManagedBuilder(mctx3, modschema.DecodeOptions{})("/srv/app/conf", map[string]any{"content": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b3.Apply(context.Background()); !isParentContractErr(err) {
+		t.Fatalf("standalone apply: err=%v, want the canonical parent error", err)
+	}
+	if _, err := fs3.Stat(context.Background(), "/srv/app"); err == nil {
+		t.Fatal("standalone apply partially created the parent")
 	}
 }
 

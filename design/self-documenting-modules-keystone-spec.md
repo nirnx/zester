@@ -354,9 +354,10 @@ ignored) · BD-8 `cmd.run` `command` gains the `name` alias, so the Salt idiom
   other members created parents only with `makedirs: true` but failed the
   missing-parent case with raw OS errors and reported phantom would-change in
   Check. All six now share ONE contract: parents-only, created at 0755 when
-  true; when false a missing parent fails BOTH Check and Apply with an error
-  naming the parent and the remedy; no partial creation; revert never removes
-  created parents. Pinned by the per-member four-case behavior suite
+  true; when false a missing parent fails APPLY with an error naming the
+  parent and the remedy (no partial creation) while CHECK reports a
+  would-change with the same detail (re-ruled 2026-07-14 — ordered-tree dry
+  runs stay valid); revert never removes created parents. Pinned by the per-member four-case behavior suite
   (TestFileFamily_MakeDirsContract + completeness pin) — a runtime-class BD,
   so the pin is behavioral, not a decode fixture.
 `cmd.run: - name: <command>` RUNS the named command (was: `name:` silently ignored,
@@ -536,9 +537,15 @@ activations, my gate review before the next tranche builds on it.
   the target itself (the target is whatever the member manages; for
   file.directory the target is the directory, so makedirs governs the
   directories ABOVE it, per Salt).
-- `makedirs: false` (the default) + missing parent ⇒ both Check and Apply
-  FAIL the phase with an error naming the missing parent and the
-  `makedirs: true` remedy. No partial creation.
+- `makedirs: false` (the default) + missing parent ⇒ APPLY fails with an
+  error naming the missing parent and the `makedirs: true` remedy, with no
+  partial creation. CHECK reports a WOULD-CHANGE whose detail names the
+  parent and the remedy (RE-RULED 2026-07-14, Salt-aligned: dry runs do not
+  materialize earlier states, so a correctly ordered tree — a directory
+  state creating the parent before a file state writing into it — must dry-
+  run clean; the strict guarantee holds at the point the operation actually
+  runs). Pinned by the ordered-tree dry-run + standalone-apply cases in the
+  behavior suite.
 - `makedirs: true` + missing parents ⇒ parents are created (mode 0755)
   before the operation; existing parents untouched.
 - Revert NEVER removes parent directories that makedirs created (other

@@ -93,7 +93,7 @@ var fileManagedDoc = modschema.Doc{
 		"an octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0755` " +
 		"applies 0755. `user`/`group` converge ownership only when declared.",
 	Effects: modschema.Effects{
-		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+		Check: "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). " +
 			"Resolves the desired content (reading `source` or using `content`, rendering the " +
 			"template when enabled) and compares, in order: file existence (a genuine not-exist means " +
 			"the file must be created, while any other read error fails the check rather than risking a " +
@@ -275,10 +275,14 @@ func (f *FileManaged) desiredMode() fs.FileMode {
 }
 
 func (f *FileManaged) Check(ctx context.Context) (state.CheckResult, error) {
-	// Canonical makedirs contract (§13): a missing parent with makedirs unset
-	// fails Check too — never reported as an applicable change.
-	if err := requireParentDirs(ctx, f.file, "file.managed", f.Path, f.MakeDirs); err != nil {
+	// Canonical makedirs contract (§13, Check re-ruled 2026-07-14): a
+	// missing parent with makedirs unset is a WOULD-CHANGE — an earlier
+	// state in the run may create it, so dry runs of ordered trees stay
+	// valid; Apply stays strict.
+	if detail, err := checkParentDirs(ctx, f.file, "file.managed", f.Path, f.MakeDirs); err != nil {
 		return state.CheckResult{}, err
+	} else if detail != "" {
+		return state.CheckResult{NeedsChange: true, Diff: "file.managed: " + detail}, nil
 	}
 	desired, err := f.desiredContent(ctx)
 	if err != nil {

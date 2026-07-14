@@ -145,7 +145,11 @@ func (f *FakeFileExec) Chmod(_ context.Context, path string, mode fs.FileMode) e
 	if !ok {
 		return fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
-	ff.mode = mode
+	// Real chmod never changes file-TYPE bits (a directory stays a
+	// directory); only permission + setuid/setgid/sticky change. The fake
+	// previously overwrote the whole mode, silently un-directorying dir
+	// entries (caught by the ordered-tree makedirs pin).
+	ff.mode = (ff.mode & fs.ModeType) | (mode &^ fs.ModeType)
 	return nil
 }
 

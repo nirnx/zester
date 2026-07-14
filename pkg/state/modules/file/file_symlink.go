@@ -47,7 +47,7 @@ var fileSymlinkSpec = regdef.MustSpec("file.symlink", modschema.KindState, FileS
 		"state ID) pointing to `target`. Without `force`, a pre-existing file or wrong-target " +
 		"symlink at the path is an error rather than being replaced.",
 	Effects: modschema.Effects{
-		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+		Check: "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). " +
 			"Reads the link at the path. A missing link, or one whose current target differs " +
 			"from the declared `target`, needs a change; a matching link needs none.",
 		Apply: "Creates missing parent directories first when `makedirs` is set. If a symlink " +
@@ -122,10 +122,14 @@ func (s *FileSymlink) Name() string           { return "file.symlink:" + s.id }
 func (s *FileSymlink) Reqs() state.Requisites { return s.reqs }
 
 func (s *FileSymlink) Check(ctx context.Context) (state.CheckResult, error) {
-	// Canonical makedirs contract (§13): a missing parent with makedirs
-	// unset fails Check too — never reported as an applicable change.
-	if err := requireParentDirs(ctx, s.file, "file.symlink", s.Path, s.MakeDirs); err != nil {
+	// Canonical makedirs contract (§13, Check re-ruled 2026-07-14): a
+	// missing parent with makedirs unset is a WOULD-CHANGE — an earlier
+	// state in the run may create it, so dry runs of ordered trees stay
+	// valid; Apply stays strict.
+	if detail, err := checkParentDirs(ctx, s.file, "file.symlink", s.Path, s.MakeDirs); err != nil {
 		return state.CheckResult{}, err
+	} else if detail != "" {
+		return state.CheckResult{NeedsChange: true, Diff: "file.symlink: " + detail}, nil
 	}
 	current, err := s.file.Readlink(ctx, s.Path)
 	if err != nil {

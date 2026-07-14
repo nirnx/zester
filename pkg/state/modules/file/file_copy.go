@@ -72,7 +72,7 @@ var fileCopyDoc = modschema.Doc{
 		"an existing destination is left untouched (the copy is a one-time seed); with `force`, the " +
 		"destination is kept in sync with the source by content hash.",
 	Effects: modschema.Effects{
-		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+		Check: "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). " +
 			"Reads the source — a missing source is an error, not a reported diff. If the " +
 			"destination does not exist, a change is needed. If the destination exists and `force` is " +
 			"not set, no change is needed (the existing file wins). With `force`, source and " +
@@ -152,10 +152,14 @@ func (f *FileCopy) Name() string           { return "file.copy:" + f.id }
 func (f *FileCopy) Reqs() state.Requisites { return f.reqs }
 
 func (f *FileCopy) Check(ctx context.Context) (state.CheckResult, error) {
-	// Canonical makedirs contract (§13): a missing parent with makedirs
-	// unset fails Check too — never reported as an applicable change.
-	if err := requireParentDirs(ctx, f.file, "file.copy", f.Path, f.MakeDirs); err != nil {
+	// Canonical makedirs contract (§13, Check re-ruled 2026-07-14): a
+	// missing parent with makedirs unset is a WOULD-CHANGE — an earlier
+	// state in the run may create it, so dry runs of ordered trees stay
+	// valid; Apply stays strict.
+	if detail, err := checkParentDirs(ctx, f.file, "file.copy", f.Path, f.MakeDirs); err != nil {
 		return state.CheckResult{}, err
+	} else if detail != "" {
+		return state.CheckResult{NeedsChange: true, Diff: "file.copy: " + detail}, nil
 	}
 	src, err := f.file.ReadFile(ctx, f.Source)
 	if err != nil {

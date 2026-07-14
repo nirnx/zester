@@ -95,7 +95,7 @@ var fileRecurseDoc = modschema.Doc{
 		"destination's parent chain. Both mode parameters honor an octal string or an octal integer " +
 		"of any kind.",
 	Effects: modschema.Effects{
-		Check: "Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). " +
+		Check: "Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). " +
 			"Requires a source (an empty source is an error). Walks the source tree: a missing " +
 			"destination entry, a non-directory where a directory is expected, a content-hash " +
 			"difference, a file-mode difference against `file_mode`, and — only when `user`/`group` are " +
@@ -215,10 +215,14 @@ func (r *FileRecurse) desiredDirMode() fs.FileMode {
 }
 
 func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
-	// Canonical makedirs contract (§13): a missing parent with makedirs
-	// unset fails Check too — never reported as an applicable change.
-	if err := requireParentDirs(ctx, r.file, "file.recurse", r.Dest, r.MakeDirs); err != nil {
+	// Canonical makedirs contract (§13, Check re-ruled 2026-07-14): a
+	// missing parent with makedirs unset is a WOULD-CHANGE — an earlier
+	// state in the run may create it, so dry runs of ordered trees stay
+	// valid; Apply stays strict.
+	if detail, err := checkParentDirs(ctx, r.file, "file.recurse", r.Dest, r.MakeDirs); err != nil {
 		return state.CheckResult{}, err
+	} else if detail != "" {
+		return state.CheckResult{NeedsChange: true, Diff: "file.recurse: " + detail}, nil
 	}
 	if r.Source == "" {
 		return state.CheckResult{}, fmt.Errorf("file.recurse: source is required")

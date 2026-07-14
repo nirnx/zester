@@ -92,6 +92,18 @@ All notable changes to Zester are documented here. The format follows
   consumer changes; file history follows the moves.
 
 ### Fixed
+- **`makedirs` Check semantics re-ruled (Salt-aligned).** A missing parent
+  with `makedirs` unset no longer fails Check: dry runs do not materialize
+  changes from earlier required states, so a correctly ordered tree (a
+  directory state creating the parent, a file state writing into it with
+  `require`) must dry-run clean — Check now reports a would-change whose
+  detail names the missing parent and the remedy. Apply retains the strict
+  canonical contract: a parent still missing when the operation actually runs
+  fails without partial creation. Pinned by the ordered-tree dry-run,
+  ordered-tree apply, and standalone strict-apply cases in the family
+  behavior suite; BD-9's wording updated. (Also fixed en route: the exectest
+  fake's Chmod wiped file-TYPE bits, silently un-directorying entries.)
+
 - **A1 final-verification round.** `file.directory`'s documentation was
   drift-corrected (it still described the pre-fix inert `makedirs`; the
   published page contradicted its own parameter table) and the five other

@@ -76,11 +76,14 @@ var fileDirectoryDoc = modschema.Doc{
 		"octal string or an octal integer of any kind, so a reactor-dispatched `mode: 0700` applies " +
 		"0700. `user`/`group` converge ownership only when declared. `makedirs` follows the file.* " +
 		"family's canonical contract: it governs missing PARENTS of the managed directory (created at " +
-		"0755 when true); when false — the default — a missing parent fails the state instead of " +
-		"being silently created (a deliberate compatibility fix; see the changelog).",
+		"0755 when true); when false — the default — a missing parent fails the apply instead of " +
+		"being silently created, while a dry run reports it as a would-change (a deliberate " +
+		"compatibility fix; see the changelog).",
 	Effects: modschema.Effects{
-		Check: "Fails first when a parent directory is missing and `makedirs` is unset (the canonical " +
-			"file.* contract — a dry run reports the failure rather than a phantom applicable change). " +
+		Check: "Reports a would-change first — naming the missing parent and the remedy — when a parent " +
+			"directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state " +
+			"in the run may create the parent, so dry runs of ordered trees stay valid; the strict failure " +
+			"happens at apply). " +
 			"Then compares, in order: path existence (a genuine not-exist means the directory must be " +
 			"created, while any other stat error fails the check rather than reporting phantom drift); " +
 			"that the path is a directory (an existing non-directory needs a change); the permission " +
@@ -126,7 +129,8 @@ var fileDirectoryDoc = modschema.Doc{
 			Title: "makedirs now follows the canonical contract (compatibility fix)",
 			Body: "Before 0.7.0 makedirs was accepted but inert — file.directory always created the full " +
 				"parent chain, silently masking typos in deep paths. It now follows the file.* family " +
-				"contract: a missing parent without `makedirs: true` fails both Check and Apply (BD-9).",
+				"contract: a missing parent without `makedirs: true` fails Apply (Check reports a " +
+				"would-change naming the parent, keeping dry runs of ordered trees valid) — BD-9.",
 		},
 		{
 			Title: "Mode defaults to 0755 and honors integer modes",
@@ -188,12 +192,14 @@ func (d *FileDirectory) desiredMode() fs.FileMode {
 }
 
 func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
-	// Canonical makedirs contract (§13): makedirs governs the PARENTS of the
-	// managed directory, never the directory itself. A missing parent with
-	// makedirs unset fails Check too. (Compatibility fix: makedirs was
-	// previously accepted but inert — see the CHANGELOG BD.)
-	if err := requireParentDirs(ctx, d.file, "file.directory", d.Path, d.MakeDirs); err != nil {
+	// Canonical makedirs contract (§13, Check re-ruled 2026-07-14): a
+	// missing parent with makedirs unset is a WOULD-CHANGE — an earlier
+	// state in the run may create it, so dry runs of ordered trees stay
+	// valid; Apply stays strict.
+	if detail, err := checkParentDirs(ctx, d.file, "file.directory", d.Path, d.MakeDirs); err != nil {
 		return state.CheckResult{}, err
+	} else if detail != "" {
+		return state.CheckResult{NeedsChange: true, Diff: "file.directory: " + detail}, nil
 	}
 	info, err := d.file.Stat(ctx, d.Path)
 	if err != nil {

@@ -31,7 +31,7 @@ All states also accept the full set of requisite parameters and Salt-parity stat
 
 ### Check
 
-Fails first when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract). Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.
+Reports a would-change first — naming the missing parent and the remedy — when the target's parent directory is missing and `makedirs` is unset (the canonical file.* contract: an earlier state in the run may create it; the strict failure happens at apply). Reads the source — a missing source is an error, not a reported diff. If the destination does not exist, a change is needed. If the destination exists and `force` is not set, no change is needed (the existing file wins). With `force`, source and destination contents are compared by SHA-256 hash; a difference needs a change, and, only when `preserve` is also set, a permission-mode difference needs a change too.
 
 ### Apply
 
