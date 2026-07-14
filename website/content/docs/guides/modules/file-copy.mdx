@@ -18,10 +18,10 @@ description: "Copy a source file that already exists on the peel to a destinatio
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | destination path; the path alias is accepted for Salt compatibility (defaults to the state ID) |
-| `source` | `string` | Yes | *(none)* | local path (on the peel) to copy from |
+| `source` | `string` | Yes | *(none)* | source path content is taken from; whether it is required is member-specific |
 | `force` | `bool` | No | *(none)* | overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false) |
 | `preserve` | `bool` | No | *(none)* | copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false) |
-| `makedirs` | `bool` | No | *(none)* | create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

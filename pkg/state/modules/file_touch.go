@@ -27,8 +27,8 @@ type FileTouch struct {
 	// is accepted for Salt compatibility.
 	Path string `zester:"name,primary,aliases=path" usage:"absolute path to the file to touch; the path alias is accepted for Salt compatibility (defaults to the state ID)"`
 
-	// MakeDirs creates parent directories if needed.
-	MakeDirs bool `zester:"makedirs" usage:"create missing parent directories (mode 0755) before touching; a boolean that also accepts the integers 1 (true) and 0 (false)"`
+	// MakeDirs: file.* family component (canonical parent-creation contract).
+	fileMakeDirsParam
 
 	file exec.FileExec
 	cmd  exec.CommandExec
@@ -129,6 +129,11 @@ func (f *FileTouch) exists(ctx context.Context) bool {
 }
 
 func (f *FileTouch) Check(ctx context.Context) (state.CheckResult, error) {
+	// Canonical makedirs contract (§13): a missing parent with makedirs
+	// unset fails Check too — never reported as an applicable change.
+	if err := requireParentDirs(ctx, f.file, "file.touch", f.Path, f.MakeDirs); err != nil {
+		return state.CheckResult{}, err
+	}
 	if f.exists(ctx) {
 		return state.CheckResult{NeedsChange: false}, nil
 	}
@@ -139,10 +144,8 @@ func (f *FileTouch) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (f *FileTouch) Apply(ctx context.Context) (state.ApplyResult, error) {
-	if f.MakeDirs {
-		if err := fsxMakeParent(ctx, f.file, f.Path); err != nil {
-			return state.ApplyResult{}, fmt.Errorf("file.touch: mkdir for %s: %w", f.Path, err)
-		}
+	if err := ensureParentDirs(ctx, f.file, "file.touch", f.Path, f.MakeDirs); err != nil {
+		return state.ApplyResult{}, err
 	}
 
 	if !f.exists(ctx) {

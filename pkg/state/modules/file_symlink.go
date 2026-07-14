@@ -3,7 +3,6 @@ package modules
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/modschema"
@@ -31,8 +30,8 @@ type FileSymlink struct {
 	// Force removes an existing file/symlink at Path if it points elsewhere.
 	Force bool `zester:"force" usage:"replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
-	// MakeDirs creates parent directories if true.
-	MakeDirs bool `zester:"makedirs" usage:"create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"`
+	// MakeDirs: file.* family component (canonical parent-creation contract).
+	fileMakeDirsParam
 
 	file exec.FileExec
 }
@@ -121,6 +120,11 @@ func (s *FileSymlink) Name() string           { return "file.symlink:" + s.id }
 func (s *FileSymlink) Reqs() state.Requisites { return s.reqs }
 
 func (s *FileSymlink) Check(ctx context.Context) (state.CheckResult, error) {
+	// Canonical makedirs contract (§13): a missing parent with makedirs
+	// unset fails Check too — never reported as an applicable change.
+	if err := requireParentDirs(ctx, s.file, "file.symlink", s.Path, s.MakeDirs); err != nil {
+		return state.CheckResult{}, err
+	}
 	current, err := s.file.Readlink(ctx, s.Path)
 	if err != nil {
 		// Symlink doesn't exist.
@@ -141,13 +145,8 @@ func (s *FileSymlink) Check(ctx context.Context) (state.CheckResult, error) {
 }
 
 func (s *FileSymlink) Apply(ctx context.Context) (state.ApplyResult, error) {
-	if s.MakeDirs {
-		dir := filepath.Dir(s.Path)
-		if dir != "" && dir != "." {
-			if err := s.file.MkdirAll(ctx, dir, 0755); err != nil {
-				return state.ApplyResult{}, fmt.Errorf("file.symlink: mkdir %s: %w", dir, err)
-			}
-		}
+	if err := ensureParentDirs(ctx, s.file, "file.symlink", s.Path, s.MakeDirs); err != nil {
+		return state.ApplyResult{}, err
 	}
 
 	// Check if something already exists at path.

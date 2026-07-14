@@ -34,8 +34,8 @@ type FileCopy struct {
 	// alias is accepted for Salt compatibility.
 	Path string `zester:"name,primary,aliases=path" usage:"destination path; the path alias is accepted for Salt compatibility (defaults to the state ID)"`
 
-	// Source is the file to copy from.
-	Source string `zester:"source,required" usage:"local path (on the peel) to copy from"`
+	// Source: file.* family component (requiredness member-supplied — required here).
+	fileSourceParam
 
 	// Force overwrites the destination when it already exists.
 	Force bool `zester:"force" usage:"overwrite the destination when it already exists; without force an existing destination is left untouched; a boolean that also accepts the integers 1 (true) and 0 (false)"`
@@ -43,8 +43,8 @@ type FileCopy struct {
 	// Preserve copies the source file's permission mode to the destination.
 	Preserve bool `zester:"preserve" usage:"copy the source file's permission mode to the destination, instead of the 0644 default; a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
-	// MakeDirs creates parent directories of the destination if needed.
-	MakeDirs bool `zester:"makedirs" usage:"create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"`
+	// MakeDirs: file.* family component (canonical parent-creation contract).
+	fileMakeDirsParam
 
 	file exec.FileExec
 
@@ -61,7 +61,10 @@ type FileCopy struct {
 // compiled once at package init and executed by every decode path (the
 // builder below, and Registry.Parse). The prose is verified against the live
 // Check/Apply/Revert code.
-var fileCopySpec = mustSpec("file.copy", modschema.KindState, FileCopy{}, modschema.Doc{
+var fileCopySpec = mustSpec("file.copy", modschema.KindState, FileCopy{}, fileCopyDoc,
+	modschema.WithRequired("source", true))
+
+var fileCopyDoc = modschema.Doc{
 	Summary: "Copy a source file that already exists on the peel to a destination path.",
 	Description: "`file.copy` copies `source` (a path local to the peel) to the destination. The " +
 		"destination path defaults to the state ID; `path` is accepted as an alias. Without `force`, " +
@@ -118,7 +121,7 @@ var fileCopySpec = mustSpec("file.copy", modschema.KindState, FileCopy{}, modsch
 	},
 	Divergences: []string{"BD-2", "BD-6", "BD-7"},
 	SeeAlso:     []string{"file.managed", "file.touch"},
-})
+}
 
 // NewFileCopyBuilder returns a state.Builder that creates FileCopy states.
 // Decode policy (unknown-key handling, reserved keys) is threaded via opts;
@@ -147,6 +150,11 @@ func (f *FileCopy) Name() string           { return "file.copy:" + f.id }
 func (f *FileCopy) Reqs() state.Requisites { return f.reqs }
 
 func (f *FileCopy) Check(ctx context.Context) (state.CheckResult, error) {
+	// Canonical makedirs contract (§13): a missing parent with makedirs
+	// unset fails Check too — never reported as an applicable change.
+	if err := requireParentDirs(ctx, f.file, "file.copy", f.Path, f.MakeDirs); err != nil {
+		return state.CheckResult{}, err
+	}
 	src, err := f.file.ReadFile(ctx, f.Source)
 	if err != nil {
 		return state.CheckResult{}, fmt.Errorf("file.copy: read source %s: %w", f.Source, err)
@@ -227,10 +235,8 @@ func (f *FileCopy) Apply(ctx context.Context) (state.ApplyResult, error) {
 		return state.ApplyResult{}, fmt.Errorf("file.copy: read %s: %w", f.Path, err)
 	}
 
-	if f.MakeDirs {
-		if err := fsxMakeParent(ctx, f.file, f.Path); err != nil {
-			return state.ApplyResult{}, fmt.Errorf("file.copy: mkdir for %s: %w", f.Path, err)
-		}
+	if err := ensureParentDirs(ctx, f.file, "file.copy", f.Path, f.MakeDirs); err != nil {
+		return state.ApplyResult{}, err
 	}
 
 	mode := fsModeDefault

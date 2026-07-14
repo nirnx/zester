@@ -38,22 +38,21 @@ type FileManaged struct {
 	// Content is the desired inline file content. Provide either content or
 	// source; if both are set, source wins.
 	Content string `zester:"content" usage:"desired inline file content; provide either content or source (source wins if both are set)"`
-	// Source is a local file path to copy content from.
-	Source string `zester:"source" usage:"local file path to copy content from; provide either content or source (source wins if both are set)"`
+	// Source: file.* family component (source; requiredness member-supplied —
+	// optional here, content is the alternative).
+	fileSourceParam
 	// Template selects Jinja2 rendering of the source/content before writing.
 	Template paramtypes.TemplateFlag `zester:"template" usage:"render source/content as a Jinja2 template before writing (a bool, the string \"jinja\", or a truthy/falsy string); defaults to off"`
 	// Context provides extra template variables (override Defaults).
 	Context map[string]any `zester:"context" usage:"extra template variables, available as top-level names; override defaults; only used when template is enabled"`
 	// Defaults provides fallback template variables (Context takes precedence).
 	Defaults map[string]any `zester:"defaults" usage:"fallback template variables; context takes precedence; only used when template is enabled"`
-	// Mode is the file permission mode; it defaults to 0644 (applied lazily).
-	Mode paramtypes.FileMode `zester:"mode,lazy,default=0644" usage:"file permission mode in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits honored; defaults to 0644"`
-	// User is the file owner username; ownership is left unchanged when unset.
-	User string `zester:"user" usage:"file owner username; ownership is left unchanged when unset"`
-	// Group is the file group name; ownership is left unchanged when unset.
-	Group string `zester:"group" usage:"file group name; ownership is left unchanged when unset"`
-	// MakeDirs creates parent directories if true.
-	MakeDirs bool `zester:"makedirs" usage:"create missing parent directories (with mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"`
+	// Mode: file.* family component (member-supplied default 0644, see mustSpec).
+	fileModeParam
+	// User/Group: file.* family ownership component.
+	fileOwnershipParam
+	// MakeDirs: file.* family component (canonical parent-creation contract).
+	fileMakeDirsParam
 
 	// file is the injected file execution provider.
 	file exec.FileExec
@@ -78,7 +77,10 @@ type FileManaged struct {
 // Check/Apply/Revert behavior (notably: content/source are alternatives with no
 // parse-time exclusion — source wins when both are set — and the mode facet is
 // enforced with a Chmod on pre-existing files, not only at creation).
-var fileManagedSpec = mustSpec("file.managed", modschema.KindState, FileManaged{}, modschema.Doc{
+var fileManagedSpec = mustSpec("file.managed", modschema.KindState, FileManaged{}, fileManagedDoc,
+	modschema.WithDefault("mode", "0644"), modschema.WithRequired("source", false))
+
+var fileManagedDoc = modschema.Doc{
 	Summary: "Ensure a file exists with the desired content, permissions, and ownership.",
 	Description: "`file.managed` ensures a file exists at its path with the desired content, " +
 		"permission mode, and ownership. The path defaults to the state ID (the `path` alias is " +
@@ -198,7 +200,7 @@ var fileManagedSpec = mustSpec("file.managed", modschema.KindState, FileManaged{
 	},
 	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7"},
 	SeeAlso:     []string{"file.directory", "file.copy", "file.absent"},
-})
+}
 
 // NewFileManagedBuilder returns a state.Builder that creates FileManaged states
 // using the given ModuleContext's file and render providers. Decode policy
@@ -271,6 +273,11 @@ func (f *FileManaged) desiredMode() fs.FileMode {
 }
 
 func (f *FileManaged) Check(ctx context.Context) (state.CheckResult, error) {
+	// Canonical makedirs contract (§13): a missing parent with makedirs unset
+	// fails Check too — never reported as an applicable change.
+	if err := requireParentDirs(ctx, f.file, "file.managed", f.Path, f.MakeDirs); err != nil {
+		return state.CheckResult{}, err
+	}
 	desired, err := f.desiredContent(ctx)
 	if err != nil {
 		return state.CheckResult{}, fmt.Errorf("file.managed: %w", err)
@@ -352,13 +359,8 @@ func (f *FileManaged) Apply(ctx context.Context) (state.ApplyResult, error) {
 
 	mode := f.desiredMode()
 
-	if f.MakeDirs {
-		dir := f.Path[:len(f.Path)-len(f.Path[lastSlash(f.Path):])]
-		if dir != "" {
-			if err := f.file.MkdirAll(ctx, dir, 0755); err != nil {
-				return state.ApplyResult{}, fmt.Errorf("file.managed: mkdir %s: %w", dir, err)
-			}
-		}
+	if err := ensureParentDirs(ctx, f.file, "file.managed", f.Path, f.MakeDirs); err != nil {
+		return state.ApplyResult{}, err
 	}
 
 	if err := f.file.WriteFile(ctx, f.Path, desired, mode); err != nil {

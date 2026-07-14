@@ -19,14 +19,14 @@ description: "Ensure a file exists with the desired content, permissions, and ow
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | absolute path to the target file; the path alias is accepted for Salt compatibility; defaults to the state ID |
 | `content` | `string` | No | *(none)* | desired inline file content; provide either content or source (source wins if both are set) |
-| `source` | `string` | No | *(none)* | local file path to copy content from; provide either content or source (source wins if both are set) |
+| `source` | `string` | No | *(none)* | source path content is taken from; whether it is required is member-specific |
 | `template` | `TemplateFlag` | No | *(none)* | render source/content as a Jinja2 template before writing (a bool, the string "jinja", or a truthy/falsy string); defaults to off |
 | `context` | `map` | No | *(none)* | extra template variables, available as top-level names; override defaults; only used when template is enabled |
 | `defaults` | `map` | No | *(none)* | fallback template variables; context takes precedence; only used when template is enabled |
-| `mode` | `FileMode` | No | `0644` (lazy) | file permission mode in octal ("0644", "0755", "4755"); setuid/setgid/sticky bits honored; defaults to 0644 |
-| `user` | `string` | No | *(none)* | file owner username; ownership is left unchanged when unset |
-| `group` | `string` | No | *(none)* | file group name; ownership is left unchanged when unset |
-| `makedirs` | `bool` | No | *(none)* | create missing parent directories (with mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `mode` | `FileMode` | No | `0644` (lazy) | permission mode for the target in octal ("0644", "0755", "4755"); setuid/setgid/sticky bits are honored; the default is member-specific |
+| `user` | `string` | No | *(none)* | owner username for the target; ownership is left unchanged when unset |
+| `group` | `string` | No | *(none)* | group name for the target; ownership is left unchanged when unset |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

@@ -56,28 +56,11 @@ type vocabException struct {
 // inFamilyExceptions is TIER 1's table, keyed "kind/family/param".
 var inFamilyExceptions = map[string]vocabException{
 	"state/file/mode": {
-		reason: "PERMANENT compatibility exception (spec §13): file.line's `mode` is Salt's action selector " +
-			"(ensure/replace/insert/delete) — explicitly OUTSIDE the canonical file.* mode contract. Plus " +
-			"MIGRATION-PENDING variance among the FileMode members (dir_mode alias only on file.directory; " +
-			"member defaults 0644/0755) that the file.* mode component resolves via the member-supplied " +
-			"default rule; this entry shrinks to the file.line divergence alone after that tranche.",
+		reason: "PERMANENT compatibility exception (spec §13, maintainer-blessed): file.line's `mode` is " +
+			"Salt's action selector (ensure/replace/insert/delete) — explicitly OUTSIDE the canonical " +
+			"file.* mode contract carried by the fileModeParam component (which file.managed and " +
+			"file.directory embed with member-supplied defaults).",
 		participants: []string{"file.directory(mode)", "file.line(mode)", "file.managed(mode)"},
-		distinct:     3,
-	},
-	"state/file/dir_mode": {
-		reason: "MIGRATION-PENDING (§13): `dir_mode` is an ALIAS of `mode` on file.directory (Salt-compat " +
-			"fallback source) but a STANDALONE parameter on file.recurse (creation mode for new directories) " +
-			"— same FileMode shape and 0755 default, different declaring field. The file.* mode component " +
-			"tranche resolves whether dir_mode stays a directory-scoped alias, a family param, or both; " +
-			"delete this entry when that tranche lands.",
-		participants: []string{"file.directory(mode)", "file.recurse(dir_mode)"},
-		distinct:     2,
-	},
-	"state/file/source": {
-		reason: "MIGRATION-PENDING (§13): `source` is required by file.copy and optional on " +
-			"file.managed/file.recurse — requiredness becomes a member-supplied dimension of the file.* " +
-			"source component; delete this entry when that tranche lands.",
-		participants: []string{"file.copy(source)", "file.managed(source)", "file.recurse(source)"},
 		distinct:     2,
 	},
 	"state/pkg/refresh": {
@@ -117,13 +100,14 @@ var crossFamilyExceptions = map[string]vocabException{
 // paramUse is one module's exposure of a parameter KEY (canonical name or
 // alias), carrying the declaring field's canonical name and full signature.
 type paramUse struct {
-	key    string // the exposed key (canonical name or alias)
-	kind   string
-	family string
-	module string
-	canon  string
-	shape  string // canonical JSON of the schema fragment
-	sig    string // full tier-1 contract signature
+	key        string // the exposed key (canonical name or alias)
+	kind       string
+	family     string
+	module     string
+	canon      string
+	shape      string // canonical JSON of the schema fragment
+	sig        string // full tier-1 contract signature
+	declaredBy string // §13 declaring-type stamp
 }
 
 // TestParameterVocabularyConsistency runs both tiers over the LIVE state and
@@ -156,11 +140,51 @@ func TestParameterVocabularyConsistency(t *testing.T) {
 		for scope, scoped := range byScope {
 			sigs := map[string][]string{}
 			participants := map[string]bool{}
+			declModules := map[string]map[string]bool{} // declaredBy -> module set
 			for _, u := range scoped {
 				who := fmt.Sprintf("%s(%s)", u.module, u.canon)
 				sigs[u.sig] = append(sigs[u.sig], who)
 				participants[who] = true
+				if declModules[u.declaredBy] == nil {
+					declModules[u.declaredBy] = map[string]bool{}
+				}
+				declModules[u.declaredBy][u.module] = true
 			}
+
+			// §13 component ratchet: a declaring type shared by >=2 distinct
+			// modules IS a family component (module protos are never shared
+			// across members except via components — file.comment/uncomment's
+			// shared proto included, deliberately). Once a component exists
+			// for a key, every member exposing that key must embed it; a
+			// private redeclaration — even with an identical contract — fails.
+			if len(declModules) > 1 {
+				for decl, mods := range declModules {
+					// Only EMBEDDED declarers are components ("" = declared on
+					// the module's own proto root, incl. N:1 shared protos).
+					if decl != "" && len(mods) >= 2 {
+						exKey := scope + "/" + k
+						tier1Conflicting[exKey] = true
+						if exc, ok := inFamilyExceptions[exKey]; ok {
+							assertPin(t, "in-family", exKey, exc, participants, len(sigs))
+							break
+						}
+						var outsiders []string
+						for d, dm := range declModules {
+							if d == decl {
+								continue
+							}
+							for m := range dm {
+								outsiders = append(outsiders, m)
+							}
+						}
+						sort.Strings(outsiders)
+						t.Errorf("COMPONENT ratchet (%s): key %q has a family component (%s) but %v declare it privately — embed the component (§13; shared parsing over private declarations is rejected)",
+							scope, k, decl, outsiders)
+						break
+					}
+				}
+			}
+
 			if len(sigs) <= 1 {
 				continue
 			}
@@ -260,17 +284,29 @@ func collectParamUses(t *testing.T) []paramUse {
 			}
 			aliases := append([]string(nil), f.Aliases...)
 			sort.Strings(aliases)
-			sig := fmt.Sprintf("shape=%s aliases=%v primary=%v required=%v default=%v/%q",
-				frag, aliases, f.Primary, f.Required, f.HasDefault, f.Default)
+			// Member-supplied dimensions (§13) vary per member BY CONTRACT —
+			// the component declared them so — and are therefore excluded
+			// from the in-family signature. Everything else is FIXED.
+			def := fmt.Sprintf("default=%v/%q", f.HasDefault, f.Default)
+			if f.DefaultMemberSupplied {
+				def = "default=member-supplied"
+			}
+			req := fmt.Sprintf("required=%v", f.Required)
+			if f.RequiredMemberSupplied {
+				req = "required=member-supplied"
+			}
+			sig := fmt.Sprintf("shape=%s aliases=%v primary=%v %s %s",
+				frag, aliases, f.Primary, req, def)
 			for _, k := range append([]string{f.Name}, f.Aliases...) {
 				out = append(out, paramUse{
-					key:    k,
-					kind:   string(mi.Kind),
-					family: family,
-					module: mi.Module,
-					canon:  f.Name,
-					shape:  string(frag),
-					sig:    sig,
+					key:        k,
+					kind:       string(mi.Kind),
+					family:     family,
+					module:     mi.Module,
+					canon:      f.Name,
+					shape:      string(frag),
+					sig:        sig,
+					declaredBy: f.DeclaredBy,
 				})
 			}
 		}

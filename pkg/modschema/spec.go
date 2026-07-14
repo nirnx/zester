@@ -42,11 +42,11 @@ type Spec struct {
 // happens once here. A compile error (duplicate name, >1 primary, unregistered
 // non-primitive field type, invalid default literal, lazy-on-required, alias
 // collision, …) is returned verbatim. An empty module name is rejected.
-func NewSpec(module string, kind Kind, proto any, doc Doc) (*Spec, error) {
+func NewSpec(module string, kind Kind, proto any, doc Doc, opts ...SpecOption) (*Spec, error) {
 	if module == "" {
 		return nil, fmt.Errorf("modschema: newspec: empty module name")
 	}
-	cs, err := Compile(proto, doc)
+	cs, err := Compile(proto, doc, opts...)
 	if err != nil {
 		return nil, err
 	}

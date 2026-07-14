@@ -44,8 +44,9 @@ type FileRecurse struct {
 
 	// Source is the source directory path to copy from. An empty source is a
 	// run-time error (kept as a plain string for legacy parity), not a
-	// decode-time required.
-	Source string `zester:"source" usage:"source directory path to copy from (required at run time)"`
+	// Source: file.* family component (requiredness member-supplied —
+	// optional at decode; validated at run time).
+	fileSourceParam
 
 	// DirMode is the mode for created directories. It is a DECLARED-ONLY facet:
 	// undeclared, existing directory modes are never compared or rewritten, and
@@ -56,17 +57,14 @@ type FileRecurse struct {
 	// enforced on managed files.
 	FileMode paramtypes.FileMode `zester:"file_mode,lazy,default=0644" usage:"permission mode for copied files in octal (\"0644\"); always enforced; defaults to 0644"`
 
-	// User is the owner username for copied files; unchanged when unset.
-	User string `zester:"user" usage:"owner username for copied files; ownership is left unchanged when unset"`
-
-	// Group is the group name for copied files; unchanged when unset.
-	Group string `zester:"group" usage:"group name for copied files; ownership is left unchanged when unset"`
+	// User/Group: file.* family ownership component.
+	fileOwnershipParam
 
 	// Clean removes files in Dest that are not in Source.
 	Clean bool `zester:"clean" usage:"remove files in the destination that are not present in the source (regular files only; directories are never removed); a boolean that also accepts the integers 1 (true) and 0 (false)"`
 
-	// MakeDirs creates the destination parent directories if true.
-	MakeDirs bool `zester:"makedirs" usage:"create the destination's parent directory chain if it does not exist; a boolean that also accepts the integers 1 (true) and 0 (false)"`
+	// MakeDirs: file.* family component (canonical parent-creation contract).
+	fileMakeDirsParam
 
 	// file is the injected file execution provider.
 	file exec.FileExec
@@ -81,7 +79,10 @@ type FileRecurse struct {
 // Check/Apply/Revert behavior — notably the DECLARED-ONLY dir_mode facet (existing
 // directory modes are left alone unless dir_mode is declared, in BOTH phases) and
 // the clean semantics (regular files only; directories are never removed).
-var fileRecurseSpec = mustSpec("file.recurse", modschema.KindState, FileRecurse{}, modschema.Doc{
+var fileRecurseSpec = mustSpec("file.recurse", modschema.KindState, FileRecurse{}, fileRecurseDoc,
+	modschema.WithRequired("source", false))
+
+var fileRecurseDoc = modschema.Doc{
 	Summary: "Recursively copy a source directory tree to a destination directory.",
 	Description: "`file.recurse` mirrors a `source` directory tree onto the destination, creating " +
 		"directories and copying files by SHA-256 content. The destination path defaults to the state " +
@@ -167,7 +168,7 @@ var fileRecurseSpec = mustSpec("file.recurse", modschema.KindState, FileRecurse{
 	},
 	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7"},
 	SeeAlso:     []string{"file.managed", "file.directory", "file.copy"},
-})
+}
 
 // NewFileRecurseBuilder returns a state.Builder that creates FileRecurse states
 // using the given ModuleContext's file provider. Decode policy (unknown-key
@@ -212,6 +213,11 @@ func (r *FileRecurse) desiredDirMode() fs.FileMode {
 }
 
 func (r *FileRecurse) Check(ctx context.Context) (state.CheckResult, error) {
+	// Canonical makedirs contract (§13): a missing parent with makedirs
+	// unset fails Check too — never reported as an applicable change.
+	if err := requireParentDirs(ctx, r.file, "file.recurse", r.Dest, r.MakeDirs); err != nil {
+		return state.CheckResult{}, err
+	}
 	if r.Source == "" {
 		return state.CheckResult{}, fmt.Errorf("file.recurse: source is required")
 	}
@@ -366,13 +372,8 @@ func (r *FileRecurse) Apply(ctx context.Context) (state.ApplyResult, error) {
 		return state.ApplyResult{}, err
 	}
 
-	if r.MakeDirs {
-		parent := filepath.Dir(r.Dest)
-		if parent != "" && parent != "." {
-			if err := r.file.MkdirAll(ctx, parent, dirMode); err != nil {
-				return state.ApplyResult{}, fmt.Errorf("file.recurse: mkdir parent %s: %w", parent, err)
-			}
-		}
+	if err := ensureParentDirs(ctx, r.file, "file.recurse", r.Dest, r.MakeDirs); err != nil {
+		return state.ApplyResult{}, err
 	}
 
 	// Build set of source-relative paths for clean mode.

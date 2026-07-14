@@ -536,3 +536,37 @@ func TestFileDirectoryContract(t *testing.T) {
 	}
 	schematest.RunContract(t, decode, "testdata/contract/file.directory.yaml")
 }
+
+// TestFileDirectoryDirModeFallback pins the builder-tail Salt-compat fallback
+// that replaced the pre-A1 dir_mode ALIAS (§13): an explicit dir_mode applies
+// as the directory's mode when mode is undeclared; mode wins when both are
+// set. Behavior is byte-identical to the alias era — only the decode
+// projection moved (see the contract fixtures).
+func TestFileDirectoryDirModeFallback(t *testing.T) {
+	mctx := testFileDirMctx()
+	builder := NewFileDirectoryBuilder(mctx, modschema.DecodeOptions{})
+
+	s, err := builder("/srv/d", map[string]any{"dir_mode": "0700"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.(*FileDirectory).desiredMode(); got != 0o700 {
+		t.Fatalf("dir_mode-only: desiredMode = %04o, want 0700", got)
+	}
+
+	s, err = builder("/srv/d", map[string]any{"mode": "0710", "dir_mode": "0700"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.(*FileDirectory).desiredMode(); got != 0o710 {
+		t.Fatalf("mode wins: desiredMode = %04o, want 0710", got)
+	}
+
+	s, err = builder("/srv/d", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.(*FileDirectory).desiredMode(); got != 0o755 {
+		t.Fatalf("neither: desiredMode = %04o, want the member default 0755", got)
+	}
+}

@@ -34,15 +34,20 @@ type FileDirectory struct {
 	// Path is the absolute path to the directory; it defaults to the state ID.
 	Path string `zester:"name,primary,aliases=path" usage:"absolute path to the target directory (defaults to the state ID); the path alias is accepted"`
 	// Mode is the directory permission mode; it defaults to 0755 (applied lazily).
-	// The dir_mode alias is accepted as a fallback source (mode wins when both set).
-	Mode paramtypes.FileMode `zester:"mode,lazy,default=0755,aliases=dir_mode" usage:"directory permission mode in octal (\"0755\", \"0700\"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755"`
-	// User is the directory owner username; ownership is left unchanged when unset.
-	User string `zester:"user" usage:"directory owner username; ownership is left unchanged when unset"`
-	// Group is the directory group name; ownership is left unchanged when unset.
-	Group string `zester:"group" usage:"directory group name; ownership is left unchanged when unset"`
+	// Mode: file.* family component (member-supplied default 0755, see mustSpec).
+	fileModeParam
+	// DirMode is the Salt-compat fallback SOURCE for mode (mode wins when both
+	// are set; an explicit dir_mode fills in when mode is undeclared — builder
+	// tail). Member-declared: dir_mode's meaning is member-specific within the
+	// family (here a mode fallback; on file.recurse a creation mode), with one
+	// shared contract signature.
+	DirMode paramtypes.FileMode `zester:"dir_mode,lazy,default=0755" usage:"fallback source for mode (Salt compatibility): applied as the directory's permission mode when mode is not declared; defaults to 0755"`
+	// User/Group: file.* family ownership component.
+	fileOwnershipParam
 	// MakeDirs is accepted for Salt compatibility but has NO effect: the Apply
-	// always calls MkdirAll, so parent directories are created unconditionally.
-	MakeDirs bool `zester:"makedirs" usage:"accepted for Salt compatibility but has NO effect — parent directories are always created via MkdirAll regardless; a boolean that also accepts the integers 1 (true) and 0 (false)"`
+	// MakeDirs: file.* family component. FIXED to the canonical contract in
+	// this migration (previously accepted-but-inert — see the CHANGELOG BD).
+	fileMakeDirsParam
 
 	// file is the injected file execution provider.
 	file exec.FileExec
@@ -59,7 +64,10 @@ type FileDirectory struct {
 // Check/Apply/Revert behavior — notably that `makedirs` has no effect (MkdirAll is
 // unconditional) and that the mode is set (Chmod) BEFORE ownership is converged
 // (Chown), the order the legacy code has always used.
-var fileDirectorySpec = mustSpec("file.directory", modschema.KindState, FileDirectory{}, modschema.Doc{
+var fileDirectorySpec = mustSpec("file.directory", modschema.KindState, FileDirectory{}, fileDirectoryDoc,
+	modschema.WithDefault("mode", "0755"))
+
+var fileDirectoryDoc = modschema.Doc{
 	Summary: "Ensure a directory exists with the desired permissions and ownership.",
 	Description: "`file.directory` ensures a directory exists at its path with the desired permission " +
 		"mode and ownership. The path defaults to the state ID. The `mode` parameter sets the " +
@@ -129,7 +137,7 @@ var fileDirectorySpec = mustSpec("file.directory", modschema.KindState, FileDire
 	},
 	Divergences: []string{"BD-1", "BD-2", "BD-6", "BD-7"},
 	SeeAlso:     []string{"file.managed", "file.recurse", "file.absent"},
-})
+}
 
 // NewFileDirectoryBuilder returns a state.Builder that creates FileDirectory
 // states using the given ModuleContext's file provider. Decode policy (unknown-key
@@ -151,6 +159,12 @@ func NewFileDirectoryBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOpti
 		d.id = id
 		d.file = mctx.File
 		d.reqs = state.ParseRequisites(config)
+		// Salt-compat fallback (builder tail, not schema): an explicit
+		// dir_mode fills in when mode is undeclared; mode wins when both are
+		// set — byte-identical to the pre-A1 alias behavior.
+		if !d.Mode.Declared() && d.DirMode.Declared() {
+			d.Mode = d.DirMode
+		}
 		return d, nil
 	}
 }
@@ -167,6 +181,13 @@ func (d *FileDirectory) desiredMode() fs.FileMode {
 }
 
 func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
+	// Canonical makedirs contract (§13): makedirs governs the PARENTS of the
+	// managed directory, never the directory itself. A missing parent with
+	// makedirs unset fails Check too. (Compatibility fix: makedirs was
+	// previously accepted but inert — see the CHANGELOG BD.)
+	if err := requireParentDirs(ctx, d.file, "file.directory", d.Path, d.MakeDirs); err != nil {
+		return state.CheckResult{}, err
+	}
 	info, err := d.file.Stat(ctx, d.Path)
 	if err != nil {
 		// Only a genuine not-exist means "directory absent"; any other stat
@@ -209,6 +230,14 @@ func (d *FileDirectory) Check(ctx context.Context) (state.CheckResult, error) {
 
 func (d *FileDirectory) Apply(ctx context.Context) (state.ApplyResult, error) {
 	mode := d.desiredMode()
+
+	// Canonical makedirs contract (§13): parents are created only when
+	// makedirs is true (mode 0755); a missing parent without it fails before
+	// anything is created. The managed directory ITSELF is created below
+	// regardless — creating the target is this module's job, not makedirs'.
+	if err := ensureParentDirs(ctx, d.file, "file.directory", d.Path, d.MakeDirs); err != nil {
+		return state.ApplyResult{}, err
+	}
 
 	// Probe existence for the revert memo. Only a genuine not-exist can mark
 	// the directory as created; any other stat error fails the apply — a

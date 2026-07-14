@@ -41,8 +41,8 @@ type Registration struct {
 // mustSpec compiles a module spec at package init, panicking on a compile error
 // — an invalid schema declaration is a programming error, caught at load, never
 // a runtime condition.
-func mustSpec(module string, kind modschema.Kind, proto any, doc modschema.Doc) *modschema.Spec {
-	s, err := modschema.NewSpec(module, kind, proto, doc)
+func mustSpec(module string, kind modschema.Kind, proto any, doc modschema.Doc, opts ...modschema.SpecOption) *modschema.Spec {
+	s, err := modschema.NewSpec(module, kind, proto, doc, opts...)
 	if err != nil {
 		panic(fmt.Sprintf("modules: spec %s: %v", module, err))
 	}

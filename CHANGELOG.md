@@ -7,6 +7,49 @@ All notable changes to Zester are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Family parameter components (Amendment A1, spec §13).** The `file.*`
+  family's canonical parameters are now declared ONCE in embeddable family
+  components — `makedirs`, `mode`, `user`/`group` ownership, and `source` —
+  and members embed them; the schema declaration, canonical usage text, and
+  runtime behavior contract are all shared, per the approved family-scoped
+  contract model. The framework gains member-supplied dimensions
+  (`memberdefault`/`memberrequired` tag options + `modschema.WithDefault`/
+  `WithRequired`): the mode component fixes name/type/semantics while
+  `file.managed` supplies 0644 and `file.directory` 0755; the source
+  component fixes everything but requiredness (`file.copy` requires it).
+  Every field is stamped with its declaring type, and the vocabulary gate
+  gains a COMPONENT RATCHET: once a family component exists for a key, a
+  private redeclaration in any member — even byte-identical — fails CI.
+- **Canonical `file.*` `makedirs` runtime contract, enforced by a shared
+  behavior suite.** All six members (`managed`, `copy`, `directory`,
+  `recurse`, `symlink`, `touch`) now implement ONE contract: `makedirs`
+  governs missing PARENTS of the target only (created at 0755 when true);
+  when false, a missing parent fails BOTH Check and Apply with an error
+  naming the parent and the `makedirs: true` remedy — no partial creation,
+  and Revert never removes created parents. A four-case behavior suite
+  (false/true × parents present/missing) runs against every embedding member.
+
+### Fixed
+- **`file.directory` `makedirs` was accepted but inert — deliberate
+  compatibility fix (A1).** The module previously always created the full
+  parent chain (`MkdirAll`), silently masking typos in deep paths, and
+  ignored the flag. It now follows the canonical contract: a missing parent
+  without `makedirs: true` fails Check and Apply. Behavioral difference from
+  0.6.0, maintainer-ruled; pinned by the shared behavior suite and the
+  makedirs contract fixtures across YAML/CLI/msgpack.
+- **The other five `makedirs` members failed missing-parent cases with raw
+  OS errors and reported phantom applicable changes in Check.** All now fail
+  both phases with the canonical contract error. `file.recurse` previously
+  created missing parents with `dir_mode` instead of the canonical 0755.
+- **`file.directory`'s `dir_mode` is now a standalone parameter** (was an
+  alias of `mode`): decode lands on its own field and the mode fallback
+  (mode wins; `dir_mode` fills in when `mode` is undeclared) moved to the
+  builder — behavior is byte-identical to the alias era, pinned by
+  `TestFileDirectoryDirModeFallback` and updated contract fixtures; its
+  contract signature now matches `file.recurse`'s `dir_mode`, retiring that
+  vocabulary-ratchet entry (along with the `source` one).
+
+### Added
 - **`path` alias unified across the whole file family.** All 13 `file.*`
   modules now accept `path` as an alias of their primary — previously 7 did
   and 6 (absent, append, blockreplace, directory, recurse, symlink) rejected

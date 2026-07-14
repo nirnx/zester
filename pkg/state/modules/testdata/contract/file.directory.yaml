@@ -126,22 +126,27 @@ cases:
     want:
       Mode: {declared: false}
 
-  # --- PARITY (§2.1 source fall-through): the dir_mode ALIAS supplies the mode when
-  # `mode` is absent (mode-then-dir_mode-then-0755, exactly the legacy chain) ---
+  # --- A1 (§13): dir_mode is a STANDALONE member field (DirMode) since the
+  # family-component migration; the mode fallback happens in the BUILDER tail
+  # (mode wins; dir_mode fills in when mode is undeclared — behavior identical
+  # to the pre-A1 alias, pinned by TestFileDirectoryDirModeFallback), so the
+  # DECODE projection now lands on DirMode with Mode left undeclared. ---
   - label: dir-mode-alias-yaml
     universe: yaml
     id: st
     input:
       dir_mode: "0700"
     want:
-      Mode: "0700"
+      Mode: {declared: false}
+      DirMode: "0700"
   - label: dir-mode-alias-cli
     universe: cli
     id: st
     input:
       dir_mode: "0700"
     want:
-      Mode: "0700"
+      Mode: {declared: false}
+      DirMode: "0700"
 
   # --- PARITY: mode WINS over dir_mode when both are set (name source precedes the
   # alias) ---
@@ -153,9 +158,11 @@ cases:
       dir_mode: "0755"
     want:
       Mode: "0700"
+      DirMode: "0755"
 
-  # --- PARITY (§2.1): an EMPTY-STRING mode falls THROUGH to dir_mode, never the
-  # ID — mirroring file.managed's name-empty-path-wins ---
+  # --- A1 (§13): an EMPTY-STRING mode is the undeclared sentinel; dir_mode
+  # decodes into its own field and the builder tail applies it as the mode
+  # (behavior unchanged from the pre-A1 alias fall-through) ---
   - label: empty-mode-dir_mode-wins-yaml
     universe: yaml
     id: st
@@ -163,7 +170,8 @@ cases:
       mode: ""
       dir_mode: "0700"
     want:
-      Mode: "0700"
+      Mode: {declared: false}
+      DirMode: "0700"
   - label: empty-mode-dir_mode-wins-msgpack
     universe: msgpack
     id: st
@@ -171,7 +179,8 @@ cases:
       mode: ""
       dir_mode: "0700"
     want:
-      Mode: "0700"
+      Mode: {declared: false}
+      DirMode: "0700"
 
   # --- parity: a setgid octal STRING mode decodes with the special bit (setgid on a
   # directory is the group-inheritance bit) ---
@@ -235,8 +244,8 @@ cases:
     want:
       Mode: "2755"
 
-  # --- BD-1: the dir_mode ALIAS honors a msgpack sized-int too (legacy dropped it
-  # to the 0755 default) ---
+  # --- BD-1: dir_mode honors a msgpack sized-int too (legacy dropped it to the
+  # 0755 default); decodes into the standalone DirMode since A1 (§13) ---
   - label: dir-mode-alias-0700-msgpack
     universe: msgpack
     id: st
@@ -244,7 +253,8 @@ cases:
     input:
       dir_mode: 0700
     want:
-      Mode: "0700"
+      Mode: {declared: false}
+      DirMode: "0700"
 
   # --- BD-2: a CLI makedirs=true (the string "true") now applies, where the legacy
   # .(bool) assertion dropped the string ---

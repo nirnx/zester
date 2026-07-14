@@ -678,7 +678,7 @@
                   "type": "string"
                 }
               ],
-              "description": "create missing parent directories of the destination (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"
+              "description": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)"
             },
             "name": {
               "anyOf": [
@@ -725,7 +725,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "local path (on the peel) to copy from"
+              "description": "source path content is taken from; whether it is required is member-specific"
             }
           },
           "type": "object"
@@ -737,6 +737,10 @@
         "items": {
           "additionalProperties": true,
           "properties": {
+            "dir_mode": {
+              "$ref": "#/$defs/semanticTypes/FileMode",
+              "description": "fallback source for mode (Salt compatibility): applied as the directory's permission mode when mode is not declared; defaults to 0755"
+            },
             "group": {
               "anyOf": [
                 {
@@ -749,7 +753,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "directory group name; ownership is left unchanged when unset"
+              "description": "group name for the target; ownership is left unchanged when unset"
             },
             "makedirs": {
               "anyOf": [
@@ -768,11 +772,11 @@
                   "type": "string"
                 }
               ],
-              "description": "accepted for Salt compatibility but has NO effect — parent directories are always created via MkdirAll regardless; a boolean that also accepts the integers 1 (true) and 0 (false)"
+              "description": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)"
             },
             "mode": {
               "$ref": "#/$defs/semanticTypes/FileMode",
-              "description": "directory permission mode in octal (\"0755\", \"0700\"); the dir_mode alias is accepted as a fallback source (mode wins if both are set); defaults to 0755"
+              "description": "permission mode for the target in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits are honored; the default is member-specific"
             },
             "name": {
               "anyOf": [
@@ -800,7 +804,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "directory owner username; ownership is left unchanged when unset"
+              "description": "owner username for the target; ownership is left unchanged when unset"
             }
           },
           "type": "object"
@@ -1014,7 +1018,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "file group name; ownership is left unchanged when unset"
+              "description": "group name for the target; ownership is left unchanged when unset"
             },
             "makedirs": {
               "anyOf": [
@@ -1033,11 +1037,11 @@
                   "type": "string"
                 }
               ],
-              "description": "create missing parent directories (with mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"
+              "description": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)"
             },
             "mode": {
               "$ref": "#/$defs/semanticTypes/FileMode",
-              "description": "file permission mode in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits honored; defaults to 0644"
+              "description": "permission mode for the target in octal (\"0644\", \"0755\", \"4755\"); setuid/setgid/sticky bits are honored; the default is member-specific"
             },
             "name": {
               "anyOf": [
@@ -1065,7 +1069,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "local file path to copy content from; provide either content or source (source wins if both are set)"
+              "description": "source path content is taken from; whether it is required is member-specific"
             },
             "template": {
               "$ref": "#/$defs/semanticTypes/TemplateFlag",
@@ -1083,7 +1087,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "file owner username; ownership is left unchanged when unset"
+              "description": "owner username for the target; ownership is left unchanged when unset"
             }
           },
           "type": "object"
@@ -1134,7 +1138,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "group name for copied files; ownership is left unchanged when unset"
+              "description": "group name for the target; ownership is left unchanged when unset"
             },
             "makedirs": {
               "anyOf": [
@@ -1153,7 +1157,7 @@
                   "type": "string"
                 }
               ],
-              "description": "create the destination's parent directory chain if it does not exist; a boolean that also accepts the integers 1 (true) and 0 (false)"
+              "description": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)"
             },
             "name": {
               "anyOf": [
@@ -1181,7 +1185,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "source directory path to copy from (required at run time)"
+              "description": "source path content is taken from; whether it is required is member-specific"
             },
             "user": {
               "anyOf": [
@@ -1195,7 +1199,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "owner username for copied files; ownership is left unchanged when unset"
+              "description": "owner username for the target; ownership is left unchanged when unset"
             }
           },
           "type": "object"
@@ -1378,7 +1382,7 @@
                   "type": "string"
                 }
               ],
-              "description": "create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false)"
+              "description": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)"
             },
             "name": {
               "anyOf": [
@@ -1435,7 +1439,7 @@
                   "type": "string"
                 }
               ],
-              "description": "create missing parent directories (mode 0755) before touching; a boolean that also accepts the integers 1 (true) and 0 (false)"
+              "description": "create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false)"
             },
             "name": {
               "anyOf": [

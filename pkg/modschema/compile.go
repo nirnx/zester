@@ -55,7 +55,15 @@ type fieldPlan struct {
 	defaultValue reflect.Value // pre-decoded, field-typed; valid when eagerDefault
 	// hasDefaultLit records a declared default literal (eager OR lazy) for docs.
 	hasDefaultLit bool
-	defaultLit    string
+	// declaredBy is the Go type that declared this field (§13 stamp).
+	declaredBy string
+	// memberDefault / memberRequired mark dimensions a family parameter
+	// component declares MEMBER-SUPPLIED (keystone spec §13): the embedding
+	// member MUST provide the value via WithDefault / WithRequired, and no
+	// other dimension is overridable at all.
+	memberDefault  bool
+	memberRequired bool
+	defaultLit     string
 
 	jsonSchema map[string]any
 }
@@ -83,7 +91,46 @@ type CompiledSchema struct {
 // Compile errors: a non-struct proto, a duplicate parameter name, more than one
 // primary, an unregistered non-primitive field type, an invalid default literal,
 // or lazy declared on a required field.
-func Compile(proto any, doc Doc) (*CompiledSchema, error) {
+// SpecOption supplies a MEMBER-SUPPLIED contract dimension for a field a
+// family parameter component declared `memberdefault` / `memberrequired`
+// (keystone spec §13). Options can only ever satisfy those declared
+// dimensions: applying one to any other field is a compile error, because
+// every other dimension is FIXED by the component and has no override
+// mechanism, by design.
+type SpecOption func(*specOptions)
+
+type specOptions struct {
+	defaults  map[string]string
+	requireds map[string]bool
+}
+
+// WithDefault supplies the member's default literal for a component field
+// declared `memberdefault` (e.g. the file.* mode component: file.managed
+// supplies "0644", file.directory "0755"). The literal is validated by the
+// field's own decoder at compile time and rendered in the member's docs,
+// exactly like a tag default.
+func WithDefault(param, literal string) SpecOption {
+	return func(o *specOptions) {
+		if o.defaults == nil {
+			o.defaults = map[string]string{}
+		}
+		o.defaults[param] = literal
+	}
+}
+
+// WithRequired supplies the member's requiredness for a component field
+// declared `memberrequired` (e.g. the file.* source component: file.copy
+// supplies true, file.managed false).
+func WithRequired(param string, required bool) SpecOption {
+	return func(o *specOptions) {
+		if o.requireds == nil {
+			o.requireds = map[string]bool{}
+		}
+		o.requireds[param] = required
+	}
+}
+
+func Compile(proto any, doc Doc, opts ...SpecOption) (*CompiledSchema, error) {
 	if proto == nil {
 		return nil, fmt.Errorf("modschema: compile: nil proto")
 	}
@@ -104,9 +151,17 @@ func Compile(proto any, doc Doc) (*CompiledSchema, error) {
 		knownKeys: map[string]struct{}{},
 	}
 
+	var o specOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	seenNames := map[string]struct{}{}
 	primarySeen := false
 	if err := cs.walk(t, nil); err != nil {
+		return nil, err
+	}
+	if err := cs.applyMemberDimensions(&o); err != nil {
 		return nil, err
 	}
 	for i := range cs.fields {
@@ -164,6 +219,7 @@ func Compile(proto any, doc Doc) (*CompiledSchema, error) {
 // anonymous (embedded) struct field is always recursed into — its promoted
 // exported leaves are settable even when the embedded type itself is unexported.
 func (cs *CompiledSchema) walk(t reflect.Type, prefix []int) error {
+	declaredBy := t.String()
 	for i := range t.NumField() {
 		sf := t.Field(i)
 		exported := sf.PkgPath == ""
@@ -196,6 +252,12 @@ func (cs *CompiledSchema) walk(t reflect.Type, prefix []int) error {
 		if err != nil {
 			return err
 		}
+		// §13 declaring-type stamp: which struct type declared this field. A
+		// family parameter component's fields carry the component's type; a
+		// module's own fields carry the module struct's type. The vocabulary
+		// gate uses it to enforce that a componentized key is never privately
+		// redeclared beside the component.
+		fp.declaredBy = declaredBy
 		cs.fields = append(cs.fields, fp)
 	}
 	return nil
@@ -230,6 +292,10 @@ func (cs *CompiledSchema) compileField(sf reflect.StructField, index []int, tag 
 			fp.lazy = true
 		case opt == "sensitive":
 			fp.sensitive = true
+		case opt == "memberdefault":
+			fp.memberDefault = true
+		case opt == "memberrequired":
+			fp.memberRequired = true
 		case strings.HasPrefix(opt, "aliases="):
 			raw := strings.TrimPrefix(opt, "aliases=")
 			for a := range strings.SplitSeq(raw, "|") {
@@ -248,6 +314,15 @@ func (cs *CompiledSchema) compileField(sf reflect.StructField, index []int, tag 
 
 	if fp.lazy && fp.required {
 		return fp, fmt.Errorf("modschema: compile: param %q: lazy cannot be combined with required", fp.name)
+	}
+	if fp.memberDefault && hasDefault {
+		return fp, fmt.Errorf("modschema: compile: param %q: memberdefault cannot be combined with a tag default — the member supplies it via WithDefault", fp.name)
+	}
+	if fp.memberDefault && fp.required {
+		return fp, fmt.Errorf("modschema: compile: param %q: memberdefault cannot be combined with required", fp.name)
+	}
+	if fp.memberRequired && fp.required {
+		return fp, fmt.Errorf("modschema: compile: param %q: memberrequired cannot be combined with a tag required — the member supplies it via WithRequired", fp.name)
 	}
 
 	// Resolve the decoder: registered semantic type wins; else the primitive
@@ -287,6 +362,72 @@ func (cs *CompiledSchema) compileField(sf reflect.StructField, index []int, tag 
 		}
 	}
 	return fp, nil
+}
+
+// applyMemberDimensions satisfies the member-supplied contract dimensions
+// (§13): every `memberdefault` field must receive WithDefault and every
+// `memberrequired` field WithRequired; supplying either for any OTHER field
+// is an error — fixed dimensions have no override mechanism, by design.
+func (cs *CompiledSchema) applyMemberDimensions(o *specOptions) error {
+	byName := map[string]*fieldPlan{}
+	for i := range cs.fields {
+		byName[cs.fields[i].name] = &cs.fields[i]
+	}
+
+	for name, lit := range o.defaults {
+		fp, ok := byName[name]
+		if !ok {
+			return fmt.Errorf("modschema: compile: WithDefault(%q): no such parameter", name)
+		}
+		if !fp.memberDefault {
+			return fmt.Errorf("modschema: compile: WithDefault(%q): the default is a FIXED dimension of this parameter — only a component field declared memberdefault accepts a member default (§13)", name)
+		}
+		fp.hasDefaultLit = true
+		fp.defaultLit = lit
+		v, err := cs.decodeDefault(fp, lit)
+		if err != nil {
+			return fmt.Errorf("modschema: compile: param %q: invalid member default %q: %w", name, lit, err)
+		}
+		if !fp.lazy {
+			fp.eagerDefault = true
+			fp.defaultValue = v
+		}
+	}
+	for name, req := range o.requireds {
+		fp, ok := byName[name]
+		if !ok {
+			return fmt.Errorf("modschema: compile: WithRequired(%q): no such parameter", name)
+		}
+		if !fp.memberRequired {
+			return fmt.Errorf("modschema: compile: WithRequired(%q): requiredness is a FIXED dimension of this parameter — only a component field declared memberrequired accepts it (§13)", name)
+		}
+		if req && fp.lazy {
+			return fmt.Errorf("modschema: compile: param %q: lazy cannot be combined with required (member-supplied)", name)
+		}
+		fp.required = req
+	}
+
+	for i := range cs.fields {
+		fp := &cs.fields[i]
+		if fp.memberDefault && !fp.hasDefaultLit {
+			return fmt.Errorf("modschema: compile: param %q declares memberdefault but the member supplied no WithDefault(%q, ...) — member-supplied dimensions are mandatory (§13)", fp.name, fp.name)
+		}
+		if fp.memberRequired {
+			if _, supplied := o.requireds[fp.name]; !supplied {
+				return fmt.Errorf("modschema: compile: param %q declares memberrequired but the member supplied no WithRequired(%q, ...) — member-supplied dimensions are mandatory (§13)", fp.name, fp.name)
+			}
+		}
+	}
+	return nil
+}
+
+// componentDeclarer returns the declaring type name when it is NOT the proto
+// root — i.e. the field came from an embedded component — and "" otherwise.
+func componentDeclarer(declaredBy string, root reflect.Type) string {
+	if declaredBy == root.String() {
+		return ""
+	}
+	return declaredBy
 }
 
 // decodeDefault decodes a default literal into a field-typed reflect.Value using
@@ -329,7 +470,15 @@ func (cs *CompiledSchema) deriveSchema() *ModuleSchema {
 			Lazy:       fp.lazy,
 			Sensitive:  fp.sensitive,
 			HasDefault: fp.hasDefaultLit,
-			JSONSchema: fp.jsonSchema,
+			// Stamped ONLY for fields declared by an EMBEDDED struct (a family
+			// parameter component); a module's root-declared fields — including
+			// a §5 N:1 shared proto's — carry no stamp, so whole-proto sharing
+			// never reads as a component.
+			DeclaredBy: componentDeclarer(fp.declaredBy, cs.protoType),
+
+			DefaultMemberSupplied:  fp.memberDefault,
+			RequiredMemberSupplied: fp.memberRequired,
+			JSONSchema:             fp.jsonSchema,
 		}
 		if fp.kind == kindSemantic {
 			f.SemanticType = fp.semType.Name()

@@ -20,7 +20,7 @@ description: "Ensure a symbolic link exists at a path, pointing to a target."
 | `name` | `string` | No | State ID | absolute path for the symbolic link (defaults to the state ID); the path alias is accepted |
 | `target` | `string` | No | *(none)* | destination the symlink should point to |
 | `force` | `bool` | No | *(none)* | replace an existing file or wrong-target symlink at the link path; without force an existing mismatch is an error; a boolean that also accepts the integers 1 (true) and 0 (false) |
-| `makedirs` | `bool` | No | *(none)* | create missing parent directories (mode 0755); a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `makedirs` | `bool` | No | `false` | create missing parent directories of the target (mode 0755); when false, a missing parent fails the operation; never creates the target itself; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 All states also accept the full set of requisite parameters and Salt-parity state attributes — see [Dependencies & Requisites](/docs/guides/states/dependencies).
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -258,23 +259,18 @@ func TestFileSymlinkApplyMakeDirs(t *testing.T) {
 }
 
 func TestFileSymlinkApplyError(t *testing.T) {
+	// Canonical makedirs contract (§13): a missing parent without makedirs
+	// fails Apply with the contract error naming the parent and the remedy.
 	fakeFile := exectest.NewFakeFileExec()
-	// Make Readlink return "not found" (symlink absent) and Stat also fail.
-	// Symlink will fail because fakeFile doesn't actually create symlinks that work with real OS.
-	// We simulate by having an internal issue — use a real bad path scenario.
 	mctx := &exec.ModuleContext{ProviderSet: exec.ProviderSet{File: fakeFile}}
 	builder := NewFileSymlinkBuilder(mctx, modschema.DecodeOptions{})
 	s, err := builder("/dev/null/impossible/link", map[string]any{"target": "/etc/hosts"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// FakeFileExec.Symlink doesn't fail — just verify no panic and it creates the symlink in the fake.
-	ar, err := s.Apply(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ar.Changed {
-		t.Error("expected Changed with fake FileExec")
+	_, err = s.Apply(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "makedirs: true") {
+		t.Fatalf("apply with missing parent: err=%v, want the canonical makedirs contract error", err)
 	}
 }
 

@@ -74,6 +74,17 @@ func (f *FakeFileExec) Stat(_ context.Context, path string) (fs.FileInfo, error)
 	defer f.mu.Unlock()
 	ff, ok := f.files[path]
 	if !ok {
+		// IMPLICIT directories: an entry cannot exist without its ancestor
+		// directories, so any strict prefix-dir of an existing entry stats as
+		// a directory (mirrors a real filesystem; keeps parent-existence
+		// checks like the file.* makedirs contract working against fixtures
+		// that pre-create only the file).
+		prefix := strings.TrimSuffix(path, "/") + "/"
+		for k := range f.files {
+			if strings.HasPrefix(k, prefix) {
+				return &fakeFileInfo{name: path, mode: 0o755 | fs.ModeDir}, nil
+			}
+		}
 		return nil, fmt.Errorf("file not found: %s: %w", path, fs.ErrNotExist)
 	}
 	return &fakeFileInfo{name: path, size: int64(len(ff.data)), mode: ff.mode}, nil
