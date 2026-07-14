@@ -92,6 +92,17 @@ All notable changes to Zester are documented here. The format follows
   consumer changes; file history follows the moves.
 
 ### Fixed
+- **`makedirs: true` no longer accepts a regular file at the parent path, and
+  non-ENOENT `Stat` failures are surfaced instead of masked.** The Apply-side
+  parent-creation arm returned success whenever `Stat(parent)` succeeded —
+  without checking it was a directory — and fell through to `MkdirAll` on ANY
+  stat error, hiding permission/I-O/provider failures behind a creation
+  attempt. It now succeeds only for an existing directory, reports a clear
+  not-a-directory error for a file, creates only on a genuine not-exist, and
+  wraps every other stat error untouched. Two new arms in the shared family
+  behavior suite pin both cases per member (regular-file parent; injected
+  non-ENOENT stat failure via the fake's new fault injection).
+
 - **`makedirs` Check semantics re-ruled (Salt-aligned).** A missing parent
   with `makedirs` unset no longer fails Check: dry runs do not materialize
   changes from earlier required states, so a correctly ordered tree (a

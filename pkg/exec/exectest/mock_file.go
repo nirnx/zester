@@ -16,6 +16,7 @@ type FakeFileExec struct {
 	mu       sync.Mutex
 	files    map[string]*fakeFile
 	symlinks map[string]string
+	statErrs map[string]error
 	readErrs map[string]error
 
 	// RemoveAllErr, if set, is returned by RemoveAll.
@@ -69,9 +70,24 @@ func (f *FakeFileExec) WriteFile(_ context.Context, path string, data []byte, pe
 	return nil
 }
 
+// SetStatErr injects an error returned by Stat for exactly this path —
+// fault-injection for permission/I-O paths (e.g. the makedirs contract's
+// non-ENOENT arm).
+func (f *FakeFileExec) SetStatErr(path string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.statErrs == nil {
+		f.statErrs = map[string]error{}
+	}
+	f.statErrs[path] = err
+}
+
 func (f *FakeFileExec) Stat(_ context.Context, path string) (fs.FileInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.statErrs[path]; ok {
+		return nil, err
+	}
 	ff, ok := f.files[path]
 	if !ok {
 		// IMPLICIT directories: an entry cannot exist without its ancestor

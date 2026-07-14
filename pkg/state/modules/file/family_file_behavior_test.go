@@ -2,7 +2,9 @@ package filemod
 
 import (
 	"context"
+	"errors"
 	"io"
+	fs2 "io/fs"
 	"log/slog"
 	"strings"
 	"testing"
@@ -147,6 +149,39 @@ func TestFileFamily_MakeDirsContract(t *testing.T) {
 							t.Fatal("Revert removed a parent directory makedirs created")
 						}
 					}
+				}
+			})
+
+			t.Run("true parent-is-regular-file", func(t *testing.T) {
+				// makedirs=true must NOT accept (or silently pave over) a
+				// parent that exists as a regular FILE — a clear
+				// not-a-directory error, no creation (review 2026-07-14).
+				fs := exectest.NewFakeFileExec()
+				fs.PreCreate(parent, []byte("i am a file"), 0o644)
+				s := sub.build(t, fs, true)
+				_, err := s.Apply(context.Background())
+				if err == nil || !strings.Contains(err.Error(), "not a directory") {
+					t.Fatalf("Apply with a regular-file parent: err=%v, want a clear not-a-directory error", err)
+				}
+				// The file at the parent path is untouched.
+				if info, serr := fs.Stat(context.Background(), parent); serr != nil || info.IsDir() {
+					t.Fatalf("parent entry was modified: info=%v err=%v", info, serr)
+				}
+			})
+
+			t.Run("true stat-error is surfaced, not masked", func(t *testing.T) {
+				// A non-ENOENT Stat failure (permissions, I/O, provider) must
+				// be wrapped and returned — never treated as "missing" and
+				// masked by a creation attempt (review 2026-07-14).
+				fs := exectest.NewFakeFileExec()
+				fs.SetStatErr(parent, fs2.ErrPermission)
+				s := sub.build(t, fs, true)
+				_, err := s.Apply(context.Background())
+				if err == nil || !errors.Is(err, fs2.ErrPermission) {
+					t.Fatalf("Apply with an injected stat error: err=%v, want the wrapped fs.ErrPermission", err)
+				}
+				if !strings.Contains(err.Error(), "stat parent") {
+					t.Fatalf("stat error not surfaced as a stat failure: %v", err)
 				}
 			})
 

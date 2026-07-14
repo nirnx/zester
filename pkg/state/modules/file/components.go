@@ -165,11 +165,25 @@ func ensureParentDirs(ctx context.Context, file exec.FileExec, module, target st
 	if parent == "" {
 		return nil
 	}
-	if _, err := file.Stat(ctx, parent); err == nil {
+	info, err := file.Stat(ctx, parent)
+	switch {
+	case err == nil:
+		// An existing parent satisfies makedirs ONLY when it is actually a
+		// directory — a regular file at the parent path is an error, never a
+		// silent success (maintainer review 2026-07-14).
+		if !info.IsDir() {
+			return fmt.Errorf("%s: parent path %s exists but is not a directory", module, parent)
+		}
 		return nil
+	case errors.Is(err, fs.ErrNotExist):
+		// Only a genuine not-exist triggers creation.
+		if err := file.MkdirAll(ctx, parent, fileParentMode); err != nil {
+			return fmt.Errorf("%s: create parent %s: %w", module, parent, err)
+		}
+		return nil
+	default:
+		// Permission/I-O/provider errors are surfaced, never masked as a
+		// directory-creation attempt.
+		return fmt.Errorf("%s: stat parent %s: %w", module, parent, err)
 	}
-	if err := file.MkdirAll(ctx, parent, fileParentMode); err != nil {
-		return fmt.Errorf("%s: create parent %s: %w", module, parent, err)
-	}
-	return nil
 }
