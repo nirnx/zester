@@ -39,6 +39,17 @@ All notable changes to Zester are documented here. The format follows
   and Revert never removes created parents. A four-case behavior suite
   (false/true × parents present/missing) runs against every embedding member.
 
+### Changed
+- **Family-oriented package layout (A1 step 8).** `pkg/state/modules` is now
+  one package per module family (`modules/file/`, `modules/cron/`, …; package
+  names `filemod`, `cronmod`, …), each holding its members, its parameter
+  components (`components.go`), its behavior suites, its contract fixtures,
+  and its registration rows; shared plumbing lives in `modules/regdef`
+  (registration types + `MustSpec`) and `modules/internal/famshared`
+  (cross-family helpers). The aggregator `pkg/state/modules` keeps its import
+  path and public API (`RegisterAll`, the dispatch specials) unchanged — no
+  consumer changes; file history follows the moves.
+
 ### Fixed
 - **`file.directory` `makedirs` was accepted but inert — deliberate
   compatibility fix (A1).** The module previously always created the full

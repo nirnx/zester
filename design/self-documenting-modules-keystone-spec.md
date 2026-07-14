@@ -545,7 +545,7 @@ REJECTED. Post-migration, a componentized parameter is declared exactly once
 (in the family's components), members embed it, and the declaring-type gate
 makes a private redeclaration a CI failure.
 
-### Intended source layout (end state; NOT blocking A1 implementation)
+### Intended source layout (IMPLEMENTED 2026-07-13 — A1 step 8)
 
 The family is the contract boundary, so the package layout should eventually
 reflect it: one directory per family —
