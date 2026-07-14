@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -14,11 +15,16 @@ import (
 )
 
 // runDocForTest invokes runDoc with a synthetic command carrying the --json
-// flag and a captured stdout, bypassing the rootCmd machinery.
+// flag and a captured stdout, bypassing the rootCmd machinery. Color is
+// explicitly OFF: without the pin, colorEnabled would fall through to
+// shouldColor()'s real-stdout TTY check and the byte-identity assertions below
+// would fail when the test binary runs attached to a terminal.
 func runDocForTest(t *testing.T, jsonFlag bool, args ...string) (string, error) {
 	t.Helper()
 	c := &cobra.Command{}
 	c.Flags().Bool("json", false, "")
+	c.Flags().Bool("no-color", true, "")
+	c.Flags().Bool("force-color", false, "")
 	if jsonFlag {
 		if err := c.Flags().Set("json", "true"); err != nil {
 			t.Fatalf("set json flag: %v", err)
@@ -316,5 +322,98 @@ func TestRunDoc_FamilyJSON(t *testing.T) {
 func TestRunDoc_FamilyUnknownStillErrors(t *testing.T) {
 	if _, err := runDocForTest(t, false, "totally-bogus"); err == nil {
 		t.Fatal("unknown non-family name did not error")
+	}
+}
+
+// --- Color (--force-color / --no-color) ---
+
+var testANSIRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func testStripANSI(s string) string { return testANSIRe.ReplaceAllString(s, "") }
+
+// runDocForTestColor invokes runDoc with the color flags registered (the real
+// command inherits them as persistent root flags) and set as requested.
+func runDocForTestColor(t *testing.T, flags map[string]string, args ...string) string {
+	t.Helper()
+	c := &cobra.Command{}
+	c.Flags().Bool("json", false, "")
+	c.Flags().Bool("no-color", false, "")
+	c.Flags().Bool("force-color", false, "")
+	for k, v := range flags {
+		if err := c.Flags().Set(k, v); err != nil {
+			t.Fatalf("set %s flag: %v", k, err)
+		}
+	}
+	var buf bytes.Buffer
+	c.SetOut(&buf)
+	if err := runDoc(c, args); err != nil {
+		t.Fatalf("runDoc: %v", err)
+	}
+	return buf.String()
+}
+
+// --force-color colorizes the render even without a TTY, and stripping the
+// codes reproduces the plain render exactly.
+func TestDoc_ForceColorRendersANSI(t *testing.T) {
+	// The plain baseline pins color OFF explicitly — deriving it from the
+	// non-TTY test stdout would break under a TTY-attached test run.
+	plain := runDocForTestColor(t, map[string]string{"no-color": "true"}, "file.managed")
+	colored := runDocForTestColor(t, map[string]string{"force-color": "true"}, "file.managed")
+
+	if !strings.Contains(colored, "\x1b[") {
+		t.Fatalf("--force-color output has no ANSI codes:\n%s", colored)
+	}
+	if !strings.Contains(colored, "\x1b[1;36mfile.managed\x1b[0m") {
+		t.Errorf("--force-color output missing colored module header:\n%.200s", colored)
+	}
+	if got := testStripANSI(colored); got != plain {
+		t.Errorf("stripping ANSI does not reproduce the plain render\n got: %q\nwant: %q", got, plain)
+	}
+}
+
+// --no-color always wins, even against an explicit --force-color.
+func TestDoc_NoColorWinsOverForceColor(t *testing.T) {
+	out := runDocForTestColor(t, map[string]string{"force-color": "true", "no-color": "true"}, "file.managed")
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("--no-color output contains ANSI codes:\n%q", out)
+	}
+}
+
+// The bare index is colorized too (heading, family names, module names) and
+// stripping reproduces the plain index.
+func TestDoc_ForceColorIndex(t *testing.T) {
+	plain := runDocForTestColor(t, map[string]string{"no-color": "true"})
+	colored := runDocForTestColor(t, map[string]string{"force-color": "true"})
+
+	for _, want := range []string{
+		colorBoldYellow + "Documented modules:" + colorReset,
+		colorBoldCyan + "file" + colorReset,
+		colorGreen + "file.managed" + colorReset,
+	} {
+		if !strings.Contains(colored, want) {
+			t.Errorf("colored index missing %q:\n%.400s", want, colored)
+		}
+	}
+	if got := testStripANSI(colored); got != plain {
+		t.Errorf("stripping ANSI does not reproduce the plain index\n got: %q\nwant: %q", got, plain)
+	}
+}
+
+// The lossless invariant over EVERY embedded module doc — a colorizer/grammar
+// drift on any real module (not just synthetic fixtures) fails here.
+func TestDoc_ColorizeLosslessOverAllEmbedded(t *testing.T) {
+	all := moduledoc.All()
+	if len(all) == 0 {
+		t.Fatal("no embedded module docs")
+	}
+	for _, mi := range all {
+		plain := modschema.RenderText(mi)
+		if got := testStripANSI(modschema.ColorizeDoc(plain)); got != plain {
+			t.Errorf("%s: stripANSI(ColorizeDoc()) != RenderText()\n got: %q\nwant: %q", mi.Module, got, plain)
+		}
+	}
+	family := modschema.RenderTextAll(all)
+	if got := testStripANSI(modschema.ColorizeDoc(family)); got != family {
+		t.Error("stripANSI(ColorizeDoc()) over the full RenderTextAll differs from the plain render")
 	}
 }

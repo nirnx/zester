@@ -233,6 +233,7 @@ subcommand.
 | `--nats-ca` | `string` | `""` (config, else `$NATS_CA_FILE`) | CA certificate for NATS TLS verification |
 | `--format` | `string` | `text` | Output format: `text`, `json`, or `yaml` |
 | `--no-color` | `bool` | `false` | Disable colored output (auto-disabled when piped) |
+| `--force-color` | `bool` | `false` | Force colored output even when stdout is not a TTY (e.g. piping to `less -R`); overrides the `NO_COLOR` env, `--no-color` wins |
 | `--direct` | `bool` | `false` | Bypass master job system; send directly to peels via NATS request/reply |
 | `--test` | `bool` | `false` | Dry run: report what would change without applying (Salt `test=True`) |
 

@@ -117,9 +117,7 @@ func runReactorTest(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Print(string(out))
 	default:
-		noColor, _ := cmd.Flags().GetBool("no-color")
-		useColor := !noColor && shouldColor()
-		fmt.Print(formatReactorTestText(key, resp.Matched, useColor))
+		fmt.Print(formatReactorTestText(key, resp.Matched, colorEnabled(cmd)))
 	}
 	return nil
 }

@@ -51,8 +51,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 
 	// Determine output format and color.
 	format, _ := cmd.Flags().GetString("format")
-	noColor, _ := cmd.Flags().GetBool("no-color")
-	useColor := !noColor && shouldColor()
+	useColor := colorEnabled(cmd)
 	direct, _ := cmd.Flags().GetBool("direct")
 
 	// Connect to NATS.

@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/nirnx/zester/pkg/job"
 	"github.com/nirnx/zester/pkg/proto"
@@ -496,5 +499,53 @@ func TestMapStrSafe(t *testing.T) {
 				t.Errorf("mapStrSafe(%v, %q) = %q; want %q", tt.m, tt.key, got, tt.want)
 			}
 		})
+	}
+}
+
+// streamlinedResultText colorizes ONLY sys.doc replies, and only when color is
+// on — cmd.run stdout and every other module's output is never rewritten.
+func TestStreamlinedResultText(t *testing.T) {
+	doc := "pkg.installed (state)\n\nParameters:\n  name (string, required, primary)"
+
+	colored := streamlinedResultText("sys.doc", doc, true)
+	if !strings.Contains(colored, "\x1b[") {
+		t.Errorf("sys.doc with color on gained no ANSI codes:\n%q", colored)
+	}
+	if got := testStripANSI(colored); got != doc {
+		t.Errorf("stripping ANSI does not reproduce the wire text\n got: %q\nwant: %q", got, doc)
+	}
+
+	if got := streamlinedResultText("sys.doc", doc, false); got != doc {
+		t.Errorf("sys.doc with color off was rewritten:\n%q", got)
+	}
+	// cmd.run output may LOOK like a doc render — it must still never be touched.
+	if got := streamlinedResultText("cmd.run", doc, true); got != doc {
+		t.Errorf("cmd.run output was rewritten:\n%q", got)
+	}
+}
+
+// colorEnabled precedence: --no-color beats --force-color beats the TTY check.
+func TestColorEnabled(t *testing.T) {
+	mk := func(flags map[string]string) *cobra.Command {
+		c := &cobra.Command{}
+		c.Flags().Bool("no-color", false, "")
+		c.Flags().Bool("force-color", false, "")
+		for k, v := range flags {
+			if err := c.Flags().Set(k, v); err != nil {
+				t.Fatalf("set %s: %v", k, err)
+			}
+		}
+		return c
+	}
+
+	if colorEnabled(mk(map[string]string{"no-color": "true", "force-color": "true"})) {
+		t.Error("colorEnabled = true with --no-color set; --no-color must always win")
+	}
+	if !colorEnabled(mk(map[string]string{"force-color": "true"})) {
+		t.Error("colorEnabled = false with --force-color set and no --no-color")
+	}
+	// Neither flag: falls through to shouldColor (non-TTY under go test → false).
+	if colorEnabled(mk(nil)) != shouldColor() {
+		t.Error("colorEnabled without flags must follow shouldColor")
 	}
 }

@@ -58,6 +58,7 @@ func init() {
 	rootCmd.PersistentFlags().Duration("timeout", 60*time.Second, "execution timeout")
 	rootCmd.PersistentFlags().String("format", "text", "output format: text, json, yaml")
 	rootCmd.PersistentFlags().Bool("no-color", false, "disable colored output")
+	rootCmd.PersistentFlags().Bool("force-color", false, "force colored output even when stdout is not a TTY (e.g. piping to 'less -R'); overrides the NO_COLOR env, --no-color wins")
 	rootCmd.PersistentFlags().Bool("direct", false, "bypass master, send directly to peels via request/reply")
 	rootCmd.PersistentFlags().Bool("test", false, "dry run: report what would change without applying (Salt test=True)")
 

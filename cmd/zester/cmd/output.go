@@ -7,17 +7,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
 	"github.com/nirnx/zester/pkg/enroll"
 	"github.com/nirnx/zester/pkg/job"
+	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/proto"
-	"gopkg.in/yaml.v3"
 )
 
 // ANSI color codes.
 const (
-	colorGreen = "\033[32m"
-	colorRed   = "\033[91m"
-	colorReset = "\033[0m"
+	colorGreen      = "\033[32m"
+	colorRed        = "\033[91m"
+	colorBoldCyan   = "\033[1;36m"
+	colorBoldYellow = "\033[1;33m"
+	colorReset      = "\033[0m"
 )
 
 // displayPeel maps a wire-form peel ID to its human form for CLI output:
@@ -67,6 +72,21 @@ func shouldColor() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
+// colorEnabled is the single color decision for a command's text output:
+// --no-color always wins; --force-color enables color even when stdout is not
+// a TTY (piping to `less -R`, CI captures) and, being an explicit request,
+// overrides the NO_COLOR env; otherwise color follows shouldColor. Commands
+// that don't register the flags (test scaffolding) fall through to shouldColor.
+func colorEnabled(cmd *cobra.Command) bool {
+	if noColor, _ := cmd.Flags().GetBool("no-color"); noColor {
+		return false
+	}
+	if force, _ := cmd.Flags().GetBool("force-color"); force {
+		return true
+	}
+	return shouldColor()
+}
+
 // colorize wraps text in ANSI color codes if color is enabled.
 func colorize(text, color string, enabled bool) string {
 	if !enabled {
@@ -83,6 +103,18 @@ func colorize(text, color string, enabled bool) string {
 func isStreamlined(module string) bool {
 	return module == "cmd.run" || module == "test.ping" || module == "sys.doc" ||
 		strings.HasPrefix(module, "facts.") || strings.HasPrefix(module, "settings.")
+}
+
+// streamlinedResultText post-processes a streamlined module's result text for
+// display. sys.doc replies are RenderText documents, colorized client-side
+// (the wire stays plain text; modschema.ColorizeDoc leaves non-grammar lines —
+// the bare-invocation name index included — untouched). Every other module's
+// output (cmd.run stdout above all) is NEVER rewritten.
+func streamlinedResultText(module, text string, useColor bool) string {
+	if module == "sys.doc" && useColor {
+		return modschema.ColorizeDoc(text)
+	}
+	return text
 }
 
 // --- Direct mode output ---
@@ -128,6 +160,7 @@ func printDirectText(peelID, module string, resp *proto.ExecResponse, err error,
 				stdout = sr.Details["result"]
 			}
 			if stdout != "" {
+				stdout = streamlinedResultText(module, stdout, useColor)
 				for line := range strings.SplitSeq(stdout, "\n") {
 					fmt.Printf("    %s\n", line)
 				}
@@ -264,6 +297,7 @@ func printJobReturnText(ret job.Return, module string, useColor bool) {
 				stdout, _ = details["result"].(string)
 			}
 			if stdout != "" {
+				stdout = streamlinedResultText(module, stdout, useColor)
 				for line := range strings.SplitSeq(stdout, "\n") {
 					fmt.Printf("    %s\n", line)
 				}

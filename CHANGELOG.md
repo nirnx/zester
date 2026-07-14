@@ -4,6 +4,21 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Added
+- Colored module documentation in the terminal: `sys.doc` replies and the
+  offline `zester doc` render (module, family, and index forms) are colorized
+  client-side over the pinned plain-text grammar — module headers, section
+  headings, parameter names/flags (`required` yellow, `sensitive` red), effects,
+  examples, and notes by severity. The wire format and `RenderText` stay
+  byte-identical (stripping the ANSI codes reproduces the plain render exactly,
+  test-pinned); color follows the existing TTY + `NO_COLOR` + `--no-color`
+  rules. `cmd.run` and other module output is never rewritten.
+- New global CLI flag `--force-color`: force colored output when stdout is not
+  a TTY (piping to `less -R`, CI captures). An explicit request, so it overrides
+  the `NO_COLOR` env; `--no-color` still always wins.
+
 ## [0.6.7] - 2026-07-14
 
 ### Security

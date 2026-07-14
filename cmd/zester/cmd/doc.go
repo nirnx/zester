@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -57,13 +58,18 @@ func runDoc(cmd *cobra.Command, args []string) error {
 	}
 
 	jsonOut, _ := cmd.Flags().GetBool("json")
+	useColor := colorEnabled(cmd)
 	out := cmd.OutOrStdout()
 
 	if len(args) == 0 {
 		if jsonOut {
 			return writeDocJSON(out, moduledoc.All())
 		}
-		_, err := io.WriteString(out, renderModuleIndex(moduledoc.All()))
+		text := renderModuleIndex(moduledoc.All())
+		if useColor {
+			text = colorizeModuleIndex(text)
+		}
+		_, err := io.WriteString(out, text)
 		return err
 	}
 
@@ -80,7 +86,7 @@ func runDoc(cmd *cobra.Command, args []string) error {
 			if jsonOut {
 				return writeDocJSON(out, infos)
 			}
-			_, err := fmt.Fprintln(out, modschema.RenderTextAll(infos))
+			_, err := fmt.Fprintln(out, docText(modschema.RenderTextAll(infos), useColor))
 			return err
 		}
 		return unknownModuleError(module)
@@ -88,8 +94,44 @@ func runDoc(cmd *cobra.Command, args []string) error {
 	if jsonOut {
 		return writeDocJSON(out, mi)
 	}
-	_, err := fmt.Fprintln(out, modschema.RenderText(mi))
+	_, err := fmt.Fprintln(out, docText(modschema.RenderText(mi), useColor))
 	return err
+}
+
+// docText colorizes a rendered doc for terminal display when color is on. The
+// plain render stays the canonical currency (byte-identical to the peel-side
+// sys.doc and the embedded docdata); color is presentation only.
+func docText(text string, useColor bool) string {
+	if useColor {
+		return modschema.ColorizeDoc(text)
+	}
+	return text
+}
+
+// docIndexModuleRe matches an index module line: two-space indent, module name,
+// then the padded one-line summary (if any).
+var docIndexModuleRe = regexp.MustCompile(`^  (\S+)(.*)$`)
+
+// colorizeModuleIndex colors the bare `zester doc` module index: the heading
+// bold yellow, family group names bold cyan, module names green. Like
+// modschema.ColorizeDoc, stripping the codes reproduces the input exactly.
+func colorizeModuleIndex(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		switch {
+		case line == "Documented modules:":
+			lines[i] = colorBoldYellow + line + colorReset
+		case line != "" && !strings.HasPrefix(line, " ") && !strings.Contains(line, " "):
+			// Family group names sit at column 0 and never contain spaces
+			// (unlike the heading above and the trailing usage hint).
+			lines[i] = colorBoldCyan + line + colorReset
+		default:
+			if m := docIndexModuleRe.FindStringSubmatch(line); m != nil {
+				lines[i] = "  " + colorGreen + m[1] + colorReset + m[2]
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // familyModules returns every documented module in the named family
