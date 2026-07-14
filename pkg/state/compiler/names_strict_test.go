@@ -11,6 +11,8 @@ import (
 	"github.com/nirnx/zester/pkg/state"
 	"github.com/nirnx/zester/pkg/state/compiler"
 	"github.com/nirnx/zester/pkg/state/modules"
+	cmdmod "github.com/nirnx/zester/pkg/state/modules/cmd"
+	filemod "github.com/nirnx/zester/pkg/state/modules/file"
 	"github.com/nirnx/zester/pkg/template"
 )
 
@@ -57,9 +59,9 @@ confs:
 		if s == nil {
 			t.Fatalf("cmd.run:%q not built under strict names expansion", cmd)
 		}
-		cr, ok := s.(*modules.CmdRun)
+		cr, ok := s.(*cmdmod.CmdRun)
 		if !ok {
-			t.Fatalf("cmd.run:%q is %T, want *modules.CmdRun", cmd, s)
+			t.Fatalf("cmd.run:%q is %T, want *cmdmod.CmdRun", cmd, s)
 		}
 		if cr.Command != cmd {
 			t.Errorf("cmd.run:%q Command = %q, want the expanded name injected into the command primary", cmd, cr.Command)
@@ -83,9 +85,9 @@ confs:
 		if s == nil {
 			t.Fatalf("file.managed:%q not built under strict names expansion", path)
 		}
-		fm, ok := s.(*modules.FileManaged)
+		fm, ok := s.(*filemod.FileManaged)
 		if !ok {
-			t.Fatalf("file.managed:%q is %T, want *modules.FileManaged", path, s)
+			t.Fatalf("file.managed:%q is %T, want *filemod.FileManaged", path, s)
 		}
 		if fm.Path != path {
 			t.Errorf("file.managed:%q Path = %q, want the expanded name injected into name/Path", path, fm.Path)
@@ -126,9 +128,9 @@ shared-cmd-via-alias:
 		if s == nil {
 			t.Fatalf("cmd.run:%s not built", id)
 		}
-		cr, ok := s.(*modules.CmdRun)
+		cr, ok := s.(*cmdmod.CmdRun)
 		if !ok {
-			t.Fatalf("cmd.run:%s is %T, want *modules.CmdRun", id, s)
+			t.Fatalf("cmd.run:%s is %T, want *cmdmod.CmdRun", id, s)
 		}
 		if cr.Command != id {
 			t.Errorf("cmd.run:%s Command = %q, want the expanded name (Salt names-wins semantics)", id, cr.Command)
@@ -139,9 +141,9 @@ shared-cmd-via-alias:
 		if s == nil {
 			t.Fatalf("cmd.run:%s not built", id)
 		}
-		cr, ok := s.(*modules.CmdRun)
+		cr, ok := s.(*cmdmod.CmdRun)
 		if !ok {
-			t.Fatalf("cmd.run:%s is %T, want *modules.CmdRun", id, s)
+			t.Fatalf("cmd.run:%s is %T, want *cmdmod.CmdRun", id, s)
 		}
 		if cr.Command != id {
 			t.Errorf("cmd.run:%s Command = %q, want the expanded name (names wins over the explicit name: alias too)", id, cr.Command)

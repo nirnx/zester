@@ -12,7 +12,7 @@ description: "Ensure an SSH public key is absent from a user's authorized_keys. 
 
 ## `ssh_auth.absent`
 
-**Source**: `pkg/state/modules/ssh_auth_absent.go`
+**Source**: `pkg/state/modules/ssh_auth/ssh_auth_absent.go`
 
 ---
 
@@ -99,7 +99,7 @@ zester 'web*' ssh_auth.absent AAAAB3Nza... user=deploy
 
 ## `ssh_auth.present`
 
-**Source**: `pkg/state/modules/ssh_auth_present.go`
+**Source**: `pkg/state/modules/ssh_auth/ssh_auth_present.go`
 
 ---
 

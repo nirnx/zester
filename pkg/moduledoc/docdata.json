@@ -596,7 +596,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.cronTargetParam"
+        "DeclaredBy": "cronmod.cronTargetParam"
       },
       {
         "Name": "command",
@@ -623,7 +623,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.cronTargetParam"
+        "DeclaredBy": "cronmod.cronTargetParam"
       }
     ],
     "SemTypes": null,
@@ -734,7 +734,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.cronTargetParam"
+        "DeclaredBy": "cronmod.cronTargetParam"
       },
       {
         "Name": "command",
@@ -761,7 +761,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.cronTargetParam"
+        "DeclaredBy": "cronmod.cronTargetParam"
       },
       {
         "Name": "minute",
@@ -1819,7 +1819,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileSourceParam",
+        "DeclaredBy": "filemod.fileSourceParam",
         "RequiredMemberSupplied": true
       },
       {
@@ -1914,7 +1914,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileMakeDirsParam"
+        "DeclaredBy": "filemod.fileMakeDirsParam"
       }
     ],
     "SemTypes": null,
@@ -2036,7 +2036,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileModeParam",
+        "DeclaredBy": "filemod.fileModeParam",
         "DefaultMemberSupplied": true
       },
       {
@@ -2090,7 +2090,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileOwnershipParam"
+        "DeclaredBy": "filemod.fileOwnershipParam"
       },
       {
         "Name": "group",
@@ -2117,7 +2117,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileOwnershipParam"
+        "DeclaredBy": "filemod.fileOwnershipParam"
       },
       {
         "Name": "makedirs",
@@ -2149,7 +2149,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileMakeDirsParam"
+        "DeclaredBy": "filemod.fileMakeDirsParam"
       }
     ],
     "SemTypes": [
@@ -2821,7 +2821,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileSourceParam",
+        "DeclaredBy": "filemod.fileSourceParam",
         "RequiredMemberSupplied": true
       },
       {
@@ -2905,7 +2905,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileModeParam",
+        "DeclaredBy": "filemod.fileModeParam",
         "DefaultMemberSupplied": true
       },
       {
@@ -2933,7 +2933,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileOwnershipParam"
+        "DeclaredBy": "filemod.fileOwnershipParam"
       },
       {
         "Name": "group",
@@ -2960,7 +2960,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileOwnershipParam"
+        "DeclaredBy": "filemod.fileOwnershipParam"
       },
       {
         "Name": "makedirs",
@@ -2992,7 +2992,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileMakeDirsParam"
+        "DeclaredBy": "filemod.fileMakeDirsParam"
       }
     ],
     "SemTypes": [
@@ -3152,7 +3152,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileSourceParam",
+        "DeclaredBy": "filemod.fileSourceParam",
         "RequiredMemberSupplied": true
       },
       {
@@ -3232,7 +3232,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileOwnershipParam"
+        "DeclaredBy": "filemod.fileOwnershipParam"
       },
       {
         "Name": "group",
@@ -3259,7 +3259,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileOwnershipParam"
+        "DeclaredBy": "filemod.fileOwnershipParam"
       },
       {
         "Name": "clean",
@@ -3322,7 +3322,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileMakeDirsParam"
+        "DeclaredBy": "filemod.fileMakeDirsParam"
       }
     ],
     "SemTypes": [
@@ -3787,7 +3787,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileMakeDirsParam"
+        "DeclaredBy": "filemod.fileMakeDirsParam"
       }
     ],
     "SemTypes": null,
@@ -3907,7 +3907,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.fileMakeDirsParam"
+        "DeclaredBy": "filemod.fileMakeDirsParam"
       }
     ],
     "SemTypes": null,
@@ -5024,7 +5024,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.hostFileParam"
+        "DeclaredBy": "hostmod.hostFileParam"
       }
     ],
     "SemTypes": null,
@@ -5172,7 +5172,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.hostFileParam"
+        "DeclaredBy": "hostmod.hostFileParam"
       }
     ],
     "SemTypes": null,
@@ -5949,7 +5949,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.pkgRefreshParam",
+        "DeclaredBy": "pkgmod.pkgRefreshParam",
         "DefaultMemberSupplied": true
       }
     ],
@@ -6084,7 +6084,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.pkgRefreshParam",
+        "DeclaredBy": "pkgmod.pkgRefreshParam",
         "DefaultMemberSupplied": true
       }
     ],
@@ -7469,7 +7469,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.sshAuthTargetParam"
+        "DeclaredBy": "sshauthmod.sshAuthTargetParam"
       },
       {
         "Name": "config",
@@ -7496,7 +7496,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.sshAuthTargetParam"
+        "DeclaredBy": "sshauthmod.sshAuthTargetParam"
       }
     ],
     "SemTypes": null,
@@ -7616,7 +7616,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.sshAuthTargetParam"
+        "DeclaredBy": "sshauthmod.sshAuthTargetParam"
       },
       {
         "Name": "config",
@@ -7643,7 +7643,7 @@
             }
           ]
         },
-        "DeclaredBy": "modules.sshAuthTargetParam"
+        "DeclaredBy": "sshauthmod.sshAuthTargetParam"
       },
       {
         "Name": "enc",

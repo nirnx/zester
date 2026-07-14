@@ -89,7 +89,7 @@ type sysDocParams struct {
 
 // mustExecSpec compiles an execution-module spec at package init, panicking on a
 // compile error — an invalid schema declaration is a programming error caught at
-// load, never a runtime condition. It mirrors pkg/state/modules' mustSpec.
+// load, never a runtime condition. It mirrors pkg/state/modules/regdef's MustSpec.
 func mustExecSpec(module string, proto any, doc modschema.Doc) *modschema.Spec {
 	s, err := modschema.NewSpec(module, modschema.KindExec, proto, doc)
 	if err != nil {
