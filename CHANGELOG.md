@@ -4,6 +4,53 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Added
+- Peel `startup_states` / `startup_sls_list` config knobs (Salt `startup_states`
+  parity): run states ONCE per process start — `highstate` applies the full
+  highstate, `sls` applies the listed refs in order (each ref a separate
+  sequential run). The run goes through the same serialized exec path as
+  remote executions; online it waits (bounded, 60s grace) for the peel's
+  FIRST state-file sync so it compiles against current published truth —
+  never a stale baked fallback tree — while offline boots proceed with the
+  local tree after the grace (offline-first enforcement preserved). It also
+  retries with capped backoff while the peel's state infrastructure is still
+  coming up (escalating to Warn after 10 attempts), so a freshly provisioned
+  peel converges autonomously right after enrollment (enroll → sync → apply)
+  with no operator dispatch. Invalid values (unknown mode, `sls` without a
+  list, a list without `startup_states: sls`) abort startup loudly. Salt's
+  `startup_states: top` form is not supported; recurring enforcement stays
+  with the scheduler (`run_on_start` + interval).
+
+### Changed
+- Salt parity: `state.apply` without a state reference is now an alias for
+  `state.highstate` — the full highstate is compiled and applied. The rewrite
+  lives on the peel's authoritative dispatch path, so every producer (CLI,
+  REST API, reactor actions, scheduler entries) behaves identically;
+  previously such requests errored `state.apply requires 'state' arg`. The
+  peel resolves the state reference from `state` (canonical), `mods` (Salt's
+  kwarg name), or the request's state ID, in that order — only a request with
+  none of them highstates. The CLI treats a key=value-only invocation
+  (`zester '*' state.apply test=true` — the classic highstate dry run) as the
+  highstate form, recognizes ONLY the declared keys (`state=`, `mods=`,
+  `test=`) as key=value openers (any other first token stays a positional
+  state name and fails loudly instead of silently escalating to a highstate),
+  rejects stray positionals after key=value arguments, and gives the bare form
+  the highstate timeout budget (10m). Mixed fleets degrade loudly, never
+  silently: an old peel answers a new CLI's bare form with the old per-peel
+  error, and an old CLI still refuses the bare form client-side.
+
+### Fixed
+- Reactor `dispatch.state: {sls: ...}` now dispatches the named state: it sent
+  the state reference under an args key (`mods`) no peel ever read, so every
+  such reaction failed on the peel with `state.apply requires 'state' arg`.
+  It now sends the canonical `state` key (old peels honor it too), and new
+  peels additionally honor `mods` and ID-only forms (`local.state.apply`
+  sugar, `dispatch.module` `state_id`) from not-yet-upgraded masters — without
+  either fix those reactions would have silently become full highstates under
+  the new alias.
+
 ## [0.6.8] - 2026-07-14
 
 ### Added

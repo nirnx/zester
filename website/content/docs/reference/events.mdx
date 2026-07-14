@@ -128,7 +128,7 @@ Jinja-rendered YAML producing a mapping of blocks; each block has exactly one ac
 | `function` | yes | string | Module function; must match `^[a-z0-9_]+\.[a-z0-9_]+$` |
 | `args` | no | map | Module arguments |
 | `state_id` | no | string | Bare positional (forwarded as the `ExecRequest` ID, e.g. a state or package name) |
-| `timeout` | no | 60s (5m for `state.apply`, 10m for `state.highstate`) | Job timeout (duration string or seconds) |
+| `timeout` | no | 60s (5m for a named `state.apply`, 10m for `state.highstate` and the bare `state.apply` highstate alias) | Job timeout (duration string or seconds) |
 | `max_targets` | no | unlimited | Abort the action (`result="aborted"`) when the resolved target count exceeds this |
 
 ### `dispatch.state`

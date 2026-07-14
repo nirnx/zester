@@ -237,6 +237,16 @@ type Agent struct {
 	// reject stale and duplicate dispatches — see dedup.go.
 	dedup *dedupTracker
 
+	// Startup-states machinery (startup.go): retry pacing and the first-sync
+	// gate. statesSynced is closed (once) after the first successful
+	// state-file KV sync; startupSyncGrace bounds how long the startup run
+	// waits for it. Durations shrunk by tests.
+	startupRetryBase time.Duration
+	startupRetryCap  time.Duration
+	startupSyncGrace time.Duration
+	statesSynced     chan struct{}
+	statesSyncedOnce sync.Once
+
 	// Job cancel registry: single wildcard subscription for all job
 	// cancels, dispatching to per-job cancel functions via map lookup.
 	// Avoids per-job subscription churn under high concurrency. Guarded by
@@ -273,6 +283,10 @@ func New(cfg *config.PeelConfig, logger *slog.Logger) *Agent {
 		dedup:                newDedupTracker(filepath.Join(cfg.DataDir, dedupFileName), dedupCapacity, dedupSaveDelay, logger),
 		settingsSnapshotPath: filepath.Join(cfg.DataDir, settingsSnapshotFileName),
 		bakedStatesDir:       filepath.Join(cfg.DataDir, bakedStatesDirName),
+		startupRetryBase:     defaultStartupRetryBase,
+		startupRetryCap:      defaultStartupRetryCap,
+		startupSyncGrace:     defaultStartupSyncGrace,
+		statesSynced:         make(chan struct{}),
 	}
 	// Bind the dispatch-special handlers from the shared DispatchSpecials table.
 	// The handler method values close over a, so later field assignments
@@ -297,6 +311,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	logger := a.logger
 	cfg := a.cfg
 	peelID := a.peelID
+
+	// Validate startup_states before anything spins up: a typo'd value must
+	// fail the boot loudly, not silently skip the one-shot boot-time apply.
+	startupReqs, err := startupStatesRequests(cfg)
+	if err != nil {
+		return fmt.Errorf("peel config: %w", err)
+	}
 
 	// ---------------------------------------------------------------- LOCAL
 
@@ -619,6 +640,16 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	sched.Start(runCtx)
 	defer sched.Stop()
+
+	// One-shot startup states (Salt startup_states parity): runs on the same
+	// serialized exec path as remote executions, retrying while the state
+	// infrastructure is still coming up — a freshly enrolled peel converges
+	// autonomously once its first state-file sync lands. Never blocks boot.
+	if len(startupReqs) > 0 {
+		logger.Info("startup states configured",
+			"mode", cfg.StartupStates, "requests", len(startupReqs))
+		go a.runStartupStates(runCtx, startupReqs)
+	}
 
 	// Subscribe to module execution requests.
 	// Messages arrive via request/reply (CLI direct) or fire-and-forget (job

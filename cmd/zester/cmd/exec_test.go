@@ -362,11 +362,86 @@ func TestParseModuleArgs_StateApply(t *testing.T) {
 	}
 }
 
-func TestParseModuleArgs_StateApplyMissing(t *testing.T) {
-	_, _, err := parseModuleArgs("state.apply", nil)
-	if err == nil {
-		t.Fatal("expected error for missing state.apply name")
-	}
+// Salt parity: `state.apply` without a state name is the highstate — bare, in
+// key=value-only form (`state.apply test=true` is the classic highstate dry
+// run), or with an explicit empty state=. An explicit state= assignment still
+// selects that state.
+func TestParseModuleArgs_StateApplyHighstateAlias(t *testing.T) {
+	t.Run("bare", func(t *testing.T) {
+		id, args, err := parseModuleArgs("state.apply", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "highstate" {
+			t.Errorf("id = %q, want %q", id, "highstate")
+		}
+		if _, ok := args["state"]; ok {
+			t.Errorf("args[state] = %v, want absent", args["state"])
+		}
+	})
+
+	t.Run("test=true only", func(t *testing.T) {
+		id, args, err := parseModuleArgs("state.apply", []string{"test=true"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "highstate" {
+			t.Errorf("id = %q, want %q (a key=value token is not a state name)", id, "highstate")
+		}
+		if _, ok := args["test"]; !ok {
+			t.Error("args[test] missing; key=value form must still parse")
+		}
+	})
+
+	t.Run("explicit state=", func(t *testing.T) {
+		id, args, err := parseModuleArgs("state.apply", []string{"state=webserver", "test=true"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "webserver" {
+			t.Errorf("id = %q, want %q", id, "webserver")
+		}
+		if args["state"] != "webserver" {
+			t.Errorf("args[state] = %v, want %q", args["state"], "webserver")
+		}
+	})
+
+	t.Run("mods= Salt kwarg", func(t *testing.T) {
+		id, args, err := parseModuleArgs("state.apply", []string{"mods=webserver"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "webserver" {
+			t.Errorf("id = %q, want %q", id, "webserver")
+		}
+		if args["mods"] != "webserver" {
+			t.Errorf("args[mods] = %v, want %q", args["mods"], "webserver")
+		}
+	})
+
+	// Only the DECLARED keys (state/mods/test) switch to key=value mode: an
+	// arbitrary assignment — a staet= typo, a misordered env=prod — stays a
+	// positional state name and fails loudly at compile time on the peel,
+	// never silently escalating to a full highstate.
+	t.Run("undeclared assignment stays positional", func(t *testing.T) {
+		id, args, err := parseModuleArgs("state.apply", []string{"staet=webserver"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "staet=webserver" || args["state"] != "staet=webserver" {
+			t.Errorf("id = %q args[state] = %v, want the literal token as the state name", id, args["state"])
+		}
+	})
+
+	// A bare token after key=value arguments is rejected outright —
+	// ParseKeyValues would silently drop it, and a dropped state name must
+	// never turn into a fleet-wide highstate.
+	t.Run("stray positional after key=value errors", func(t *testing.T) {
+		_, _, err := parseModuleArgs("state.apply", []string{"test=true", "webserver"})
+		if err == nil {
+			t.Fatal("expected an error for a stray positional after key=value arguments")
+		}
+	})
 }
 
 func TestParseModuleArgs_StateHighstate(t *testing.T) {
@@ -449,6 +524,7 @@ func TestParseModuleArgs_UnifiedParity(t *testing.T) {
 		{"settings.get", "settings.get", []string{"db.host"}, "db.host", map[string]any{"key": "db.host"}},
 		{"settings.keys", "settings.keys", nil, "keys", map[string]any{}},
 		{"state.apply", "state.apply", []string{"webserver"}, "webserver", map[string]any{"state": "webserver"}},
+		{"state.apply bare (highstate alias)", "state.apply", nil, "highstate", map[string]any{}},
 		{"state.highstate", "state.highstate", nil, "highstate", map[string]any{}},
 		{"state.highstate kv", "state.highstate", []string{"env=staging"}, "highstate", map[string]any{"env": "staging"}},
 
@@ -523,22 +599,27 @@ func newTimeoutCmd(setFlag bool, val time.Duration) *cobra.Command {
 
 func TestModuleTimeout_Defaults(t *testing.T) {
 	tests := []struct {
+		name   string
 		module string
+		args   map[string]any
 		want   time.Duration
 	}{
-		{"state.apply", 5 * time.Minute},
-		{"state.highstate", 10 * time.Minute},
-		{"cmd.run", 60 * time.Second},
-		{"test.ping", 60 * time.Second},
-		{"facts.get", 60 * time.Second},
-		{"custom.module", 60 * time.Second},
+		{"state.apply named", "state.apply", map[string]any{"state": "webserver"}, 5 * time.Minute},
+		// Bare state.apply IS a highstate (Salt parity) — highstate budget.
+		{"state.apply bare", "state.apply", map[string]any{}, 10 * time.Minute},
+		{"state.apply empty state", "state.apply", map[string]any{"state": ""}, 10 * time.Minute},
+		{"state.highstate", "state.highstate", nil, 10 * time.Minute},
+		{"cmd.run", "cmd.run", nil, 60 * time.Second},
+		{"test.ping", "test.ping", nil, 60 * time.Second},
+		{"facts.get", "facts.get", nil, 60 * time.Second},
+		{"custom.module", "custom.module", nil, 60 * time.Second},
 	}
 	for _, tt := range tests {
-		t.Run(tt.module, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			cmd := newTimeoutCmd(false, 0)
-			got := moduleTimeout(cmd, tt.module)
+			got := moduleTimeout(cmd, tt.module, tt.args)
 			if got != tt.want {
-				t.Errorf("moduleTimeout(%q) = %v, want %v", tt.module, got, tt.want)
+				t.Errorf("moduleTimeout(%q, %v) = %v, want %v", tt.module, tt.args, got, tt.want)
 			}
 		})
 	}
@@ -547,14 +628,14 @@ func TestModuleTimeout_Defaults(t *testing.T) {
 func TestModuleTimeout_ExplicitOverride(t *testing.T) {
 	// Even state.apply should respect an explicit --timeout flag.
 	cmd := newTimeoutCmd(true, 30*time.Second)
-	got := moduleTimeout(cmd, "state.apply")
+	got := moduleTimeout(cmd, "state.apply", map[string]any{"state": "webserver"})
 	if got != 30*time.Second {
 		t.Errorf("moduleTimeout with explicit flag = %v, want 30s", got)
 	}
 
 	// And for state.highstate.
 	cmd2 := newTimeoutCmd(true, 2*time.Minute)
-	got2 := moduleTimeout(cmd2, "state.highstate")
+	got2 := moduleTimeout(cmd2, "state.highstate", nil)
 	if got2 != 2*time.Minute {
 		t.Errorf("moduleTimeout with explicit flag = %v, want 2m", got2)
 	}

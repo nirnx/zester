@@ -263,10 +263,17 @@ func (a *Agent) startStateFileCache(ctx context.Context) {
 		CacheDir: a.cfg.StatesCache,
 		JS:       a.client.JetStream(),
 		Logger:   a.logger,
+		// Backup first-sync signal for the startup-states gate: covers an
+		// initial Sync failure healed later by the watch loop's retries.
+		OnSynced: a.markStatesSynced,
 	})
 	if count, err := stateCache.Sync(ctx); err != nil {
 		a.logger.Warn("state file cache sync failed, falling back to local states", "error", err)
 	} else {
+		// An empty bucket (pre-first-publish) is a clean no-op sync: the
+		// local tree IS current published truth, so the startup-states gate
+		// must open here too (OnSynced fires only when files were staged).
+		a.markStatesSynced()
 		a.logger.Info("state files cached from KV", "count", count, "cache_dir", a.cfg.StatesCache)
 	}
 

@@ -103,7 +103,11 @@ services:
         PEEL_ROLE: database
         PEEL_CLUSTER: cluster-b
     privileged: true
-    command: ["--id", "db-02", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt"]
+    # db-02 exercises startup_states (Salt parity): it applies the "hello"
+    # tree once at boot, autonomously — the integration suite asserts the
+    # tree's effect without ever dispatching states at db-02.
+    command: ["--id", "db-02", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt",
+      "--startup-states", "sls", "--startup-sls-list", "hello"]
     depends_on:
       master:
         condition: service_started

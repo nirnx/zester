@@ -44,6 +44,8 @@ The packaged config installed by the `.deb`/`.rpm` (`packaging/config/peel.yaml`
 | `log_level` | string | `info` | Log level: `debug`, `info`, `warn`, or `error`. Invalid values abort startup. |
 | `log_format` | string | `json` | Log format: `json` or `text`. See [Logging](#logging). |
 | `schedule` | map | `{}` | Local scheduler entries (see [Schedule](#schedule)) |
+| `startup_states` | string | `""` | Run states ONCE per process start (Salt `startup_states` parity): `highstate` applies the full highstate, `sls` applies the `startup_sls_list` refs in order, empty disables. Runs on the serialized exec path; online it waits (bounded, 60s) for the peel's first state-file sync so it compiles against current published truth (offline it proceeds with the local tree after the grace), and it retries with backoff while the peel is still coming up — a freshly provisioned peel converges autonomously (enroll → sync → apply). An invalid value aborts startup. For *recurring* enforcement use a `schedule` entry with `run_on_start: true` instead. |
+| `startup_sls_list` | list | `[]` | State refs applied in order at startup when `startup_states: sls` (Salt `sls_list`). Each ref is a separate sequential run (cross-ref requisites need `include:`) and must exist in the tree the run compiles against — a missing ref reports its compile error once; only infrastructure-not-ready conditions retry. Setting the list without `startup_states: sls` aborts startup. |
 
 ## Command-Line Flags
 
@@ -60,6 +62,8 @@ The packaged config installed by the `.deb`/`.rpm` (`packaging/config/peel.yaml`
 | `--health-addr` | `127.0.0.1:9090` | Listen address for `/healthz`, `/readyz`, and `/metrics` |
 | `--log-level` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `--log-format` | `json` | Log format (`json`, `text`) |
+| `--startup-states` | `""` | Run states once at startup: `highstate` or `sls` (with `--startup-sls-list`) |
+| `--startup-sls-list` | `""` | Comma-separated state refs applied at startup when `--startup-states sls` |
 
 Flags explicitly passed on the command line override config file values; default flag values do not. Flags and YAML fields are generated from the same tagged config struct (`PeelConfig` in `internal/config/peel.go`), so every flag has a matching YAML field with a shared default; the precedence stays flag > config file > built-in default.
 

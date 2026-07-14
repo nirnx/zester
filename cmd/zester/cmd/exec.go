@@ -47,7 +47,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 	}
 
 	// Determine timeout.
-	timeout := moduleTimeout(cmd, module)
+	timeout := moduleTimeout(cmd, module, modArgs)
 
 	// Determine output format and color.
 	format, _ := cmd.Flags().GetString("format")
@@ -292,7 +292,7 @@ func isGlob(pattern string) bool {
 // moduleTimeout returns the effective timeout for a command.
 // If --timeout was explicitly set by the user, it takes precedence.
 // Otherwise, module-specific defaults apply.
-func moduleTimeout(cmd *cobra.Command, module string) time.Duration {
+func moduleTimeout(cmd *cobra.Command, module string, modArgs map[string]any) time.Duration {
 	// Check if the user explicitly set --timeout.
 	if cmd.Flags().Changed("timeout") {
 		t, _ := cmd.Flags().GetDuration("timeout")
@@ -301,6 +301,13 @@ func moduleTimeout(cmd *cobra.Command, module string) time.Duration {
 
 	switch module {
 	case "state.apply":
+		// A state.apply without a state reference (state= or the mods= Salt
+		// alias) IS a highstate (Salt parity) — give it the highstate budget.
+		s, _ := modArgs["state"].(string)
+		m, _ := modArgs["mods"].(string)
+		if s == "" && m == "" {
+			return 10 * time.Minute
+		}
 		return 5 * time.Minute
 	case "state.highstate":
 		return 10 * time.Minute
@@ -397,13 +404,39 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		return "keys", args, nil
 
 	case "state.apply":
-		if len(remaining) == 0 {
-			return "", nil, fmt.Errorf("state.apply requires a state name argument")
+		// The key=value form is recognized ONLY via the DECLARED keys —
+		// state=, mods= (Salt's kwarg), test= — mirroring cmd.run's
+		// command=/cmd=/name= guard. Any other first token (including an
+		// arbitrary assignment like a staet= typo or a misordered env=prod)
+		// stays a positional state name and fails loudly at compile time on
+		// the peel, rather than silently escalating to a full highstate.
+		if len(remaining) > 0 {
+			if k, _, ok := strings.Cut(remaining[0], "="); !ok || (k != "state" && k != "mods" && k != "test") {
+				state := remaining[0]
+				args["state"] = state
+				cliargs.ParseKeyValues(remaining[1:], args)
+				return state, args, nil
+			}
 		}
-		state := remaining[0]
-		args["state"] = state
-		cliargs.ParseKeyValues(remaining[1:], args)
-		return state, args, nil
+		// Key=value (or bare) form. Stray positionals are rejected outright:
+		// ParseKeyValues would silently drop them, and a dropped state name
+		// must never turn into a fleet-wide highstate.
+		for _, tok := range remaining {
+			if !strings.Contains(tok, "=") {
+				return "", nil, fmt.Errorf("state.apply: unexpected positional %q after key=value arguments (use state=%s, or put the state name first)", tok, tok)
+			}
+		}
+		cliargs.ParseKeyValues(remaining, args)
+		if s, _ := args["state"].(string); s != "" {
+			return s, args, nil
+		}
+		if m, _ := args["mods"].(string); m != "" {
+			return m, args, nil
+		}
+		// Salt parity: `state.apply` with no state reference runs the full
+		// highstate (`salt '*' state.apply` semantics); the peel-side
+		// dispatcher performs the same rewrite for non-CLI producers.
+		return "highstate", args, nil
 
 	case "state.highstate":
 		cliargs.ParseKeyValues(remaining, args)

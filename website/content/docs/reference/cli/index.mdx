@@ -228,7 +228,7 @@ subcommand.
 |------|------|---------|-------------|
 | `--config` | `string` | `/etc/zester/master.yaml` or `~/.zester/config.yaml` | Path to config file |
 | `--master` | `string[]` | `$NATS_URL` or config file or `nats://localhost:4222` | NATS server URL(s) (priority: flag > `NATS_URL` env > config > default) |
-| `--timeout` | `duration` | `60s` (state.apply: `5m`, state.highstate: `10m`) | Request timeout |
+| `--timeout` | `duration` | `60s` (named state.apply: `5m`; state.highstate and the bare state.apply highstate alias: `10m`) | Request timeout |
 | `--creds` | `string` | `""` (from config file if set) | NATS credentials file for authentication |
 | `--nats-ca` | `string` | `""` (config, else `$NATS_CA_FILE`) | CA certificate for NATS TLS verification |
 | `--format` | `string` | `text` | Output format: `text`, `json`, or `yaml` |

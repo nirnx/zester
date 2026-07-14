@@ -164,7 +164,11 @@ apply-web:
 	if act.Function != "state.apply" {
 		t.Errorf("function: %q", act.Function)
 	}
-	if act.Args["mods"] != "webserver" {
+	// The canonical key the peel's state.apply reads. Historically this was
+	// "mods" — a key NO peel ever read, so the dispatched job errored; with
+	// the bare-state.apply highstate alias it would instead have silently run
+	// a full highstate (P1 in the alias review).
+	if act.Args["state"] != "webserver" {
 		t.Errorf("args: %v", act.Args)
 	}
 

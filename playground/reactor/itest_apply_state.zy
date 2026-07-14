@@ -1,0 +1,11 @@
+# Reaction for '_admin/itest/applystate/*' events: dispatch state.apply of the
+# NAMED state at web-01. Pins the dispatch.state sls wire contract end to end —
+# the sls value must arrive at the peel as the state reference (args "state"),
+# applying exactly that tree and never the full highstate (the P1 the
+# state.apply-highstate-alias review caught: the state was historically sent
+# under a key no peel read).
+itest-apply-state:
+  dispatch.state:
+    - target: web-01
+    - sls: "{{ event.data.get('sls', 'hello') }}"
+    - timeout: 120

@@ -419,28 +419,48 @@ func (a *Agent) buildSpecialHandlers() map[string]specialHandler {
 
 // dispatchStateModule handles the state.apply and state.highstate specials:
 // resolve settings, compile the requested state set, and run it. It is the
-// extracted, behavior-identical body of execModule's former state.apply /
-// state.highstate branches (including the two distinct empty-state error
-// messages and the state.apply pre-settings 'state' arg check).
+// extracted body of execModule's former state.apply / state.highstate branches
+// (including the two distinct empty-state error messages). A state.apply with
+// no 'state' arg is rewritten to state.highstate up front (Salt parity).
 func (a *Agent) dispatchStateModule(execCtx context.Context, req proto.ExecRequest, args map[string]any) (proto.ExecResponse, error) {
 	peelID := a.peelID
 	logger := a.logger
 	module := req.Module
 
-	// state.apply's required 'state' arg is validated BEFORE resolving settings,
-	// so a malformed request has no settings side effects (legacy ordering).
+	// state.apply resolves its state reference from, in order: args["state"]
+	// (canonical), args["mods"] (Salt's kwarg name; also what pre-fix reactor
+	// masters emit for `dispatch.state: {sls: ...}`), then the request ID
+	// (producers that carry the state only there: reactor `local.state.apply`
+	// sugar, `dispatch.module` state_id, REST state_id). The literal ID
+	// "highstate" is excluded from the ID fallback — it is the module's own
+	// synthetic alias ID (the CLI bare form ships it, mirroring
+	// state.highstate), never a tree name; an actual tree named "highstate"
+	// is still reachable via an explicit state= argument.
+	//
+	// Salt parity: with NO state reference anywhere, `state.apply` IS the
+	// highstate (`salt '*' state.apply` == `state.highstate`). The alias
+	// lives here on the authoritative dispatch path so every producer — CLI,
+	// REST API, reactor actions, scheduler entries — gets identical behavior.
+	// All checks run BEFORE resolving settings (legacy ordering), so the
+	// branch choice has no settings side effects.
 	var stateName string
 	if module == "state.apply" {
 		stateName, _ = args["state"].(string)
 		if stateName == "" {
-			return proto.ExecResponse{PeelID: peelID, Error: "state.apply requires 'state' arg"}, nil
+			stateName, _ = args["mods"].(string)
+		}
+		if stateName == "" && req.ID != "" && req.ID != "highstate" {
+			stateName = req.ID
+		}
+		if stateName == "" {
+			module = "state.highstate"
 		}
 	}
 
 	currentFacts := a.mgr.GetFacts()
 	cs, csErr := a.resolveExecSettings(execCtx, module, currentFacts)
 	if csErr != nil {
-		return proto.ExecResponse{PeelID: peelID, Error: "settings resolution failed: " + csErr.Error()}, nil
+		return proto.ExecResponse{PeelID: peelID, Error: settingsResolveFailedPrefix + csErr.Error()}, nil
 	}
 	a.mctx.Settings = cs
 

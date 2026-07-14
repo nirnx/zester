@@ -80,6 +80,7 @@ Preview changes without applying them:
 ```bash
 zester 'web-*' state.highstate --test
 zester 'web-01' state.apply webserver test=True
+zester 'web-*' state.apply test=True   # bare state.apply IS the highstate, as in Salt
 ```
 
 See [Execution Model → Dry Run](/docs/guides/states/execution).
@@ -141,6 +142,44 @@ The built-in set: `test.echo`, `test.version`, `test.true`, `test.false`,
 
 Backed by `pkg/execmod`. State modules take precedence when a name exists in
 both, so state execution is unaffected.
+
+---
+
+## Startup states (`startup_states`)
+
+Salt's minion `startup_states` maps to the peel config: run states once,
+autonomously, every time the peel starts. The two forms are mutually
+exclusive — combining them is rejected at startup:
+
+```yaml
+# /etc/zester/peel.yaml — full highstate at boot
+startup_states: highstate
+```
+
+```yaml
+# /etc/zester/peel.yaml — specific trees at boot (Salt's sls_list)
+startup_states: sls
+startup_sls_list: [common, web]
+```
+
+Unlike Salt, the boot-time run retries while the peel is still coming up, so a
+freshly enrolled peel converges as soon as its first state-file sync lands —
+enroll, sync, apply, no operator dispatch.
+
+Divergences from Salt worth knowing:
+
+- Each `startup_sls_list` ref is applied as a **separate sequential run**, not
+  Salt's single merged compile — a requisite in one listed tree referencing a
+  state in another needs an `include:` of that tree.
+- Online, the run waits (bounded, 60s) for the peel's **first state-file sync**
+  before applying, so it always compiles against current published truth —
+  never a stale baked fallback. Offline, it proceeds with the local tree after
+  the grace. A ref missing from the tree it runs against reports its compile
+  error once (only infrastructure-not-ready conditions retry).
+- Salt's `startup_states: top` form is not supported.
+
+For recurring enforcement use a `schedule` entry with `run_on_start: true` and
+an interval.
 
 ---
 

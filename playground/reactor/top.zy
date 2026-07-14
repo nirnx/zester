@@ -10,6 +10,11 @@ reactor:
   - '_admin/itest/ping/*':
       - reactor.itest_echo
 
+  # Integration test: dispatch.state applies the NAMED state (never the
+  # highstate) — pins the sls -> args["state"] wire contract.
+  - '_admin/itest/applystate/*':
+      - reactor.itest_apply_state
+
   # Integration test: chain start (operator event) emits a derived event...
   - '_admin/itest/chain/start/*':
       - reactor.itest_chain_start

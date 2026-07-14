@@ -103,7 +103,12 @@ services:
       SSL_CERT_FILE: /data/auth/nats-ca.crt
 
   db-02:
-    command: ["--id", "db-02", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt", "--nats-url", "tls://nats-2:4222,tls://nats-3:4222,tls://nats:4222"]
+    # Compose merge REPLACES `command` wholesale, so the base file's
+    # startup_states fixture flags must be repeated here (this overlay merges
+    # on top of ../docker-compose.yml — omitting them silently drops the
+    # feature under test).
+    command: ["--id", "db-02", "--master-url", "https://master:8443", "--enroll-ca", "/data/auth/enroll-ca.crt", "--nats-url", "tls://nats-2:4222,tls://nats-3:4222,tls://nats:4222",
+      "--startup-states", "sls", "--startup-sls-list", "hello"]
     environment:
       SSL_CERT_FILE: /data/auth/nats-ca.crt
 

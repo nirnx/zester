@@ -310,8 +310,10 @@ func parseModuleArgs(module string, remaining []string) (string, map[string]any,
 		return name, args, nil
 
 	case "state.apply":
+		// Salt parity (mirrors cmd/zester): bare state.apply runs the full
+		// highstate — the peel-side dispatcher performs the rewrite.
 		if len(remaining) == 0 {
-			return "", nil, fmt.Errorf("state.apply requires a state name argument")
+			return "highstate", args, nil
 		}
 		state := remaining[0]
 		args["state"] = state

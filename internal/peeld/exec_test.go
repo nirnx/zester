@@ -285,3 +285,120 @@ func TestExecModule_StatesDirSwitchReloadsStarlark(t *testing.T) {
 		t.Errorf("post-switch diff = %q, want new-tree (the NEW tree's builder must be live)", r.Diff)
 	}
 }
+
+// TestStateApplyBareIsHighstate pins the Salt-parity alias on the
+// authoritative dispatch path: a state.apply request WITHOUT a 'state' arg —
+// from any producer (CLI, REST API, reactor action, scheduler entry) — runs
+// the full highstate instead of erroring, identically to an explicit
+// state.highstate request. An explicit state still selects only that tree.
+func TestStateApplyBareIsHighstate(t *testing.T) {
+	a := newTestAgent(t)
+	tmp := t.TempDir()
+	cache := filepath.Join(tmp, "cache")
+	a.cfg.StatesCache = cache
+	a.bakedStatesDir = filepath.Join(tmp, "baked")
+	a.client = &bus.Client{}
+	a.mctx = exec.NewModuleContext(&exec.ProviderSet{}, map[string]any{}, nil, discardLogger())
+
+	// Engine setup runs BEFORE the cache exists (the proven lazy-build
+	// ordering from TestExecModuleLazyStatesEngine): the first execution below
+	// builds the engine AND the Starlark loader from the freshly written tree.
+	a.setupStatesEngine()
+
+	// A state top file matching every peel, plus the ping tree it references.
+	if err := os.MkdirAll(filepath.Join(cache, "ping"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "top.zy"),
+		[]byte("base:\n  '*':\n    - ping\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "ping", "init.zy"),
+		[]byte("ping-it:\n  test.ping:\n    - name: ping-it\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bare state.apply (nil args) == highstate: succeeds and runs the
+	// top-file-matched tree.
+	bare, err := a.execModule(context.Background(), proto.ExecRequest{Module: "state.apply"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.Error != "" || !bare.Success {
+		t.Fatalf("bare state.apply: success=%v error=%q, want highstate alias to run", bare.Success, bare.Error)
+	}
+
+	// Identical to the explicit form (same compiled state set).
+	hs, err := a.execModule(context.Background(), proto.ExecRequest{Module: "state.highstate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hs.Error != "" || !hs.Success {
+		t.Fatalf("state.highstate: success=%v error=%q", hs.Success, hs.Error)
+	}
+	if len(bare.Results) != len(hs.Results) {
+		t.Fatalf("bare state.apply ran %d states, state.highstate ran %d — alias diverged", len(bare.Results), len(hs.Results))
+	}
+	for i := range bare.Results {
+		if bare.Results[i].Name != hs.Results[i].Name {
+			t.Errorf("result %d: bare=%q highstate=%q", i, bare.Results[i].Name, hs.Results[i].Name)
+		}
+	}
+
+	// An empty-string 'state' arg aliases too (the CLI's `state.apply state=`
+	// and older producers sending the zero value).
+	empty, err := a.execModule(context.Background(),
+		proto.ExecRequest{Module: "state.apply", Args: map[string]any{"state": ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Error != "" || !empty.Success || len(empty.Results) != len(hs.Results) {
+		t.Fatalf("state.apply state=\"\": success=%v error=%q results=%d, want the highstate alias", empty.Success, empty.Error, len(empty.Results))
+	}
+
+	// Control: an explicit state reference still compiles ONLY that tree.
+	one, err := a.execModule(context.Background(),
+		proto.ExecRequest{Module: "state.apply", Args: map[string]any{"state": "ping"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Error != "" || !one.Success || len(one.Results) != 1 {
+		t.Fatalf("state.apply ping: success=%v error=%q results=%d, want exactly the named tree", one.Success, one.Error, len(one.Results))
+	}
+
+	// Salt's kwarg name (and what pre-fix reactor masters emit for
+	// `dispatch.state: {sls: ...}`): args["mods"] selects the named tree, it
+	// must NEVER alias to the highstate.
+	mods, err := a.execModule(context.Background(),
+		proto.ExecRequest{Module: "state.apply", Args: map[string]any{"mods": "ping"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mods.Error != "" || !mods.Success || len(mods.Results) != 1 {
+		t.Fatalf("state.apply mods=ping: success=%v error=%q results=%d, want exactly the named tree", mods.Success, mods.Error, len(mods.Results))
+	}
+
+	// Producers that carry the state only in the request ID (reactor
+	// `local.state.apply` sugar, `dispatch.module` state_id, REST state_id):
+	// the ID selects the named tree.
+	byID, err := a.execModule(context.Background(),
+		proto.ExecRequest{Module: "state.apply", ID: "ping"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byID.Error != "" || !byID.Success || len(byID.Results) != 1 {
+		t.Fatalf("state.apply ID=ping: success=%v error=%q results=%d, want exactly the named tree", byID.Success, byID.Error, len(byID.Results))
+	}
+
+	// The literal ID "highstate" is the module's own synthetic alias ID (the
+	// CLI bare form ships it) — it must go to the highstate branch, never be
+	// compiled as a tree named "highstate".
+	synth, err := a.execModule(context.Background(),
+		proto.ExecRequest{Module: "state.apply", ID: "highstate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if synth.Error != "" || !synth.Success || len(synth.Results) != len(hs.Results) {
+		t.Fatalf("state.apply ID=highstate: success=%v error=%q results=%d, want the highstate alias (%d)", synth.Success, synth.Error, len(synth.Results), len(hs.Results))
+	}
+}

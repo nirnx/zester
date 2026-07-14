@@ -24,6 +24,7 @@ import (
 // to the reactor-files bucket, hot-loaded by every master):
 //
 //	'_admin/itest/ping/*'                    -> reactor.itest_echo
+//	'_admin/itest/applystate/*'              -> reactor.itest_apply_state
 //	'_admin/itest/chain/start/*'             -> reactor.itest_chain_start
 //	'_master/reaction/itest/chain/next/*'    -> reactor.itest_chain_next
 //	'web-01/beacon/*/service'                -> reactor.heal_service
@@ -31,7 +32,7 @@ import (
 
 // reactorExpectedRules must match the number of rule refs in
 // playground/reactor/top.zy.
-const reactorExpectedRules = 4
+const reactorExpectedRules = 5
 
 // reactorSettleWindow is how long the absence tests wait before asserting
 // that no reaction job appeared. The live pipeline reacts in well under a
@@ -381,6 +382,90 @@ func TestReactor_EventTriggersReaction(t *testing.T) {
 	out := execInContainer(t, "admin", []string{"zester", "job", "show", jid})
 	if !strings.Contains(out, "web-01") || !strings.Contains(out, "true") {
 		t.Errorf("job show returns missing successful web-01 entry:\n%s", out)
+	}
+}
+
+// TestReactor_DispatchStateAppliesNamedState pins the dispatch.state sls wire
+// contract end to end: a `dispatch.state: {sls: hello}` reaction applies
+// EXACTLY the named state on the target — never the full highstate. This is
+// the P1 the state.apply-highstate-alias review caught: the sls value was
+// historically sent under an args key ("mods") no peel ever read, which the
+// bare-state.apply alias would have silently turned into a fleet highstate.
+func TestReactor_DispatchStateAppliesNamedState(t *testing.T) {
+	waitForReactorReady(t)
+
+	runID := uniqueRunID("applystate")
+	tag := "itest/applystate/" + runID
+	eventID := sendAdminEvent(t, tag, "sls=hello")
+
+	const wantUser = "reactor:reactor.itest_apply_state"
+	var jid string
+	var rec map[string]any
+	waitForCondition(t, 2*time.Minute, 2*time.Second, "state-apply reaction job for event "+eventID, func() bool {
+		for candidate, user := range listReactionJobs() {
+			if user != wantUser {
+				continue
+			}
+			r, err := tryJobShow(candidate)
+			if err != nil {
+				continue
+			}
+			if jobMetadata(r)["event_id"] != eventID {
+				continue
+			}
+			jid, rec = candidate, r
+			return true
+		}
+		return false
+	})
+
+	if got, _ := rec["function"].(string); got != "state.apply" {
+		t.Errorf("job function = %q, want state.apply", got)
+	}
+
+	// The job must complete successfully on web-01.
+	waitForCondition(t, 2*time.Minute, 2*time.Second, "reaction job "+jid+" to complete successfully", func() bool {
+		r, err := tryJobShow(jid)
+		if err != nil {
+			return false
+		}
+		status, _ := r["status"].(string)
+		return status == "complete" && jsonNumber(r["success_count"]) >= 1
+	})
+
+	// Effect: the named hello tree wrote its file on web-01.
+	waitForCondition(t, 30*time.Second, 2*time.Second, "hello tree effect on web-01", func() bool {
+		out, code, err := tryExecInContainer(context.Background(), "web-01", []string{"cat", "/tmp/hello-zester.txt"})
+		return err == nil && code == 0 && strings.Contains(out, "Hello from Zester!")
+	})
+
+	// Wire-contract pin (the P1): the rendered action must carry the sls
+	// value under the args key the peel reads — "state". Historically it was
+	// sent as "mods", which no peel read; under the bare-state.apply
+	// highstate alias that would silently run a FULL highstate. The reactor
+	// dry-run service renders through the SAME live rule set.
+	out := execInContainer(t, "admin", []string{
+		"zester", "--format", "json", "--no-color",
+		"reactor", "test", "_admin/itest/applystate/wirepin", "--data", "sls=hello",
+	})
+	var resp struct {
+		Matched []struct {
+			Rule    string   `json:"rule"`
+			Actions []string `json:"actions"`
+			Errors  []string `json:"errors"`
+		} `json:"matched"`
+	}
+	if err := json.Unmarshal([]byte(extractJSONObject(out)), &resp); err != nil {
+		t.Fatalf("parse reactor test output: %v\nraw: %s", err, out)
+	}
+	if len(resp.Matched) != 1 || len(resp.Matched[0].Actions) != 1 {
+		t.Fatalf("reactor test matched %d rules: %s", len(resp.Matched), out)
+	}
+	action := resp.Matched[0].Actions[0]
+	for _, want := range []string{"dispatch state.apply", `target="web-01"`, "args={state:hello}"} {
+		if !strings.Contains(action, want) {
+			t.Errorf("rendered action %q missing %q", action, want)
+		}
 	}
 }
 

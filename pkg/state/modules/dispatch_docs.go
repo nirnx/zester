@@ -167,19 +167,27 @@ func DispatchInfo(name string) (modschema.ModuleInfo, bool) {
 
 var docStateApply = modschema.Doc{
 	Summary: "Compile and apply a named state set on the peel.",
-	Description: "`state.apply` compiles the state referenced by the `state` argument and " +
-		"applies it. It is the ad-hoc single-tree counterpart of `state.highstate`.",
+	Description: "`state.apply` compiles the referenced state set and applies it. The state " +
+		"reference is read from `state` (canonical), `mods` (Salt's kwarg name), or the " +
+		"request's state ID, in that order. It is the ad-hoc single-tree counterpart of " +
+		"`state.highstate`. Called WITHOUT any state reference it is an alias for " +
+		"`state.highstate` (Salt parity): the full highstate — every state set matching the " +
+		"peel in `top.zy` — is compiled and applied.",
 	Effects: modschema.Effects{
 		Execution: "Resolves the peel's settings (falling back to the last-known-good cache on a " +
 			"resolve failure, failing closed if the peel has never resolved), then compiles the " +
 			"`state` reference — loading its `.zy` file, resolving includes/extends, rendering " +
 			"templates against local facts and settings, and building the requisite DAG — and runs " +
 			"every compiled state through Check→Apply (Check-only under `test=True`). Returns one " +
-			"result per compiled state. A peel with no states directory yet (KV-only, before its " +
-			"first state-file sync) returns a 'states engine unavailable' error.",
+			"result per compiled state. Without a `state` argument, behaves exactly as " +
+			"`state.highstate` (see its effects). A peel with no states directory yet (KV-only, " +
+			"before its first state-file sync) returns a 'states engine unavailable' error.",
 	},
 	Examples: []modschema.Example{
 		{Title: "Apply a state tree", Kind: "cli", Code: "zester '*' state.apply nginx"},
+		{Title: "Run the full highstate (Salt parity)", Kind: "cli",
+			Explanation: "With no state name, state.apply IS state.highstate; test=true makes it the classic dry run.",
+			Code:        "zester '*' state.apply test=true"},
 	},
 	SeeAlso: []string{"state.highstate"},
 }

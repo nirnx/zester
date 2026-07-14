@@ -39,6 +39,16 @@ type PeelConfig struct {
 	// and the state still builds.
 	StrictParams bool                         `yaml:"strict_params" flag:"strict-params" usage:"Fail state builds on unknown module parameters (default true); false logs a warning and continues"`
 	Schedule     map[string]PeelScheduleEntry `yaml:"schedule,omitempty" flag:"-"`
+	// StartupStates runs states ONCE per process start (Salt `startup_states`
+	// parity): "highstate" applies the full highstate, "sls" applies the
+	// StartupSLSList refs in order, "" (default) disables. The run goes through
+	// the same serialized exec path as remote executions and retries while the
+	// peel's state infrastructure is still coming up (first boot: enroll →
+	// state-file sync → apply), so a freshly provisioned peel converges
+	// autonomously. Recurring enforcement belongs to the scheduler
+	// (run_on_start + interval), not here.
+	StartupStates  string   `yaml:"startup_states" flag:"startup-states" usage:"Run states once at startup: 'highstate' or 'sls' (with startup-sls-list); empty disables (Salt startup_states)"`
+	StartupSLSList []string `yaml:"startup_sls_list" flag:"startup-sls-list" usage:"Comma-separated state refs applied at startup when startup-states=sls (Salt sls_list)"`
 }
 
 // PeelScheduleEntry is a schedule entry in peel.yaml.

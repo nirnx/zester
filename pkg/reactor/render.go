@@ -391,7 +391,12 @@ func buildDispatchState(blockID string, fields map[string]any) (Action, error) {
 		return Action{}, fmt.Errorf("dispatch.state: sls and highstate are mutually exclusive")
 	case sls != "":
 		act.Function = "state.apply"
-		act.Args = map[string]any{"mods": sls}
+		// The peel's state.apply reads the state reference from args["state"]
+		// (with "mods" as a Salt-compat alias). This historically sent ONLY
+		// "mods", which no peel version ever read — the request errored
+		// loudly; with the bare-state.apply → highstate alias it would
+		// instead silently run a FULL highstate (P1). Send the canonical key.
+		act.Args = map[string]any{"state": sls}
 	case highstate:
 		act.Function = "state.highstate"
 	default:

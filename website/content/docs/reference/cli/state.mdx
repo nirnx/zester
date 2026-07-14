@@ -28,6 +28,22 @@ zester 'web*' state.apply webserver
 zester '*' state.apply base
 ```
 
+### Bare form: highstate alias (Salt parity)
+
+`state.apply` without a state name is an alias for `state.highstate` — the full
+highstate is compiled and applied, exactly as in Salt:
+
+```bash
+# Run the full highstate on every peel...
+zester '*' state.apply
+
+# ...or dry-run it (the classic Salt form)
+zester '*' state.apply test=true
+```
+
+The state reference may also be passed as `state=<name>` or Salt's `mods=<name>`
+kwarg. The bare form uses the `state.highstate` timeout default (`10m`).
+
 ### Output
 
 ```
@@ -65,7 +81,7 @@ defaults for state operations than for other modules:
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--timeout` | `duration` | `5m` for `state.apply`, `10m` for `state.highstate` | Maximum time to wait |
+| `--timeout` | `duration` | `5m` for a named `state.apply`, `10m` for `state.highstate` and the bare `state.apply` highstate alias | Maximum time to wait |
 | `--direct` | `bool` | `false` | Bypass master, send directly to peels via NATS request/reply |
 | `--format` | `string` | `text` | Output format: `text`, `json`, or `yaml` |
 | `--test` | `bool` | `false` | Dry run: compile and check states without applying (Salt `test=True`) |
