@@ -4,6 +4,14 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [0.6.12] - 2026-07-15
+
+### Fixed
+- Consistent UNREACHABLE behavior: the fast path now fires for all silent
+  targets (no 30s heartbeat-TTL blind window), missing peels at timeout are
+  named explicitly with the canonical UNREACHABLE message, and every path
+  (master fast path, CLI timeout, `--direct`) produces identical output.
+
 ## [0.6.11] - 2026-07-15
 
 ### Fixed
