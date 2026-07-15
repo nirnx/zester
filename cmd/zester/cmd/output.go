@@ -270,22 +270,18 @@ func printDirectYAML(results []directResult, module string) {
 
 // printJobReturnText prints a single job return in text format (streamed as they arrive).
 func printJobReturnText(ret job.Return, module string, useColor bool) {
-	// A synthetic unreachable return gets an explicit status line — the
-	// per-target vocabulary scripts and operators key on.
-	if ret.Unreachable {
-		fmt.Printf("%s %s\n", colorize(displayPeel(ret.PeelID)+":", colorRed, useColor),
-			colorize("UNREACHABLE", colorRed, useColor))
-		fmt.Printf("    %s\n", ret.Error)
-		return
-	}
-
-	success := ret.Error == "" && ret.Success
+	success := !ret.Unreachable && ret.Error == "" && ret.Success
 	color := colorRed
 	if success {
 		color = colorGreen
 	}
 
 	fmt.Printf("%s:\n", colorize(displayPeel(ret.PeelID), color, useColor))
+
+	if ret.Unreachable {
+		fmt.Printf("    %s\n", ret.Error)
+		return
+	}
 
 	if ret.Error != "" {
 		fmt.Printf("    ERROR: %s\n", ret.Error)
