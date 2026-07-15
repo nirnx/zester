@@ -255,7 +255,7 @@ func runJobMode(ctx context.Context, client *bus.Client, tgtExpr, module, id str
 				missing := job.Return{
 					PeelID:      peelID,
 					Unreachable: true,
-					Error:       "no return received within timeout",
+					Error:       job.UnreachableError,
 				}
 				seen[peelID] = missing
 				order = append(order, peelID)
