@@ -43,7 +43,12 @@ func displayPeels(ids []string) []string {
 
 // outputRecord is the structured representation of a single peel's result.
 type outputRecord struct {
-	PeelID  string              `json:"peel_id" yaml:"peel_id"`
+	PeelID string `json:"peel_id" yaml:"peel_id"`
+	// Status classifies the outcome for scripts: "success", "failed"
+	// (the peel returned an execution failure), or "unreachable" (no
+	// heartbeat at dispatch and no ack after republish — the master's
+	// synthetic return — or, in direct mode, a transport-level error).
+	Status  string              `json:"status" yaml:"status"`
 	Success bool                `json:"success" yaml:"success"`
 	Results []outputStateResult `json:"results" yaml:"results"`
 	Error   string              `json:"error,omitempty" yaml:"error,omitempty"`
@@ -207,10 +212,17 @@ func directToOutputRecords(results []directResult) []outputRecord {
 	for _, r := range results {
 		rec := outputRecord{PeelID: displayPeel(r.peelID)}
 		if r.err != nil {
+			// Transport-level failure (no responders for a stopped peel,
+			// request timeout): the direct-mode unreachable class.
+			rec.Status = "unreachable"
 			rec.Error = r.err.Error()
 		} else if r.resp != nil {
 			rec.Success = r.resp.Success
 			rec.Error = r.resp.Error
+			rec.Status = "failed"
+			if r.resp.Success {
+				rec.Status = "success"
+			}
 			for _, sr := range r.resp.Results {
 				rec.Results = append(rec.Results, outputStateResult{
 					Name:       sr.Name,
@@ -258,6 +270,15 @@ func printDirectYAML(results []directResult, module string) {
 
 // printJobReturnText prints a single job return in text format (streamed as they arrive).
 func printJobReturnText(ret job.Return, module string, useColor bool) {
+	// A synthetic unreachable return gets an explicit status line — the
+	// per-target vocabulary scripts and operators key on.
+	if ret.Unreachable {
+		fmt.Printf("%s %s\n", colorize(displayPeel(ret.PeelID)+":", colorRed, useColor),
+			colorize("UNREACHABLE", colorRed, useColor))
+		fmt.Printf("    %s\n", ret.Error)
+		return
+	}
+
 	success := ret.Error == "" && ret.Success
 	color := colorRed
 	if success {
@@ -379,6 +400,14 @@ func jobReturnsToOutputRecords(returns []job.Return) []outputRecord {
 			PeelID:  displayPeel(ret.PeelID),
 			Success: ret.Success,
 			Error:   ret.Error,
+		}
+		switch {
+		case ret.Unreachable:
+			rec.Status = "unreachable"
+		case ret.Success && ret.Error == "":
+			rec.Status = "success"
+		default:
+			rec.Status = "failed"
 		}
 		// Extract results from ReturnData (MessagePack decoded map).
 		if data, ok := ret.ReturnData.(map[string]any); ok {

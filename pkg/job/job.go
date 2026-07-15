@@ -87,6 +87,17 @@ type Job struct {
 	// ping-pong; beyond that the job is finalized as failed.
 	ReclaimCount int `msgpack:"reclaim_count,omitempty"`
 
+	// OfflineAtDispatch lists targets that had NO live peel-heartbeat entry
+	// when the master dispatched this job (additive; empty when everything
+	// was present or the heartbeat bucket was unreadable). It is a presence
+	// HINT recorded for the unreachable fast path and the audit trail —
+	// heartbeats may be stale, absent during a reconnect, or missing because
+	// of grant/KV problems, so it never gates delivery: every resolved
+	// target is published to regardless, and any ack or return overrides
+	// the classification (the per-job ack is the authoritative delivery
+	// proof). See Watcher.UnreachableGrace.
+	OfflineAtDispatch []string `msgpack:"offline_at_dispatch,omitempty"`
+
 	// StateID carries the bare positional argument from the CLI (the
 	// state identifier / conventional "name", e.g. `zester '*'
 	// pkg.version nginx` -> "nginx"). Dispatch forwards it as
@@ -244,7 +255,26 @@ type Return struct {
 
 	// Timestamp is when the return was generated.
 	Timestamp time.Time `msgpack:"timestamp"`
+
+	// Unreachable marks a SYNTHETIC return written by the dispatching
+	// master's watcher — not by the peel — when a target had no live
+	// heartbeat at dispatch, never acked (even after the ack-window
+	// re-publish), and never returned within the unreachable grace. It is
+	// an explicit "this target provably did not receive the job" record
+	// (Error carries UnreachableError), distinguishing delivery failure
+	// from execution failure in job records, CLI output, and exit codes.
+	// Additive (old readers see a failed return with the UNREACHABLE
+	// error text).
+	Unreachable bool `msgpack:"unreachable,omitempty"`
 }
+
+// UnreachableError is the Error text of a synthetic unreachable return. The
+// conjunction it states is the strongest "not there" signal available on
+// fire-and-forget core-NATS dispatch: presence hint absent AND no
+// delivery-proof ack after the bounded re-send. Note: UNREACHABLE means no
+// delivery proof was observed within the fast-path window — it does NOT
+// guarantee non-delivery. A narrow ack-loss race exists (see ha.mdx).
+const UnreachableError = "UNREACHABLE: no heartbeat at dispatch and no ack after republish"
 
 // Ack represents a peel's acknowledgment that it received a job dispatch.
 // Peels publish it (MessagePack-encoded) on bus.JobAckSubject(jid, peelID)

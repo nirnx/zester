@@ -4,6 +4,30 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Added
+- Presence-aware job finalize (UNREACHABLE fast path): at dispatch the master
+  records which targets have no live `peel-heartbeat` entry
+  (`Job.OfflineAtDispatch`, additive). The hint NEVER gates delivery — every
+  resolved target is still published to, and any ack or return overrides it
+  (the per-job ack is the authoritative delivery proof) — it only bounds the
+  wait: a grace period (default 5s) after the ack-window re-publish, targets
+  that were heartbeat-absent AND never acked AND never returned are finalized
+  with an explicit synthetic per-peel return (`UNREACHABLE: no heartbeat at
+  dispatch and no ack after republish`, `Return.Unreachable`, additive),
+  published on the return subject so the dispatching CLI finishes early. A
+  ping at a stopped peel now answers in ~10s with an explicit status instead
+  of burning the full 60s timeout. Recovery watchers keep deadline semantics.
+- Classified CLI exit codes for module executions (job mode and `--direct`):
+  `0` all targets succeeded, `2` one or more peels returned a failed result,
+  `3` one or more peels unreachable/missing (incl. `--direct` no-responders),
+  `4` both classes at once; `1` stays the generic CLI/infrastructure error.
+  Previously a job-mode timeout with missing returns exited `0`. Text output
+  gains explicit `<peel>: UNREACHABLE` status lines, JSON/YAML records carry
+  a per-target `status` field (`success`/`failed`/`unreachable`), and
+  `zester job show` gains a STATUS column in its Returns table.
+
 ## [0.6.9] - 2026-07-14
 
 ### Added

@@ -60,6 +60,16 @@ type Manager struct {
 	// Set before dispatching (tests shrink it).
 	AckWindow time.Duration
 
+	// UnreachableGrace configures the unreachable fast path on watchers
+	// started for freshly published dispatches: this long AFTER the
+	// ack-window re-publish, targets that had no live heartbeat at
+	// dispatch AND never acked AND never returned are finalized with a
+	// synthetic UNREACHABLE return instead of burning the job's full
+	// timeout. 0 means DefaultUnreachableGrace (5s); a negative value
+	// disables the fast path (jobs wait the full deadline, the
+	// pre-unreachable behavior). Set before dispatching (tests shrink it).
+	UnreachableGrace time.Duration
+
 	// ReplayReturns, when non-nil, is called by ReclaimJob for running
 	// jobs to recover returns published during the ownerless failover
 	// window: peels kept publishing while no watcher was subscribed, and
@@ -124,6 +134,11 @@ func (m *Manager) Dispatch(ctx context.Context, j *Job) error {
 	j.Owner = m.masterID
 	j.Status = StatusClaimed
 	j.Updated = time.Now().UTC()
+
+	// Presence HINT recorded before the claim so it rides the job record
+	// (audit trail + recovery visibility). It never gates delivery — see
+	// classifyOfflineTargets.
+	j.OfflineAtDispatch = m.classifyOfflineTargets(ctx, j.Targets)
 
 	// The deadline is enforced against this master's clock, so never trust
 	// the client-computed value: a CLI host with a lagging clock would
@@ -305,6 +320,9 @@ func (m *Manager) ReclaimJob(ctx context.Context, j *Job) {
 		}
 		j.Status = StatusRunning
 		j.Updated = time.Now().UTC()
+		// Re-classify presence: this is a FRESH delivery attempt, so the
+		// hint recorded at the original (never-published) claim is stale.
+		j.OfflineAtDispatch = m.classifyOfflineTargets(ctx, j.Targets)
 		data, err := bus.Encode(j)
 		if err != nil {
 			m.logger.Error("reclaim: encode running job", "jid", j.JID, "error", err)
@@ -438,8 +456,60 @@ func (m *Manager) startWatcher(ctx context.Context, j *Job, redispatch bool) {
 	if redispatch {
 		w.Redispatch = true
 		w.AckWindow = m.AckWindow
+		// The unreachable fast path is tied to the re-publish flow: only a
+		// watcher that follows an actual publish (and its bounded re-send)
+		// can prove a suspected-offline target never received the job.
+		// Recovery watchers keep deadline semantics — their peels may be
+		// mid-execution with the acks lost to the failover.
+		w.UnreachableGrace = m.UnreachableGrace
 	}
 	m.runWatcher(ctx, w)
+}
+
+// classifyOfflineTargets returns the subset of targets with NO live entry in
+// the peel-heartbeat bucket — the suspected_offline presence hint. Heartbeats
+// are a HINT only (30s TTL; absent during reconnects; missing under broken
+// grants or KV trouble), so this classification never changes WHAT is
+// dispatched, only how long the watcher WAITS for silence: any ack or return
+// from a listed peel overrides it. Any error path returns nil (fast path off,
+// full-deadline behavior) — a presence-plane problem must never fail or delay
+// a dispatch.
+//
+// Presence is read with one direct KV Get PER TARGET (O(targets)), not a
+// full-bucket listing: a dispatch typically targets a handful of peels, and
+// listing the whole heartbeat bucket (a per-call ordered-consumer replay on
+// JetStream) on every dispatch would scale with the fleet, not the job.
+func (m *Manager) classifyOfflineTargets(ctx context.Context, targets []string) []string {
+	if len(targets) == 0 {
+		return nil
+	}
+	hbBucket, err := bus.GetBucket(ctx, m.js, bus.BucketPeelHeartbeat)
+	if err != nil {
+		m.logger.Debug("presence classification skipped: heartbeat bucket unavailable", "error", err)
+		return nil
+	}
+	var offline []string
+	for _, t := range targets {
+		_, err := hbBucket.Get(ctx, t)
+		switch {
+		case err == nil:
+			// Live heartbeat: online (an expired key returns ErrKeyNotFound
+			// on access — the bucket TTL, not us, decides liveness).
+		case errors.Is(err, bus.ErrKeyNotFound):
+			offline = append(offline, t)
+		default:
+			// A read error on ONE key must not misclassify or block: abandon
+			// the whole classification (nil = fast path off). Rare, and the
+			// job simply keeps the full-deadline behavior.
+			m.logger.Debug("presence classification skipped: heartbeat read error", "peel", t, "error", err)
+			return nil
+		}
+	}
+	if len(offline) > 0 {
+		m.logger.Info("dispatch targets without live heartbeat (delivery still attempted)",
+			"count", len(offline), "peels", offline)
+	}
+	return offline
 }
 
 // runWatcher registers a prepared watcher and runs it in a goroutine,

@@ -140,12 +140,20 @@ func runJobShow(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("\nReturns:")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PEEL\tSUCCESS\tDURATION")
+	fmt.Fprintln(w, "PEEL\tSTATUS\tSUCCESS\tDURATION")
 	for _, ret := range returns {
 		peelID := mapStr(ret, "peel_id")
 		success := mapStr(ret, "success")
 		dur := mapStr(ret, "duration")
-		fmt.Fprintf(w, "%s\t%s\t%s\n", displayPeel(peelID), success, dur)
+		// Synthetic unreachable returns (master fast path) are called out
+		// explicitly — a delivery failure, not an execution failure.
+		status := "failed"
+		if unreach, _ := ret["unreachable"].(bool); unreach {
+			status = "unreachable"
+		} else if success == "true" {
+			status = "success"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", displayPeel(peelID), status, success, dur)
 	}
 	w.Flush()
 	return nil

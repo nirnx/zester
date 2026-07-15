@@ -34,6 +34,15 @@ const (
 // otherwise never receive the job and the job burns its full timeout).
 const DefaultAckWindow = 5 * time.Second
 
+// DefaultUnreachableGrace is how long a dispatch watcher waits AFTER the
+// ack-window re-publish before finalizing suspected-offline targets that
+// stayed completely silent (no ack, no return) as UNREACHABLE. Exec dispatch
+// is fire-and-forget core NATS with exactly two sends (publish + one
+// re-publish), so a target that is heartbeat-absent and still silent after
+// this point provably cannot produce a return — waiting the job's remaining
+// deadline for it buys nothing.
+const DefaultUnreachableGrace = 5 * time.Second
+
 // Watcher monitors a single job for acks, returns, and timeout.
 // It subscribes to the job's NATS subjects and aggregates results
 // until all targets have returned or the timeout expires.
@@ -73,6 +82,19 @@ type Watcher struct {
 	// reconciliation even when Redispatch is set. Set before calling
 	// Watch (tests shrink it).
 	AckWindow time.Duration
+
+	// UnreachableGrace arms the unreachable fast path: at
+	// ackWindow+UnreachableGrace, targets listed in the job's
+	// OfflineAtDispatch presence hint that have produced NO ack and NO
+	// return get a synthetic UNREACHABLE return (job.UnreachableError)
+	// instead of holding the job open until its deadline. Any ack or
+	// return received first removes a target from consideration — the
+	// heartbeat hint never overrides delivery proof. 0 means
+	// DefaultUnreachableGrace; negative disables. Only honored when
+	// Redispatch is set with an enabled AckWindow (the fast path's
+	// "provably never received it" claim rests on the bounded re-send
+	// having happened). Set before calling Watch.
+	UnreachableGrace time.Duration
 
 	mu         sync.Mutex
 	acks       map[string]Ack
@@ -236,7 +258,29 @@ func (w *Watcher) Watch(ctx context.Context) {
 				"jid", w.job.JID, "subject_peel", peelID, "payload_peel", ret.PeelID)
 			return
 		}
+		// Drop any wire message flagged Unreachable. Only THIS master's
+		// markUnreachable legitimately produces such a return, and it
+		// records it in w.returns in-memory BEFORE publishing it for live
+		// listeners — so the publish echoes back here as a no-op input. If
+		// we stored it, that echo could overwrite a REAL return for the
+		// same peel that raced in just before the synthetic was published,
+		// finalizing a peel that actually succeeded as UNREACHABLE (the
+		// ruling: a return always overrides the presence classification, so
+		// the synthetic must never clobber a real one). A compromised peel
+		// cannot forge this flag to any effect either — it would only
+		// suppress its own return.
+		if ret.Unreachable {
+			return
+		}
 		w.mu.Lock()
+		// A real return always wins over a synthetic UNREACHABLE already
+		// recorded (delivery proof overrides the presence hint); a real
+		// return never overwrites another real return (first wins, matching
+		// the pre-existing single-return-per-peel contract).
+		if existing, ok := w.returns[peelID]; ok && !existing.Unreachable {
+			w.mu.Unlock()
+			return
+		}
 		w.returns[peelID] = ret
 		count := len(w.returns)
 		w.newReturns = append(w.newReturns, peelID)
@@ -300,6 +344,7 @@ func (w *Watcher) Watch(ctx context.Context) {
 	// Ack-reconciliation window (finding 21): one-shot re-dispatch to
 	// silent targets, only on watchers that follow an actual publish.
 	var ackC <-chan time.Time
+	var unreachC <-chan time.Time
 	if w.Redispatch {
 		window := w.AckWindow
 		if window == 0 {
@@ -309,6 +354,19 @@ func (w *Watcher) Watch(ctx context.Context) {
 			ackTimer := time.NewTimer(window)
 			defer ackTimer.Stop()
 			ackC = ackTimer.C
+
+			// Unreachable fast path: fires one grace period after the
+			// re-publish, only when the dispatch classified suspected-
+			// offline targets (empty hint = nothing to fast-path).
+			grace := w.UnreachableGrace
+			if grace == 0 {
+				grace = DefaultUnreachableGrace
+			}
+			if grace > 0 && len(w.job.OfflineAtDispatch) > 0 {
+				unreachTimer := time.NewTimer(window + grace)
+				defer unreachTimer.Stop()
+				unreachC = unreachTimer.C
+			}
 		}
 	}
 
@@ -325,6 +383,11 @@ wait:
 		case <-ackC:
 			ackC = nil // fire exactly once
 			w.redispatchSilent()
+		case <-unreachC:
+			unreachC = nil // fire exactly once
+			if w.markUnreachable(cancel) {
+				break wait
+			}
 		}
 	}
 
@@ -403,6 +466,81 @@ func (w *Watcher) redispatchSilent() {
 	}
 	w.logger.Warn("re-dispatched job to silent targets (no ack or return within ack window)",
 		"jid", w.job.JID, "peels", silent, "targets", w.job.TargetCount())
+}
+
+// markUnreachable executes the unreachable fast path: every target in the
+// job's OfflineAtDispatch presence hint that has produced NEITHER an ack NOR
+// a return by now gets a synthetic UNREACHABLE return — recorded exactly like
+// a real per-peel return (KV persistence via the writer goroutine) and
+// additionally published on the job's return subject so live listeners (the
+// dispatching CLI) finish early. Targets that acked or returned in the
+// meantime are excluded here — that IS the promotion rule: delivery proof
+// always overrides the heartbeat hint. Reports whether the synthetic returns
+// completed the target set (the caller then stops waiting).
+func (w *Watcher) markUnreachable(cancel context.CancelFunc) bool {
+	w.mu.Lock()
+	if w.canceled || w.detached {
+		w.mu.Unlock()
+		return false
+	}
+	now := time.Now().UTC()
+	var marked []Return
+	for _, target := range w.job.OfflineAtDispatch {
+		if _, ok := w.acks[target]; ok {
+			continue // delivery-proven: waits like any online target
+		}
+		if _, ok := w.returns[target]; ok {
+			continue // already answered
+		}
+		ret := Return{
+			JID:         w.job.JID,
+			PeelID:      target,
+			Success:     false,
+			Error:       UnreachableError,
+			Unreachable: true,
+			Timestamp:   now,
+		}
+		w.returns[target] = ret
+		w.newReturns = append(w.newReturns, target)
+		marked = append(marked, ret)
+	}
+	complete := len(w.returns) >= w.job.TargetCount()
+	w.mu.Unlock()
+
+	if len(marked) == 0 {
+		return false
+	}
+
+	// Nudge the persist writer (finalize's flush is the backstop).
+	select {
+	case w.persistCh <- struct{}{}:
+	default:
+	}
+
+	// Publish the synthetic returns for live listeners. Master credentials
+	// may publish on any return subject; our own return subscription echoes
+	// them back into w.returns idempotently (same peel key, same content).
+	peels := make([]string, 0, len(marked))
+	for _, ret := range marked {
+		peels = append(peels, ret.PeelID)
+		data, err := bus.Encode(ret)
+		if err != nil {
+			w.logger.Error("encode unreachable return", "jid", w.job.JID, "peel", ret.PeelID, "error", err)
+			continue
+		}
+		if err := w.nc.Publish(bus.JobReturnSubject(w.job.JID, ret.PeelID), data); err != nil {
+			w.logger.Warn("publish unreachable return", "jid", w.job.JID, "peel", ret.PeelID, "error", err)
+		}
+	}
+
+	w.logger.Warn("targets finalized as unreachable (no heartbeat at dispatch, no ack after republish)",
+		"jid", w.job.JID, "peels", peels, "targets", w.job.TargetCount())
+
+	if complete && cancel != nil {
+		cancel()
+		return true
+	}
+	return false
 }
 
 // finish either persists collected returns without finalizing (shutdown
@@ -538,16 +676,31 @@ func (w *Watcher) SeedReturns(returns []Return) {
 	}
 }
 
+// supersedesReturn reports whether an incoming return should replace what is
+// already recorded for its peel. A slot is filled either when empty or when
+// the recorded return is a synthetic UNREACHABLE and the incoming one is a
+// REAL return (delivery proof always overrides the presence classification —
+// the ruled model). A real return never displaces another real return.
+func supersedesReturn(existing Return, existed bool, incoming Return) bool {
+	if !existed {
+		return true
+	}
+	return existing.Unreachable && !incoming.Unreachable
+}
+
 // SeedReturnsPersist pre-loads returns recovered from a durable source that
 // is NOT the job-returns KV (e.g. a job-events stream replay after reclaim)
-// and queues them for per-peel persistence so the KV catches up. Returns
-// for peels already seeded or collected are skipped (the KV copy wins).
-// Call before Watch.
+// and queues them for per-peel persistence so the KV catches up. Returns for
+// peels already holding a REAL return are skipped; a real return DOES replace
+// a synthetic UNREACHABLE seeded from KV (a peel that actually returned during
+// the ownerless failover window must not stay recorded unreachable). Call
+// before Watch.
 func (w *Watcher) SeedReturnsPersist(returns []Return) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, r := range returns {
-		if _, ok := w.returns[r.PeelID]; ok {
+		existing, ok := w.returns[r.PeelID]
+		if !supersedesReturn(existing, ok, r) {
 			continue
 		}
 		w.returns[r.PeelID] = r
@@ -557,10 +710,11 @@ func (w *Watcher) SeedReturnsPersist(returns []Return) {
 
 // MergeReturns records returns recovered from a durable source AFTER the
 // watcher has started (the post-subscribe job-events stream replay that
-// closes the reclaim replay→subscribe gap). Returns for peels already
-// collected or seeded are skipped (live/KV copies win); new ones are
-// queued for per-peel persistence and, when they complete the target set,
-// finish the watch. Safe to call concurrently with Watch.
+// closes the reclaim replay→subscribe gap). A real live/seeded return wins,
+// but a real return DOES replace a synthetic UNREACHABLE (delivery proof
+// overrides the presence classification); new or superseding ones are queued
+// for per-peel persistence and, when they complete the target set, finish the
+// watch. Safe to call concurrently with Watch.
 func (w *Watcher) MergeReturns(returns []Return) {
 	w.mu.Lock()
 	added := 0
@@ -568,12 +722,16 @@ func (w *Watcher) MergeReturns(returns []Return) {
 		if r.PeelID == "" {
 			continue
 		}
-		if _, ok := w.returns[r.PeelID]; ok {
+		existing, ok := w.returns[r.PeelID]
+		if !supersedesReturn(existing, ok, r) {
 			continue
 		}
+		newPeel := !ok
 		w.returns[r.PeelID] = r
 		w.newReturns = append(w.newReturns, r.PeelID)
-		added++
+		if newPeel {
+			added++
+		}
 	}
 	count := len(w.returns)
 	cancel := w.cancelFunc

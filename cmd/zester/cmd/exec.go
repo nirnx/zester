@@ -121,21 +121,21 @@ func runDirect(ctx context.Context, nc *nats.Conn, tgtExpr, module, id string, m
 
 	wg.Wait()
 
-	// Output results.
-	hasError := false
-	for _, r := range results {
-		if r.err != nil || (r.resp != nil && !r.resp.Success) {
-			hasError = true
-			break
-		}
-	}
-
 	printDirectResults(results, module, format, useColor)
 
-	if hasError {
-		return fmt.Errorf("one or more peels returned errors")
+	// Classified exit: a transport-level error (no responders for a stopped
+	// peel, request timeout) is the direct-mode UNREACHABLE class; a reply
+	// carrying a failed result is an execution failure.
+	failed, unreachable := 0, 0
+	for _, r := range results {
+		switch {
+		case r.err != nil:
+			unreachable++
+		case r.resp == nil || !r.resp.Success:
+			failed++
+		}
 	}
-	return nil
+	return classifyPeelResults(failed, unreachable)
 }
 
 // runJobMode dispatches a job through the master and collects returns.
@@ -208,34 +208,63 @@ func runJobMode(ctx context.Context, client *bus.Client, tgtExpr, module, id str
 		fmt.Fprintf(os.Stderr, "Job %s dispatched\n", j.JID)
 	}
 
-	// Collect returns in real-time.
-	var returns []job.Return
-	received := 0
+	// Collect returns in real-time, keyed by peel. A peel can legitimately
+	// produce TWO wire returns — its real return and the master's synthetic
+	// UNREACHABLE — when the two race (the real one landing just as the fast
+	// path fires); counting raw messages would then complete early on a
+	// duplicate and miss another target. Dedup by peel and let a real return
+	// win over a synthetic one (delivery proof overrides the presence hint).
+	seen := make(map[string]job.Return, len(peels))
+	order := make([]string, 0, len(peels))
 	for {
 		select {
 		case ret := <-returnCh:
-			received++
-			returns = append(returns, ret)
-			// Stream text output as returns arrive.
+			prev, had := seen[ret.PeelID]
+			// First return for this peel, or a real return replacing a
+			// synthetic one already shown. Ignore a synthetic arriving after
+			// a real return, and any duplicate real return.
+			if had && (!prev.Unreachable || ret.Unreachable) {
+				continue
+			}
+			if !had {
+				order = append(order, ret.PeelID)
+			}
+			seen[ret.PeelID] = ret
+			// Stream text output as accepted returns arrive.
 			if format == "text" {
 				printJobReturnText(ret, module, useColor)
 			}
-			if received >= len(peels) {
+			if len(seen) >= len(peels) {
+				returns := orderedReturns(seen, order)
 				if format != "text" {
 					printJobResults(returns, module, format)
 				}
-				return nil
+				// Classified exit: UNREACHABLE synthetic returns (the
+				// master's fast path for heartbeat-absent, never-acking
+				// targets) count separately from execution failures.
+				return classifyReturns(returns, len(peels))
 			}
 		case <-jobCtx.Done():
+			returns := orderedReturns(seen, order)
 			if format == "text" {
-				fmt.Fprintf(os.Stderr, "\nTimeout: received %d/%d returns for job %s\n", received, len(peels), j.JID)
+				fmt.Fprintf(os.Stderr, "\nTimeout: received %d/%d returns for job %s\n", len(seen), len(peels), j.JID)
 			}
 			if format != "text" && len(returns) > 0 {
 				printJobResults(returns, module, format)
 			}
-			return nil
+			// Targets still missing at the deadline count as unreachable.
+			return classifyReturns(returns, len(peels))
 		}
 	}
+}
+
+// orderedReturns flattens the per-peel return map into arrival order.
+func orderedReturns(seen map[string]job.Return, order []string) []job.Return {
+	returns := make([]job.Return, 0, len(order))
+	for _, peelID := range order {
+		returns = append(returns, seen[peelID])
+	}
+	return returns
 }
 
 // directResult holds a single peel's response from direct mode.

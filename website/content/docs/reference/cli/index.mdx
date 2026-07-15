@@ -329,7 +329,23 @@ reconnect attempt rather than retrying indefinitely.
 
 ## Exit Codes
 
+Module executions (job mode and `--direct`) classify per-target outcomes so
+scripts and monitoring can distinguish delivery failure from execution
+failure:
+
 | Code | Meaning |
 |------|---------|
-| `0` | Success |
-| `1` | Error (connection failure, invalid arguments, command error) |
+| `0` | Every targeted peel returned success |
+| `1` | CLI/infrastructure error (connection failure, invalid arguments, resolve failure, command error) |
+| `2` | One or more peels returned a **failed result** (execution failure); everything was reachable |
+| `3` | One or more peels were **UNREACHABLE** (no heartbeat at dispatch and no ack after republish, missing at timeout, or `--direct` no-responders); every peel that did return succeeded. UNREACHABLE means no delivery proof — not guaranteed non-delivery; see [Unreachable Targets](/docs/architecture/ha#unreachable-targets-presence-aware-finalize) for the bounded-divergence note. |
+| `4` | Both classes at once: execution failures **and** unreachable/missing targets |
+
+In job mode, targets with no live heartbeat at dispatch are still published
+to (presence never changes the target set), but if they neither ack nor
+return after the ack-window re-publish plus a short grace (~10s total), the
+master finalizes them with an explicit synthetic result — the CLI reports
+`<peel>: UNREACHABLE` and finishes early instead of waiting out the full job
+timeout. Any ack or return always overrides the presence hint. Text and
+JSON/YAML output carry the per-target status (`success` / `failed` /
+`unreachable`).
