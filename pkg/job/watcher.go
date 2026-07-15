@@ -356,13 +356,15 @@ func (w *Watcher) Watch(ctx context.Context) {
 			ackC = ackTimer.C
 
 			// Unreachable fast path: fires one grace period after the
-			// re-publish, only when the dispatch classified suspected-
-			// offline targets (empty hint = nothing to fast-path).
+			// re-publish. Any target that is still completely silent
+			// (no ack, no return) after both sends is almost certainly
+			// unreachable — the ack fires on accept (sub-ms), so 10s
+			// of total silence is strong proof of non-delivery.
 			grace := w.UnreachableGrace
 			if grace == 0 {
 				grace = DefaultUnreachableGrace
 			}
-			if grace > 0 && len(w.job.OfflineAtDispatch) > 0 {
+			if grace > 0 {
 				unreachTimer := time.NewTimer(window + grace)
 				defer unreachTimer.Stop()
 				unreachC = unreachTimer.C
@@ -468,15 +470,16 @@ func (w *Watcher) redispatchSilent() {
 		"jid", w.job.JID, "peels", silent, "targets", w.job.TargetCount())
 }
 
-// markUnreachable executes the unreachable fast path: every target in the
-// job's OfflineAtDispatch presence hint that has produced NEITHER an ack NOR
-// a return by now gets a synthetic UNREACHABLE return — recorded exactly like
-// a real per-peel return (KV persistence via the writer goroutine) and
+// markUnreachable executes the unreachable fast path: every target that has
+// produced NEITHER an ack NOR a return after both the initial publish and the
+// ack-window re-publish gets a synthetic UNREACHABLE return — recorded exactly
+// like a real per-peel return (KV persistence via the writer goroutine) and
 // additionally published on the job's return subject so live listeners (the
-// dispatching CLI) finish early. Targets that acked or returned in the
-// meantime are excluded here — that IS the promotion rule: delivery proof
-// always overrides the heartbeat hint. Reports whether the synthetic returns
-// completed the target set (the caller then stops waiting).
+// dispatching CLI) finish early. Acks are published on accept (sub-ms, before
+// any execution), so 10s of total silence is strong proof of non-delivery —
+// a healthy peel that received the job always acks well within this window.
+// Reports whether the synthetic returns completed the target set (the caller
+// then stops waiting).
 func (w *Watcher) markUnreachable(cancel context.CancelFunc) bool {
 	w.mu.Lock()
 	if w.canceled || w.detached {
@@ -485,9 +488,9 @@ func (w *Watcher) markUnreachable(cancel context.CancelFunc) bool {
 	}
 	now := time.Now().UTC()
 	var marked []Return
-	for _, target := range w.job.OfflineAtDispatch {
+	for _, target := range w.job.Targets {
 		if _, ok := w.acks[target]; ok {
-			continue // delivery-proven: waits like any online target
+			continue // delivery-proven: waits the full deadline
 		}
 		if _, ok := w.returns[target]; ok {
 			continue // already answered

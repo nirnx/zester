@@ -11,6 +11,16 @@ All notable changes to Zester are documented here. The format follows
   status words (`UNREACHABLE`). Every target now renders identically —
   colored name + colon on the header, details indented below — matching the
   existing success/failure format.
+- The UNREACHABLE fast path now fires for ALL silent targets (no ack, no
+  return after both sends), not only heartbeat-absent ones — a peel stopped
+  right before dispatch no longer requires the 30s heartbeat TTL to expire
+  before the fast path activates; the ~10s ack window + grace is sufficient.
+  The heartbeat classification remains for auditing (`Job.OfflineAtDispatch`)
+  but is no longer the gate.
+- Peels that time out without returning are now explicitly named as
+  UNREACHABLE in the text/JSON/YAML output instead of showing only a count
+  (`Timeout: received N/M`). Every missing peel gets the same consistent
+  output line as a master-classified UNREACHABLE target.
 
 ## [0.6.10] - 2026-07-15
 

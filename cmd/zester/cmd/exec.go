@@ -245,14 +245,28 @@ func runJobMode(ctx context.Context, client *bus.Client, tgtExpr, module, id str
 				return classifyReturns(returns, len(peels))
 			}
 		case <-jobCtx.Done():
-			returns := orderedReturns(seen, order)
-			if format == "text" {
-				fmt.Fprintf(os.Stderr, "\nTimeout: received %d/%d returns for job %s\n", len(seen), len(peels), j.JID)
+			// Name every missing peel explicitly as UNREACHABLE — the
+			// timeout means "no return within the job deadline", which is
+			// the same class as the master's fast-path synthetic.
+			for _, peelID := range peels {
+				if _, ok := seen[peelID]; ok {
+					continue
+				}
+				missing := job.Return{
+					PeelID:      peelID,
+					Unreachable: true,
+					Error:       "no return received within timeout",
+				}
+				seen[peelID] = missing
+				order = append(order, peelID)
+				if format == "text" {
+					printJobReturnText(missing, module, useColor)
+				}
 			}
-			if format != "text" && len(returns) > 0 {
+			returns := orderedReturns(seen, order)
+			if format != "text" {
 				printJobResults(returns, module, format)
 			}
-			// Targets still missing at the deadline count as unreachable.
 			return classifyReturns(returns, len(peels))
 		}
 	}

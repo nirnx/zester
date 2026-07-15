@@ -163,9 +163,10 @@ At dispatch, the master records which targets have no live entry in the
 `peel-heartbeat` bucket (`Job.OfflineAtDispatch`). This presence hint **never
 gates delivery** — heartbeats can be stale, absent during a reconnect, or
 missing under broken grants, so every resolved target is always published to.
-It only changes how long the watcher *waits*: a grace period (5s) after the
-ack-window re-publish, targets that were heartbeat-absent at dispatch AND
-never acked AND never returned are finalized with a synthetic per-peel return
+The heartbeat classification additionally feeds the job record for auditing
+(`Job.OfflineAtDispatch`). The watcher's fast path is broader: a grace period
+(5s) after the ack-window re-publish, ANY target that never acked AND never
+returned is finalized with a synthetic per-peel return
 (`UNREACHABLE: no heartbeat at dispatch and no ack after republish`,
 `Return.Unreachable`), published on the job's return subject so the
 dispatching CLI finishes early. Any ack or return received first promotes the
