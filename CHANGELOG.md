@@ -4,6 +4,14 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [0.6.11] - 2026-07-15
+
+### Fixed
+- Consistent text output shape: peel header lines no longer carry inline
+  status words (`UNREACHABLE`). Every target now renders identically —
+  colored name + colon on the header, details indented below — matching the
+  existing success/failure format.
+
 ## [0.6.10] - 2026-07-15
 
 ### Added
