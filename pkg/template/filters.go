@@ -8,19 +8,35 @@ import (
 	"github.com/nikolalohinski/gonja/v2/exec"
 )
 
-// registerFilters adds Zester-specific filters to the filter set.
-func registerFilters(filters *exec.FilterSet) {
-	filters.Register("settings_decrypt", settingsDecryptFilter)
-	filters.Register("yaml_encode", yamlEncodeFilter)
-	filters.Register("to_json", toJSONFilter)
-	filters.Register("json", toJSONFilter) // Salt uses |json, Zester has |to_json
-	filters.Register("regex_match", regexMatchFilter)
-	filters.Register("dict_merge", dictMergeFilter)
+// registerFilters adds Zester-specific filters to the filter set. A
+// registration error is fatal for the engine: a gonja release that ships a
+// built-in under one of these names would otherwise silently shadow the
+// Zester implementation.
+func registerFilters(filters *exec.FilterSet) error {
+	zesterFilters := []struct {
+		name string
+		fn   exec.FilterFunction
+	}{
+		{"settings_decrypt", settingsDecryptFilter},
+		{"yaml_encode", yamlEncodeFilter},
+		{"to_json", toJSONFilter},
+		{"json", toJSONFilter}, // Salt uses |json, Zester has |to_json
+		{"regex_match", regexMatchFilter},
+		{"dict_merge", dictMergeFilter},
+	}
+	for _, f := range zesterFilters {
+		if err := filters.Register(f.name, f.fn); err != nil {
+			return fmt.Errorf("filter %s: %w", f.name, err)
+		}
+	}
 
 	// Override gonja's built-in length filter to recognize types with a
 	// Len() int method (e.g. *MutableList). Without this, gonja's Value.Len()
 	// falls through to the default case for pointer-to-struct types and returns 0.
-	filters.Replace("length", zesterLengthFilter) //nolint:errcheck
+	if err := filters.Replace("length", zesterLengthFilter); err != nil {
+		return fmt.Errorf("filter length: %w", err)
+	}
+	return nil
 }
 
 // lenner is satisfied by any type that has a Len() int method (e.g. *MutableList).
