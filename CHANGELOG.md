@@ -4,6 +4,32 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Security
+- Dependency review (2026-10-07): closed every open Dependabot advisory that
+  had a patched release. Go: `grpc` 1.83.2, `containerd/v2` 2.2.9,
+  `moby/go-archive` 0.3.0, `moby/buildkit` 0.31.1, `sigstore-go` 1.2.1 and
+  the otel exporters/sdk 1.46.0 (all integration-test-only transitives via
+  testcontainers), alongside the go-minor-patch group (`nats.go` 1.53.1,
+  `gonja/v2` 2.9.0, `prometheus/client_golang` 1.24.1, `jsonschema/v6` 6.0.3,
+  `gopsutil/v4` 4.26.7, `testcontainers-go` 0.44.0). Docs website: `next`
+  16.3.4 (critical advisories), `postcss` 8.5.28, `mermaid` 11.17.2,
+  `dompurify` 3.4.16, `sharp` 0.35.4, `nanoid` 3.3.19, `fast-uri` 3.1.8,
+  `brace-expansion` 1.1.21, `baseline-browser-mapping` 2.11.22, plus the
+  fumadocs 16.15 / react 19.3 / tailwind 4.3.3 minors. CI actions
+  `setup-go`/`setup-node` v7; builder image `golang:1.27-alpine`.
+
+### Changed
+- Template engine: the `{% do %}` tag is now gonja's built-in (gonja 2.9.0
+  ships one with identical semantics); only the parse-error wording for a
+  malformed `do` changes. Control-structure and filter registration clashes
+  with gonja built-ins are now fatal at engine construction instead of
+  silently shadowing the Zester implementation.
+- Docs website search runs on fumadocs' zbsearch engine (replacing the Orama
+  static client; `@orama/orama` dropped). No change to the search index
+  export or UI.
+
 ## [0.6.12] - 2026-07-15
 
 ### Fixed
