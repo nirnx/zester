@@ -29,9 +29,15 @@ RUN set -e; for f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.source
       if [ -f "$f" ]; then sed -i "s|archive.ubuntu.com|${UBUNTU_MIRROR}|g" "$f"; fi; \
     done
 
+# The apt lists are deliberately KEPT (no `rm -rf /var/lib/apt/lists/*`):
+# every pkg state with `refresh: True` and every pkg.latest runs `apt-get
+# update` inside the peel, and with an empty lists dir that is a full ~26 MB
+# index download per call. At the ~100 kB/s GitHub runners sometimes get
+# from the Ubuntu mirrors that alone blows the 60 s module timeout (and two
+# refreshes blow the 5 min state.apply one); with the build-time lists in
+# place it is an If-Modified-Since check plus pdiffs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl bash systemd systemd-sysv dbus nginx \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates curl bash systemd systemd-sysv dbus nginx
 
 # Remove unnecessary systemd units that cause noise/failures in containers.
 RUN rm -f /lib/systemd/system/multi-user.target.wants/* \
