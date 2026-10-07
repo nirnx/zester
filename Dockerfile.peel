@@ -11,11 +11,23 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-peel ./cmd/zester-peel
 
 # ---------------------------------------------------------------------------
-# Runtime: Ubuntu 24.04 with systemd as PID 1
+# Runtime: Ubuntu 26.04 with systemd as PID 1
 # ---------------------------------------------------------------------------
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# apt mirror, baked into the image so it serves BOTH this build and every
+# apt call made inside the running peel (pkg states, integration tests).
+# GitHub-hosted runners live in Azure, where archive.ubuntu.com is routinely
+# throttled to ~80 kB/s with per-file timeouts (2026-10-07: 9-minute image
+# builds and apt-driven integration tests timing out); ci.yml therefore sets
+# UBUNTU_MIRROR=azure.archive.ubuntu.com. The default keeps the stock mirror
+# for local playground builds. security.ubuntu.com is left untouched.
+ARG UBUNTU_MIRROR=archive.ubuntu.com
+RUN set -e; for f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do \
+      if [ -f "$f" ]; then sed -i "s|archive.ubuntu.com|${UBUNTU_MIRROR}|g" "$f"; fi; \
+    done
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl bash systemd systemd-sysv dbus nginx \

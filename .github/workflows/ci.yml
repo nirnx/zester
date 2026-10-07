@@ -106,4 +106,8 @@ jobs:
           cache: true
 
       - name: integration tests
+        env:
+          # Peel image apt mirror (see Dockerfile.peel): archive.ubuntu.com is
+          # throttled from Azure runners; the Azure mirror is local to them.
+          UBUNTU_MIRROR: azure.archive.ubuntu.com
         run: go test -v -tags integration -count=1 -timeout 25m ./integration/

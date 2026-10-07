@@ -106,6 +106,10 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "compose setup: %v\n", err)
 		os.Exit(1)
 	}
+	// Interpolate ${VAR} references in the compose files from the process
+	// environment, as the docker compose CLI would (ci.yml sets UBUNTU_MIRROR
+	// for the peel image build).
+	stack.WithOsEnv()
 
 	// Full cleanup: remove all containers, volumes, networks, and locally-built
 	// images from any previous run so every test session starts completely fresh.
