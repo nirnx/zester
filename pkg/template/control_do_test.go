@@ -52,6 +52,10 @@ func TestDo(t *testing.T) {
 	}
 }
 
+// TestDo_Errors pins that a malformed {% do %} is a parse error. The tag is
+// gonja's built-in since 2.9.0 (same semantics as the Zester one it replaced:
+// evaluate for side effects, exactly one expression), so only the
+// control-structure wrapping is asserted, not gonja's message text.
 func TestDo_Errors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -61,12 +65,12 @@ func TestDo_Errors(t *testing.T) {
 		{
 			name:    "missing_expression",
 			tpl:     `{% do %}`,
-			wantErr: "do: expected expression",
+			wantErr: `controlStructure "do"`,
 		},
 		{
 			name:    "extra_arguments",
 			tpl:     `{% do 1 2 %}`,
-			wantErr: "unexpected extra arguments",
+			wantErr: `controlStructure "do"`,
 		},
 	}
 

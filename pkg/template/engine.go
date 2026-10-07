@@ -86,7 +86,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 	filters := exec.NewFilterSet(map[string]exec.FilterFunction{})
 	filters.Update(builtins.Filters)
-	registerFilters(filters)
+	if err := registerFilters(filters); err != nil {
+		return nil, fmt.Errorf("template: %w", err)
+	}
 
 	basketFn := cfg.BasketFn
 	globalCtx := exec.EmptyContext().Update(builtins.GlobalFunctions).Update(builtins.GlobalVariables)
@@ -94,9 +96,16 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 	controlStructures := exec.NewControlStructureSet(map[string]parser.ControlStructureParser{})
 	controlStructures.Update(builtins.ControlStructures)
-	controlStructures.Replace("from", zesterFromParser)
-	controlStructures.Register("import_yaml", importYAMLParser)
-	controlStructures.Register("do", doParser)
+	// A registration error is fatal: a gonja release that ships a built-in
+	// under one of these names would otherwise silently shadow the Zester
+	// implementation (gonja 2.9.0 did exactly that with `do`, which is why
+	// Zester no longer carries its own).
+	if err := controlStructures.Replace("from", zesterFromParser); err != nil {
+		return nil, fmt.Errorf("template: control structure from: %w", err)
+	}
+	if err := controlStructures.Register("import_yaml", importYAMLParser); err != nil {
+		return nil, fmt.Errorf("template: control structure import_yaml: %w", err)
+	}
 
 	methods := builtins.Methods
 	methods.Dict = zesterDictMethods()
