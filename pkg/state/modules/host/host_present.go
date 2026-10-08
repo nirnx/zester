@@ -3,6 +3,7 @@ package hostmod
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -118,6 +119,13 @@ var hostPresentSpec = regdef.MustSpec("host.present", modschema.KindState, HostP
 		},
 		{
 			Level: "info",
+			Title: "Values are validated at build time",
+			Body: "`ip` must parse as an IPv4 or IPv6 address and `name` must be a single token with no " +
+				"whitespace or control characters — a value carrying a newline or a space would inject an " +
+				"extra hosts line or split a field, so the state fails to build instead.",
+		},
+		{
+			Level: "info",
 			Title: "Divergences from Salt",
 			Body: "`host.present` enforces exactly ONE IP per hostname — any line mapping the hostname to a " +
 				"different IP has the name removed — whereas Salt's `host.present` accepts a LIST of IPs and " +
@@ -144,6 +152,17 @@ func NewHostPresentBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOption
 		h := &HostPresent{}
 		if _, err := hostPresentSpec.Decode(id, config, h, opts); err != nil {
 			return nil, fmt.Errorf("host.present: %w", err)
+		}
+		// Builder-tail module logic (not schema): the hosts file is
+		// whitespace-delimited and line-oriented, and both values are
+		// written into it verbatim. `ip` must be a real address (anything
+		// else — including a value with an embedded newline — would land in
+		// the first column of a hosts line) and the hostname a single token.
+		if net.ParseIP(h.IP) == nil {
+			return nil, fmt.Errorf("host.present: %s: ip %q is not a valid IP address", id, h.IP)
+		}
+		if err := famshared.NoWhitespace("name", h.Hostname); err != nil {
+			return nil, fmt.Errorf("host.present: %s: %w", id, err)
 		}
 		h.id = id
 		h.file = mctx.File

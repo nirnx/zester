@@ -1,5 +1,10 @@
 package exec
 
+import (
+	"fmt"
+	"unicode"
+)
+
 // CronLabelPrefix marks a crontab comment line as a Zester-managed entry
 // label (Salt's SALT_CRON_IDENTIFIER equivalent): `# ZESTER_CRON_ID: <label>`.
 // Only marker comments carry entry identity — ordinary human comments above a
@@ -21,6 +26,38 @@ type CronEntry struct {
 	// semantics). It is serialized as a `# ZESTER_CRON_ID: <label>` marker
 	// line; non-marker crontab comments never populate this field.
 	Comment string
+}
+
+// Validate rejects an entry whose fields would corrupt the crontab when
+// serialized. The five schedule fields are single whitespace-delimited
+// columns — a space or tab inside one shifts every following column (and
+// the command) over, silently changing WHEN and WHAT runs. A newline or any
+// other control character in ANY field splices extra lines into the crontab:
+// a second, unmanaged job installed under the state's identity (the classic
+// vector is a value taken from another peel's facts via basket()). Command
+// and Comment are the rest of their lines, so they reject control
+// characters only; interior spaces are legitimate there.
+func (e CronEntry) Validate() error {
+	for _, f := range []struct{ name, val string }{
+		{"minute", e.Minute}, {"hour", e.Hour}, {"day-of-month", e.DayOfMonth},
+		{"month", e.Month}, {"day-of-week", e.DayOfWeek},
+	} {
+		for i, r := range f.val {
+			if unicode.IsSpace(r) || unicode.IsControl(r) {
+				return fmt.Errorf("exec: crontab: %s field %q: whitespace or control character %q at byte %d is not allowed", f.name, f.val, r, i)
+			}
+		}
+	}
+	for _, f := range []struct{ name, val string }{
+		{"command", e.Command}, {"comment", e.Comment}, {"user", e.User},
+	} {
+		for i, r := range f.val {
+			if unicode.IsControl(r) {
+				return fmt.Errorf("exec: crontab: %s: control character %q at byte %d is not allowed", f.name, r, i)
+			}
+		}
+	}
+	return nil
 }
 
 // FindCronEntry returns the index of the entry in existing that shares

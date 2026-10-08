@@ -39,8 +39,10 @@ family + `mod` (`file/` → `filemod`, `ssh_auth/` → `sshauthmod`, …):
   `Registration`, `BuildFunc`/`PlainBuildFunc`, and `MustSpec`.
 - **`internal/famshared/`** — helpers used by MORE THAN ONE family package
   (`ContainsString`, `ReadManagedFile`/`RevertHostsFile`/`SplitHostLines`/
-  `JoinHostLines`, `DetectPkgSystem`, …). A helper used by a single family
-  stays unexported inside that family.
+  `JoinHostLines`, `DetectPkgSystem`, the builder-tail value validators
+  `NoControlChars`/`NoWhitespace` for modules that splice parameters into
+  line- or whitespace-delimited system files, …). A helper used by a single
+  family stays unexported inside that family.
 - **`pkg/state/modules` (the aggregator)** — concatenates the family `Rows`
   into the full table (historical family order, `module.run` LAST), owns
   `RegisterAll`, the dispatch-surface docs (`dispatch_docs.go`), and the

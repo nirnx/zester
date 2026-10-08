@@ -128,6 +128,13 @@ var sshAuthPresentSpec = regdef.MustSpec("ssh_auth.present", modschema.KindState
 		},
 		{
 			Level: "info",
+			Title: "Values are validated at build time",
+			Body: "The key (`name`) and `comment` are rejected if they contain control characters (a newline " +
+				"would splice an extra key line into `authorized_keys`), and `enc` is rejected if it contains " +
+				"any whitespace — the state fails to build instead of writing a corrupted file.",
+		},
+		{
+			Level: "info",
 			Title: "Divergences from Salt",
 			Body: "`config` is used as the LITERAL `authorized_keys` path (so it must be absolute to be " +
 				"meaningful), whereas Salt's `config` is relative to the user's home directory (default " +
@@ -162,6 +169,20 @@ func NewSSHAuthPresentBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOpt
 		s.Key = strings.TrimSpace(s.Key)
 		if s.Config == "" && s.User == "" {
 			return nil, fmt.Errorf("ssh_auth.present: %s: user or config path is required", id)
+		}
+		// authorized_keys is line-oriented and whitespace-delimited: a newline
+		// in any value would splice an extra, unmanaged key line into the
+		// file; a space inside the key type would split the first column.
+		// The key itself and the comment may contain spaces (a full key line,
+		// a free-text comment) but never control characters.
+		for _, chk := range []error{
+			famshared.NoControlChars("name", s.Key),
+			famshared.NoWhitespace("enc", s.Enc),
+			famshared.NoControlChars("comment", s.Comment),
+		} {
+			if chk != nil {
+				return nil, fmt.Errorf("ssh_auth.present: %s: %w", id, chk)
+			}
 		}
 		s.id = id
 		s.file = mctx.File

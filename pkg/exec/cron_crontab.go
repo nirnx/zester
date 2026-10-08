@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -23,9 +24,35 @@ func NewCrontabProvider(cmd CommandExec) *CrontabProvider {
 	return &CrontabProvider{cmd: cmd}
 }
 
+// cronUserPattern is the conservative allowlist for a crontab owner handed to
+// `crontab -u`: a POSIX-portable account name (letters, digits, `_`, then
+// `.`/`@`/`-` too, an optional trailing `$` for machine accounts). It admits
+// no whitespace, control characters, or shell metacharacters. The write path
+// pipes the crontab through `sh -c`, so a user like `root; touch /tmp/pwned`
+// would otherwise run as root with the crontab install.
+var cronUserPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.@-]*\$?$`)
+
+// validateCronUser rejects a crontab owner that cannot be passed safely to
+// crontab(1). The empty string is the "current user" sentinel and valid. The
+// shell write path ALSO quotes every argument (defense in depth); validating
+// up front additionally turns an opaque crontab failure into a clear error
+// and keeps `-u` from ever being handed an option-looking or garbage name.
+func validateCronUser(user string) error {
+	if user == "" {
+		return nil
+	}
+	if !cronUserPattern.MatchString(user) {
+		return fmt.Errorf("exec: crontab: invalid user name %q: must match %s (no whitespace, control characters, or shell metacharacters)", user, cronUserPattern)
+	}
+	return nil
+}
+
 // List returns all cron entries for the given user by parsing `crontab -l`.
 // Returns an empty slice if the user has no crontab.
 func (p *CrontabProvider) List(ctx context.Context, user string) ([]CronEntry, error) {
+	if err := validateCronUser(user); err != nil {
+		return nil, err
+	}
 	lines, err := p.readLines(ctx, user)
 	if err != nil {
 		return nil, err
@@ -44,6 +71,12 @@ func (p *CrontabProvider) List(ctx context.Context, user string) ([]CronEntry, e
 // with a Command fallback for comment-less entries. Only the targeted lines
 // change; the rest of the crontab is preserved byte-for-byte.
 func (p *CrontabProvider) Set(ctx context.Context, user string, entry CronEntry) error {
+	if err := validateCronUser(user); err != nil {
+		return err
+	}
+	if err := entry.Validate(); err != nil {
+		return err
+	}
 	lines, err := p.readLines(ctx, user)
 	if err != nil {
 		return err
@@ -76,6 +109,9 @@ func (p *CrontabProvider) Set(ctx context.Context, user string, entry CronEntry)
 // its marker line). All other lines are preserved verbatim; when nothing
 // matches, the crontab is not rewritten at all.
 func (p *CrontabProvider) Remove(ctx context.Context, user string, command string) error {
+	if err := validateCronUser(user); err != nil {
+		return err
+	}
 	lines, err := p.readLines(ctx, user)
 	if err != nil {
 		return err
@@ -136,10 +172,16 @@ func (p *CrontabProvider) writeLines(ctx context.Context, user string, lines []s
 	}
 
 	// CommandExec.Run has no stdin injection — pipe the content in via
-	// shell-mode printf.
-	quoted := shellQuote(content)
+	// shell-mode printf. EVERY word that reaches the shell is single-quoted:
+	// the content AND each crontab argument (the user name included — it is
+	// also allowlisted by validateCronUser, but quoting makes the pipeline
+	// safe by construction rather than by validation alone).
+	quotedArgs := make([]string, len(args))
+	for i, a := range args {
+		quotedArgs[i] = shellQuote(a)
+	}
 	opts := CommandOpts{
-		Command: fmt.Sprintf("printf '%%s' %s | crontab %s", quoted, strings.Join(args, " ")),
+		Command: fmt.Sprintf("printf '%%s' %s | crontab %s", shellQuote(content), strings.Join(quotedArgs, " ")),
 		Shell:   true,
 	}
 	if _, err := p.cmd.Run(ctx, opts); err != nil {

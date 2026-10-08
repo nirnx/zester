@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,6 +15,10 @@ type OSFileExec struct{}
 
 func (e *OSFileExec) ReadFile(_ context.Context, path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+func (e *OSFileExec) Open(_ context.Context, path string) (io.ReadCloser, error) {
+	return os.Open(path)
 }
 
 func (e *OSFileExec) WriteFile(_ context.Context, path string, data []byte, perm fs.FileMode) error {

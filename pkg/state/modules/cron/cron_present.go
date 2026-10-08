@@ -8,6 +8,7 @@ import (
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state/modules/internal/famshared"
 	"github.com/nirnx/zester/pkg/state/modules/regdef"
 )
 
@@ -107,6 +108,13 @@ var cronPresentSpec = regdef.MustSpec("cron.present", modschema.KindState, CronP
 				"distinct names and the same command coexist as separate entries.",
 		},
 		{
+			Level: "info",
+			Title: "Values are validated at build time",
+			Body: "The five schedule fields must contain no whitespace, and `command`, `name`, and `user` " +
+				"no control characters — a newline would splice a second, unmanaged job into the crontab, " +
+				"so the state fails to build instead.",
+		},
+		{
 			Level: "warn",
 			Title: "An integer minute now means that minute",
 			Body: "Under the uniform decoder a YAML/msgpack integer schedule value (for example " +
@@ -135,6 +143,27 @@ func NewCronPresentBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOption
 		c := &CronPresent{}
 		if _, err := cronPresentSpec.Decode(id, config, c, opts); err != nil {
 			return nil, fmt.Errorf("cron.present: %w", err)
+		}
+		// Builder-tail module logic (not schema): a crontab is line-oriented
+		// with five whitespace-delimited schedule columns. A space inside a
+		// schedule field shifts every following column (changing WHEN and
+		// WHAT runs); a newline in ANY value splices a second, unmanaged job
+		// into the crontab under this state's identity. The exec layer
+		// (CronEntry.Validate) enforces the same rules as a second choke
+		// point; validating here fails the build with a pointed error.
+		for _, chk := range []error{
+			famshared.NoWhitespace("minute", c.Minute),
+			famshared.NoWhitespace("hour", c.Hour),
+			famshared.NoWhitespace("daymonth", c.DayMonth),
+			famshared.NoWhitespace("month", c.Month),
+			famshared.NoWhitespace("dayweek", c.DayWeek),
+			famshared.NoControlChars("command", c.Command),
+			famshared.NoControlChars("name", c.Label),
+			famshared.NoControlChars("user", c.User),
+		} {
+			if chk != nil {
+				return nil, fmt.Errorf("cron.present: %s: %w", id, chk)
+			}
 		}
 		c.id = id
 		c.cron = mctx.Cron

@@ -8,6 +8,7 @@ import (
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state/modules/internal/famshared"
 	"github.com/nirnx/zester/pkg/state/modules/regdef"
 )
 
@@ -132,6 +133,13 @@ var mountMountedSpec = regdef.MustSpec("mount.mounted", modschema.KindState, Mou
 		},
 		{
 			Level: "info",
+			Title: "Values are validated at build time",
+			Body: "`name`, `device`, `fstype`, and `opts` are each a single fstab column and must contain no " +
+				"whitespace or control characters — a space would shift the columns and a newline would " +
+				"append an extra fstab entry, so the state fails to build instead.",
+		},
+		{
+			Level: "info",
 			Title: "persist defaults to true; integer dump/pass are honored",
 			Body: "`persist` defaults to true (the fstab entry is written so the mount survives a reboot); " +
 				"set `persist: false` to mount without editing fstab. Under the uniform decoder an integer " +
@@ -159,6 +167,23 @@ func NewMountMountedBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptio
 		m := &MountMounted{}
 		if _, err := mountMountedSpec.Decode(id, config, m, opts); err != nil {
 			return nil, fmt.Errorf("mount.mounted: %w", err)
+		}
+		// Builder-tail module logic (not schema): every one of these is a
+		// single whitespace-delimited fstab column (opts is ONE comma-joined
+		// column), written verbatim. Whitespace inside one shifts the
+		// following columns; a newline appends an extra, unmanaged fstab
+		// entry. (fstab's `\040` escape for spaces in paths is not emitted,
+		// so a mount point containing a space is rejected rather than
+		// written unescaped.)
+		for _, chk := range []error{
+			famshared.NoWhitespace("name", m.MountPoint),
+			famshared.NoWhitespace("device", m.Device),
+			famshared.NoWhitespace("fstype", m.FSType),
+			famshared.NoWhitespace("opts", m.Options),
+		} {
+			if chk != nil {
+				return nil, fmt.Errorf("mount.mounted: %s: %w", id, chk)
+			}
 		}
 		m.id = id
 		m.mount = mctx.Mount

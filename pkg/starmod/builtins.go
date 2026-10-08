@@ -100,6 +100,17 @@ func threadCtx(thread *starlark.Thread) context.Context {
 
 // ---------- Command execution ----------
 
+// makeCmdRun builds the `cmd_run(command, args=[], cwd="", env={}, shell=False)`
+// builtin. The command runs through the ModuleContext's CommandExec with the
+// SAME contract as every other caller: `shell=True` (with no args) hands the
+// command string to `sh -c`; otherwise `command` is exec'd directly as a
+// binary name/path with `args` passed verbatim — it is never word-split. So
+// `cmd_run("ls -la")` is a lookup failure for a binary literally named
+// "ls -la" (surfaced in the result dict's "error" key), while
+// `cmd_run("ls", args=["-la"])` and `cmd_run("ls -la", shell=True)` both
+// work. There is no implicit shell fallback: a value interpolated into the
+// command string cannot be interpreted unless the module author opted into
+// the shell explicitly.
 func makeCmdRun(mctx *exec.ModuleContext) func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
 	return func(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		if mctx.Command == nil {

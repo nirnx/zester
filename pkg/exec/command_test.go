@@ -2,6 +2,8 @@ package exec
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -36,16 +38,40 @@ func TestOSCommandExecShell(t *testing.T) {
 	}
 }
 
-func TestOSCommandExecNoArgsDefaultsToShell(t *testing.T) {
+func TestOSCommandExecNoArgsNoShellExecsBareBinary(t *testing.T) {
+	// Shell:false with no Args exec's Command directly as a bare binary —
+	// it is NOT routed through `sh -c`.
 	e := &OSCommandExec{}
 	r, err := e.Run(context.Background(), CommandOpts{
-		Command: "echo default-shell",
+		Command: "true",
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if r.Stdout != "default-shell" {
-		t.Errorf("Stdout: got %q, want %q", r.Stdout, "default-shell")
+	if r.ExitCode != 0 {
+		t.Errorf("ExitCode: got %d, want 0", r.ExitCode)
+	}
+}
+
+func TestOSCommandExecNoShellNeverInterpretsCommandString(t *testing.T) {
+	// Regression for the implicit-shell fallback: a Shell:false command
+	// string with no Args used to be silently handed to `sh -c`, so a value
+	// interpolated into Command by a caller that never asked for a shell
+	// was interpreted — metacharacters and all. It must now be treated as a
+	// single binary name (a lookup failure), and the payload must not run.
+	marker := filepath.Join(t.TempDir(), "pwned")
+	e := &OSCommandExec{}
+	r, err := e.Run(context.Background(), CommandOpts{
+		Command: "true; touch " + marker,
+	})
+	if err == nil {
+		t.Fatal("expected a lookup error for a space-containing binary name, got success")
+	}
+	if r == nil || r.ExitCode != -1 {
+		t.Errorf("expected ExitCode -1 (never spawned), got %+v", r)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatalf("shell payload RAN: marker %s exists", marker)
 	}
 }
 
@@ -67,7 +93,8 @@ func TestOSCommandExecCwd(t *testing.T) {
 func TestOSCommandExecEnv(t *testing.T) {
 	e := &OSCommandExec{}
 	r, err := e.Run(context.Background(), CommandOpts{
-		Command: "sh -c 'echo $ZESTER_TEST_VAR'",
+		Command: "echo $ZESTER_TEST_VAR",
+		Shell:   true,
 		Env:     map[string]string{"ZESTER_TEST_VAR": "test_value"},
 	})
 	if err != nil {
@@ -97,7 +124,8 @@ func TestOSCommandExecFailure(t *testing.T) {
 func TestOSCommandExecStderr(t *testing.T) {
 	e := &OSCommandExec{}
 	r, err := e.Run(context.Background(), CommandOpts{
-		Command: "sh -c 'echo oops >&2'",
+		Command: "echo oops >&2",
+		Shell:   true,
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -113,7 +141,8 @@ func TestOSCommandExecCanceled(t *testing.T) {
 
 	e := &OSCommandExec{}
 	_, err := e.Run(ctx, CommandOpts{
-		Command: "sleep 10",
+		Command: "sleep",
+		Args:    []string{"10"},
 	})
 	if err == nil {
 		t.Fatal("expected error for canceled context")

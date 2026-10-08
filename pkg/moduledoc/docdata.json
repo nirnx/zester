@@ -4,10 +4,10 @@
     "Kind": "state",
     "Doc": {
       "Summary": "Extract a tar or zip archive (from a local path or URL) into a target directory.",
-      "Description": "`archive.extracted` extracts `source` (a local file path or an http/https/ftp URL) into `name` (the target directory, defaulting to the state ID). Idempotency has three independent strengths, weakest to strongest: without `if_missing` or `source_hash`, a PRE-EXISTING target directory alone counts as \"already extracted\" (declare one of them for anything beyond throwaway use); `if_missing` names a path whose existence is the sole extraction marker (Salt parity), replacing the weak directory check; `source_hash` records the declared value in a marker file after a successful extraction and re-extracts when the declaration no longer matches — it is an OPAQUE string comparison, never a checksum verified against the archive bytes.",
+      "Description": "`archive.extracted` extracts `source` (a local file path or an http/https/ftp URL) into `name` (the target directory, defaulting to the state ID). Idempotency has three independent strengths, weakest to strongest: without `if_missing` or `source_hash`, a PRE-EXISTING target directory alone counts as \"already extracted\" (declare one of them for anything beyond throwaway use); `if_missing` names a path whose existence is the sole extraction marker (Salt parity), replacing the weak directory check; `source_hash` records the declared value in a marker file after a successful extraction and re-extracts when the declaration no longer matches.\n\n`source_hash` is also an INTEGRITY check: before anything is extracted, the archive bytes (the local file, or the downloaded temp file) are hashed and compared with the declaration — `sha256=<hex>`, `sha256:<hex>`, `sha1=…`, `sha512=…`, `md5=…`, or a bare hex digest whose algorithm is inferred from its length (32/40/64/128). A mismatch fails the state with nothing extracted. A remote `source` over plain `http://` or `ftp://` carries no transport integrity, so it is refused at build time unless it declares a verifiable `source_hash` or sets `skip_verify: true`; `https://` without a hash is allowed (TLS provides transport integrity) and with one it is verified like any other source.",
       "Effects": {
-        "Check": "With `if_missing` set: reports a change unless that path exists (the target-directory fallback is not consulted). Without it: reports a change unless the target directory exists — and a directory this run's `makedirs` created ahead of a FAILED extraction attempt does not count (a retried Apply proceeds rather than latching on its own directory). When `source_hash` is declared, ALSO requires a marker file recording that exact value to exist inside the target — an unset or mismatched marker reports a change even if the directory/`if_missing` guard passed, so bumping `source`/`source_hash` re-extracts.",
-        "Apply": "Re-evaluates the same guard as Check (a watch-forced apply bypasses Check entirely, and an already-extracted archive must be a clean no-op — never a re-download/re-extract over local modifications). When extraction is needed: creates the target directory (mode 0755) when `makedirs` is set and it does not already exist; downloads a remote `source` (http/https/ftp) to a temp file via `curl -fSL`, falling back to `wget` when curl is unavailable; extracts with `unzip -o <archive> -d <dir>` (zip) or `tar -xf <archive> -C <dir>` (tar), inferring the format from the source name when `archive_format` is `auto` (`.zip` → zip; `.tgz`/`.tbz2`/`.txz`/anything containing `.tar` → tar; anything else defaults to tar); a non-zero exit fails the state. Only AFTER a successful extraction does it write the `source_hash` marker (a failed attempt never latches the state as done). Reports the source, target, and resolved format in its details.",
+        "Check": "With `if_missing` set: reports a change unless that path exists (the target-directory fallback is not consulted). Without it: reports a change unless the target directory exists — and a directory this run's `makedirs` created ahead of a FAILED extraction attempt does not count (a retried Apply proceeds rather than latching on its own directory). When `source_hash` is declared, ALSO requires a marker file recording that exact value to exist inside the target — an unset or mismatched marker reports a change even if the directory/`if_missing` guard passed, so bumping `source`/`source_hash` re-extracts. Check never downloads or hashes the archive.",
+        "Apply": "Re-evaluates the same guard as Check (a watch-forced apply bypasses Check entirely, and an already-extracted archive must be a clean no-op — never a re-download/re-extract over local modifications). When extraction is needed: creates the target directory (mode 0755) when `makedirs` is set and it does not already exist; downloads a remote `source` (http/https/ftp) to a temp file via `curl -fSL`, falling back to `wget` when curl is unavailable; when `source_hash` is declared (and `skip_verify` is not set), streams the archive through the declared digest and FAILS — extracting nothing and writing no marker — on a mismatch; extracts with `unzip -o <archive> -d <dir>` (zip) or `tar -xf <archive> -C <dir>` (tar), inferring the format from the source name when `archive_format` is `auto` (`.zip` → zip; `.tgz`/`.tbz2`/`.txz`/anything containing `.tar` → tar; anything else defaults to tar); a non-zero exit fails the state. Only AFTER a successful extraction does it write the `source_hash` marker (a failed download, verification, or extraction never latches the state as done). Reports the source, target, and resolved format in its details.",
         "Revert": "If Apply created the target directory (via `makedirs`), removes it recursively. Otherwise an explicit no-op (`Changed: false`) — individual extracted files are not tracked, so there is nothing else safe to remove.",
         "Execution": ""
       },
@@ -15,7 +15,7 @@
         {
           "Title": "Extract a release tarball once",
           "Kind": "state",
-          "Explanation": "if_missing points at a file the archive actually creates, the real extraction marker.",
+          "Explanation": "if_missing points at a file the archive actually creates, the real extraction marker; https needs no hash.",
           "Code": "/opt/prometheus:\n  archive.extracted:\n    - source: https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz\n    - if_missing: /opt/prometheus/prometheus-2.53.0.linux-amd64\n    - makedirs: true\n"
         },
         {
@@ -25,10 +25,16 @@
           "Code": "/srv/webapp:\n  archive.extracted:\n    - source: /tmp/webapp-release.zip\n    - archive_format: zip\n    - if_missing: /srv/webapp/index.html\n"
         },
         {
-          "Title": "Re-extract on a version bump with source_hash",
+          "Title": "Verify the download and re-extract on a version bump",
           "Kind": "state",
-          "Explanation": "Changing source_hash (or source) triggers re-extraction on the next run; the value is an opaque declaration, not a verified checksum.",
-          "Code": "/opt/myapp:\n  archive.extracted:\n    - source: /srv/releases/myapp-2.0.0.tar.gz\n    - source_hash: \"sha256=<hex-of-2.0.0>\"\n    - makedirs: true\n"
+          "Explanation": "source_hash is checked against the archive bytes before extraction, and a changed declaration (with its new source) triggers re-extraction on the next run.",
+          "Code": "/opt/myapp:\n  archive.extracted:\n    - source: https://releases.example.com/myapp-2.0.0.tar.gz\n    - source_hash: sha256=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n    - makedirs: true\n"
+        },
+        {
+          "Title": "Fetch over plain http",
+          "Kind": "state",
+          "Explanation": "A plain http:// (or ftp://) source is refused without a source_hash; skip_verify: true accepts the unverified download explicitly.",
+          "Code": "/opt/legacy-tool:\n  archive.extracted:\n    - source: http://mirror.internal/legacy-tool.tar.gz\n    - skip_verify: true\n    - if_missing: /opt/legacy-tool/bin/tool\n"
         },
         {
           "Title": "Extract an archive ad hoc",
@@ -45,13 +51,18 @@
         },
         {
           "Level": "info",
-          "Title": "source_hash is an opaque declaration, not a checksum",
-          "Body": "`source_hash` is compared as a plain string against a marker recorded after the LAST successful extraction — it is never verified against the actual archive bytes. It exists purely to detect \"the declared version changed since last time\", not to authenticate the download."
+          "Title": "source_hash is verified against the archive bytes",
+          "Body": "A declared `source_hash` is checked against the actual archive (local file or downloaded temp file) BEFORE extraction; a mismatch fails the state with nothing extracted and no marker written. Accepted forms: `sha256=<hex>`, `sha256:<hex>`, `sha1=`, `sha512=`, `md5=`, or a bare hex digest (algorithm inferred from its length). A value that is none of these fails the build — unless `skip_verify: true`, which disables the byte check and lets any string act purely as the \"declared version changed\" marker (the pre-verification behavior). The marker still records the declaration verbatim, so existing markers from earlier runs remain valid."
+        },
+        {
+          "Level": "warn",
+          "Title": "Plain http:// and ftp:// sources need a hash or skip_verify",
+          "Body": "An unencrypted download can be tampered with in transit, so a plain `http://` or `ftp://` `source` without a verifiable `source_hash` is refused when the state is built. Declare the hash, move to `https://`, or set `skip_verify: true` to accept the risk explicitly. `https://` sources need no hash."
         },
         {
           "Level": "info",
           "Title": "Divergences from Salt",
-          "Body": "Idempotency is purely path/marker-based (`if_missing`, the `source_hash` marker, or target-directory existence, per the note above) — Salt's `enforce_toplevel`, `options`, `user`/`group`, `clean`, and `trim_output` parameters are not supported. Extraction requires `tar`/`unzip` (and `curl` or `wget` for remote sources) to be present on the peel."
+          "Body": "Idempotency is purely path/marker-based (`if_missing`, the `source_hash` marker, or target-directory existence, per the note above) — Salt's `enforce_toplevel`, `options`, `user`/`group`, `clean`, and `trim_output` parameters are not supported, and `source_hash` must be an inline digest (a URL to a checksum file is not fetched). Extraction requires `tar`/`unzip` (and `curl` or `wget` for remote sources) to be present on the peel."
         }
       ],
       "Divergences": [
@@ -93,7 +104,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "local file path, or an http/https/ftp URL to the archive; required",
+        "Usage": "local file path, or an http/https/ftp URL to the archive; required (a plain http:// or ftp:// source needs source_hash or skip_verify)",
         "Required": true,
         "Primary": false,
         "Lazy": false,
@@ -171,7 +182,7 @@
         "Aliases": null,
         "GoType": "string",
         "SemanticType": "",
-        "Usage": "declared hash of the source archive (e.g. sha256=<hex>); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes",
+        "Usage": "digest of the source archive (sha256=<hex>, sha256:<hex>, sha1=, sha512=, md5=, or a bare hex digest); verified against the archive bytes before extraction and recorded as the version marker; required for a plain http:// or ftp:// source unless skip_verify is set",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -198,6 +209,37 @@
         "GoType": "bool",
         "SemanticType": "",
         "Usage": "create the target directory (and parents, mode 0755) before extracting; a boolean that also accepts the integers 1 (true) and 0 (false)",
+        "Required": false,
+        "Primary": false,
+        "Lazy": false,
+        "Sensitive": false,
+        "HasDefault": false,
+        "Default": "",
+        "JSONSchema": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      {
+        "Name": "skip_verify",
+        "Aliases": null,
+        "GoType": "bool",
+        "SemanticType": "",
+        "Usage": "skip verifying source_hash against the archive bytes and allow a plain http:// or ftp:// source without one; source_hash is then only an opaque version marker; a boolean that also accepts the integers 1 (true) and 0 (false)",
         "Required": false,
         "Primary": false,
         "Lazy": false,
@@ -665,6 +707,11 @@
           "Level": "info",
           "Title": "Identity is the name, not the command",
           "Body": "The entry's identity is its `name` (stamped as a `# ZESTER_CRON_ID:` marker). Editing the `command` under an unchanged name replaces the line in place; two states with distinct names and the same command coexist as separate entries."
+        },
+        {
+          "Level": "info",
+          "Title": "Values are validated at build time",
+          "Body": "The five schedule fields must contain no whitespace, and `command`, `name`, and `user` no control characters — a newline would splice a second, unmanaged job into the crontab, so the state fails to build instead."
         },
         {
           "Level": "warn",
@@ -4941,6 +4988,11 @@
           "Level": "info",
           "Title": "Comment and blank lines are preserved",
           "Body": "The hosts file is rewritten in memory with existing comment (`#`) and blank lines kept verbatim; the hostname is removed from every line it appears on and a line left with no remaining names is dropped. A missing hosts file is a clean no-op."
+        },
+        {
+          "Level": "info",
+          "Title": "Values are validated at build time",
+          "Body": "`name` must be a single token with no whitespace or control characters; the state fails to build otherwise."
         }
       ],
       "Divergences": [
@@ -5057,6 +5109,11 @@
           "Level": "info",
           "Title": "Comment and blank lines are preserved",
           "Body": "The hosts file is rewritten in memory: existing comment (`#`) and blank lines are kept verbatim. The hostname is added to the existing line for its IP or appended as a new tab-separated line for that IP, and a missing hosts file is created."
+        },
+        {
+          "Level": "info",
+          "Title": "Values are validated at build time",
+          "Body": "`ip` must parse as an IPv4 or IPv6 address and `name` must be a single token with no whitespace or control characters — a value carrying a newline or a space would inject an extra hosts line or split a field, so the state fails to build instead."
         },
         {
           "Level": "info",
@@ -5321,6 +5378,11 @@
           "Level": "warning",
           "Title": "The live mount's config is not compared",
           "Body": "mount.mounted compares only mount-point PRESENCE and the fstab entry — never the live mount's own device/fstype/options. Reconciling fstab-language configuration with the kernel's `/proc/mounts` view needs normalization (fstab-only options, negotiated fstypes, UUID=/LABEL= aliasing) that does not yet exist; without it, a naive comparison would perpetually escalate to unmounting a live production filesystem. Apply mounts only when nothing is mounted at the point and NEVER unmounts."
+        },
+        {
+          "Level": "info",
+          "Title": "Values are validated at build time",
+          "Body": "`name`, `device`, `fstype`, and `opts` are each a single fstab column and must contain no whitespace or control characters — a space would shift the columns and a newline would append an extra fstab entry, so the state fails to build instead."
         },
         {
           "Level": "info",
@@ -6382,6 +6444,11 @@
           "Level": "warning",
           "Title": "Apt keys use the deprecated apt-key add",
           "Body": "Apt keys are imported with the deprecated `apt-key add`; Salt supports `signed-by` / keyring-file placement. The key bytes are written direct-to-disk with `curl -o` (never routed through captured stdout, which would corrupt a binary non-armored `.gpg` key)."
+        },
+        {
+          "Level": "info",
+          "Title": "Values are validated at build time",
+          "Body": "The repository `name` must consist of letters, digits, `.`, `_`, and `-` only (it becomes a filename under `/etc/apt/sources.list.d`, `/etc/yum.repos.d`, and `/etc/apt/keyrings`), and `humanname`, `baseurl`, and `key_url` must contain no control characters — a newline would append an extra line to the repo file, so the state fails to build instead."
         },
         {
           "Level": "info",
@@ -7525,6 +7592,11 @@
         },
         {
           "Level": "info",
+          "Title": "Values are validated at build time",
+          "Body": "The key (`name`) and `comment` are rejected if they contain control characters (a newline would splice an extra key line into `authorized_keys`), and `enc` is rejected if it contains any whitespace — the state fails to build instead of writing a corrupted file."
+        },
+        {
+          "Level": "info",
           "Title": "Divergences from Salt",
           "Body": "`config` is used as the LITERAL `authorized_keys` path (so it must be absolute to be meaningful), whereas Salt's `config` is relative to the user's home directory (default `.ssh/authorized_keys`). Salt's `options` (key options such as `no-pty`) and `source` (key-file URL) parameters are not supported. The `user` is resolved via the peel's OS user database, and the `.ssh` directory and file are written by the peel's file provider — ownership is not changed to the target user."
         }
@@ -7876,6 +7948,11 @@
         }
       ],
       "Notes": [
+        {
+          "Level": "info",
+          "Title": "Values are validated at build time",
+          "Body": "The parameter `name` must consist of letters, digits, `.`, `_`, `-`, and `/` only, and `value` must contain no control characters — a newline would append an extra line to the sysctl drop-in, so the state fails to build instead."
+        },
         {
           "Level": "info",
           "Title": "persist defaults to true and verifies the drop-in",

@@ -5,13 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
 	"github.com/nirnx/zester/pkg/modschema"
 	"github.com/nirnx/zester/pkg/state"
+	"github.com/nirnx/zester/pkg/state/modules/internal/famshared"
 	"github.com/nirnx/zester/pkg/state/modules/regdef"
 )
+
+// sysctlKeyPattern is the allowlist for a kernel parameter name: dotted or
+// slash-separated path segments of letters, digits, `_`, `-`, `.`, `/` (the
+// `/` form is how an interface name containing a dot is written, e.g.
+// `net.ipv4.conf.eth0/100.rp_filter`). The key is both passed to `sysctl -w`
+// and written as the left-hand side of a `key = value` drop-in line, so
+// whitespace, `=`, or a newline would corrupt the drop-in or set a different
+// parameter.
+var sysctlKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 // SysctlPresent implements the sysctl.present state.
 // It ensures a kernel parameter is set to the desired value at runtime
@@ -109,6 +120,13 @@ var sysctlPresentSpec = regdef.MustSpec("sysctl.present", modschema.KindState, S
 	Notes: []modschema.Note{
 		{
 			Level: "info",
+			Title: "Values are validated at build time",
+			Body: "The parameter `name` must consist of letters, digits, `.`, `_`, `-`, and `/` only, and " +
+				"`value` must contain no control characters — a newline would append an extra line to the " +
+				"sysctl drop-in, so the state fails to build instead.",
+		},
+		{
+			Level: "info",
 			Title: "persist defaults to true and verifies the drop-in",
 			Body: "`persist` defaults to true: the value is written to the Zester sysctl drop-in (`/etc/sysctl.d/99-zester.conf`) AND that " +
 				"entry is verified during Check, so a runtime-only change (a manual `sysctl -w`) reads as " +
@@ -135,6 +153,15 @@ func NewSysctlPresentBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOpti
 		s := &SysctlPresent{}
 		if _, err := sysctlPresentSpec.Decode(id, config, s, opts); err != nil {
 			return nil, fmt.Errorf("sysctl.present: %w", err)
+		}
+		// Builder-tail module logic (not schema): both values are written
+		// verbatim into the `key = value` drop-in line; a newline in the
+		// value would append an extra, unmanaged kernel setting.
+		if !sysctlKeyPattern.MatchString(s.Key) {
+			return nil, fmt.Errorf("sysctl.present: %s: kernel parameter name %q is invalid (allowed: letters, digits, '.', '_', '-', '/')", id, s.Key)
+		}
+		if err := famshared.NoControlChars("value", s.Value); err != nil {
+			return nil, fmt.Errorf("sysctl.present: %s: %w", id, err)
 		}
 		s.id = id
 		s.sysctl = mctx.Sysctl

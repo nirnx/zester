@@ -1,8 +1,10 @@
 package exectest
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"sort"
 	"strings"
@@ -51,6 +53,17 @@ func (f *FakeFileExec) ReadFile(_ context.Context, path string) ([]byte, error) 
 	cp := make([]byte, len(ff.data))
 	copy(cp, ff.data)
 	return cp, nil
+}
+
+// Open returns a streaming reader over the in-memory file. It honors the
+// same injected read errors as ReadFile (SetReadError) and reports a missing
+// path as fs.ErrNotExist.
+func (f *FakeFileExec) Open(ctx context.Context, path string) (io.ReadCloser, error) {
+	data, err := f.ReadFile(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func (f *FakeFileExec) WriteFile(_ context.Context, path string, data []byte, perm fs.FileMode) error {

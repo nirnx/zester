@@ -21,7 +21,9 @@ Extract a tar or zip archive (from a local path or URL) into a target directory.
 
 ---
 
-`archive.extracted` extracts `source` (a local file path or an http/https/ftp URL) into `name` (the target directory, defaulting to the state ID). Idempotency has three independent strengths, weakest to strongest: without `if_missing` or `source_hash`, a PRE-EXISTING target directory alone counts as "already extracted" (declare one of them for anything beyond throwaway use); `if_missing` names a path whose existence is the sole extraction marker (Salt parity), replacing the weak directory check; `source_hash` records the declared value in a marker file after a successful extraction and re-extracts when the declaration no longer matches — it is an OPAQUE string comparison, never a checksum verified against the archive bytes.
+`archive.extracted` extracts `source` (a local file path or an http/https/ftp URL) into `name` (the target directory, defaulting to the state ID). Idempotency has three independent strengths, weakest to strongest: without `if_missing` or `source_hash`, a PRE-EXISTING target directory alone counts as "already extracted" (declare one of them for anything beyond throwaway use); `if_missing` names a path whose existence is the sole extraction marker (Salt parity), replacing the weak directory check; `source_hash` records the declared value in a marker file after a successful extraction and re-extracts when the declaration no longer matches.
+
+`source_hash` is also an INTEGRITY check: before anything is extracted, the archive bytes (the local file, or the downloaded temp file) are hashed and compared with the declaration — `sha256=<hex>`, `sha256:<hex>`, `sha1=…`, `sha512=…`, `md5=…`, or a bare hex digest whose algorithm is inferred from its length (32/40/64/128). A mismatch fails the state with nothing extracted. A remote `source` over plain `http://` or `ftp://` carries no transport integrity, so it is refused at build time unless it declares a verifiable `source_hash` or sets `skip_verify: true`; `https://` without a hash is allowed (TLS provides transport integrity) and with one it is verified like any other source.
 
 ---
 
@@ -30,11 +32,12 @@ Extract a tar or zip archive (from a local path or URL) into a target directory.
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | `string` | No | State ID | target directory the archive is extracted into; defaults to the state ID |
-| `source` | `string` | Yes | *(none)* | local file path, or an http/https/ftp URL to the archive; required |
+| `source` | `string` | Yes | *(none)* | local file path, or an http/https/ftp URL to the archive; required (a plain http:// or ftp:// source needs source_hash or skip_verify) |
 | `archive_format` | `string` | No | `auto` | archive format: tar, zip, or auto (inferred from the source name); defaults to auto |
 | `if_missing` | `string` | No | *(none)* | path whose existence means the archive is already extracted; when set, it is the sole idempotency check (besides source_hash) |
-| `source_hash` | `string` | No | *(none)* | declared hash of the source archive (e.g. sha256=&lt;hex&gt;); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes |
+| `source_hash` | `string` | No | *(none)* | digest of the source archive (sha256=&lt;hex&gt;, sha256:&lt;hex&gt;, sha1=, sha512=, md5=, or a bare hex digest); verified against the archive bytes before extraction and recorded as the version marker; required for a plain http:// or ftp:// source unless skip_verify is set |
 | `makedirs` | `bool` | No | *(none)* | create the target directory (and parents, mode 0755) before extracting; a boolean that also accepts the integers 1 (true) and 0 (false) |
+| `skip_verify` | `bool` | No | *(none)* | skip verifying source_hash against the archive bytes and allow a plain http:// or ftp:// source without one; source_hash is then only an opaque version marker; a boolean that also accepts the integers 1 (true) and 0 (false) |
 
 ---
 
@@ -42,11 +45,11 @@ Extract a tar or zip archive (from a local path or URL) into a target directory.
 
 #### Check
 
-With `if_missing` set: reports a change unless that path exists (the target-directory fallback is not consulted). Without it: reports a change unless the target directory exists — and a directory this run's `makedirs` created ahead of a FAILED extraction attempt does not count (a retried Apply proceeds rather than latching on its own directory). When `source_hash` is declared, ALSO requires a marker file recording that exact value to exist inside the target — an unset or mismatched marker reports a change even if the directory/`if_missing` guard passed, so bumping `source`/`source_hash` re-extracts.
+With `if_missing` set: reports a change unless that path exists (the target-directory fallback is not consulted). Without it: reports a change unless the target directory exists — and a directory this run's `makedirs` created ahead of a FAILED extraction attempt does not count (a retried Apply proceeds rather than latching on its own directory). When `source_hash` is declared, ALSO requires a marker file recording that exact value to exist inside the target — an unset or mismatched marker reports a change even if the directory/`if_missing` guard passed, so bumping `source`/`source_hash` re-extracts. Check never downloads or hashes the archive.
 
 #### Apply
 
-Re-evaluates the same guard as Check (a watch-forced apply bypasses Check entirely, and an already-extracted archive must be a clean no-op — never a re-download/re-extract over local modifications). When extraction is needed: creates the target directory (mode 0755) when `makedirs` is set and it does not already exist; downloads a remote `source` (http/https/ftp) to a temp file via `curl -fSL`, falling back to `wget` when curl is unavailable; extracts with `unzip -o <archive> -d <dir>` (zip) or `tar -xf <archive> -C <dir>` (tar), inferring the format from the source name when `archive_format` is `auto` (`.zip` → zip; `.tgz`/`.tbz2`/`.txz`/anything containing `.tar` → tar; anything else defaults to tar); a non-zero exit fails the state. Only AFTER a successful extraction does it write the `source_hash` marker (a failed attempt never latches the state as done). Reports the source, target, and resolved format in its details.
+Re-evaluates the same guard as Check (a watch-forced apply bypasses Check entirely, and an already-extracted archive must be a clean no-op — never a re-download/re-extract over local modifications). When extraction is needed: creates the target directory (mode 0755) when `makedirs` is set and it does not already exist; downloads a remote `source` (http/https/ftp) to a temp file via `curl -fSL`, falling back to `wget` when curl is unavailable; when `source_hash` is declared (and `skip_verify` is not set), streams the archive through the declared digest and FAILS — extracting nothing and writing no marker — on a mismatch; extracts with `unzip -o <archive> -d <dir>` (zip) or `tar -xf <archive> -C <dir>` (tar), inferring the format from the source name when `archive_format` is `auto` (`.zip` → zip; `.tgz`/`.tbz2`/`.txz`/anything containing `.tar` → tar; anything else defaults to tar); a non-zero exit fails the state. Only AFTER a successful extraction does it write the `source_hash` marker (a failed download, verification, or extraction never latches the state as done). Reports the source, target, and resolved format in its details.
 
 #### Revert
 
@@ -59,7 +62,7 @@ If Apply created the target directory (via `makedirs`), removes it recursively. 
 
 #### Extract a release tarball once
 
-if_missing points at a file the archive actually creates, the real extraction marker.
+if_missing points at a file the archive actually creates, the real extraction marker; https needs no hash.
 
 ```yaml
 /opt/prometheus:
@@ -81,16 +84,28 @@ archive_format overrides auto-detection; if_missing avoids re-extracting.
     - if_missing: /srv/webapp/index.html
 ```
 
-#### Re-extract on a version bump with source_hash
+#### Verify the download and re-extract on a version bump
 
-Changing source_hash (or source) triggers re-extraction on the next run; the value is an opaque declaration, not a verified checksum.
+source_hash is checked against the archive bytes before extraction, and a changed declaration (with its new source) triggers re-extraction on the next run.
 
 ```yaml
 /opt/myapp:
   archive.extracted:
-    - source: /srv/releases/myapp-2.0.0.tar.gz
-    - source_hash: "sha256=<hex-of-2.0.0>"
+    - source: https://releases.example.com/myapp-2.0.0.tar.gz
+    - source_hash: sha256=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
     - makedirs: true
+```
+
+#### Fetch over plain http
+
+A plain http:// (or ftp://) source is refused without a source_hash; skip_verify: true accepts the unverified download explicitly.
+
+```yaml
+/opt/legacy-tool:
+  archive.extracted:
+    - source: http://mirror.internal/legacy-tool.tar.gz
+    - skip_verify: true
+    - if_missing: /opt/legacy-tool/bin/tool
 ```
 
 #### Extract an archive ad hoc

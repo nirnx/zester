@@ -12,12 +12,16 @@ import (
 // OSCommandExec implements CommandExec using the os/exec package.
 type OSCommandExec struct{}
 
+// Run executes opts. The shell is involved ONLY when opts.Shell is true and
+// no Args are given (`sh -c <Command>`); every other shape exec's Command
+// directly as a binary name/path with Args passed verbatim. A Shell:false
+// command string is therefore never word-split or interpreted — "echo hi"
+// with no Args is a lookup failure for a binary literally named "echo hi",
+// not a shell invocation — so a caller that forgot Shell:true cannot be
+// turned into an injection sink by a value containing metacharacters.
 func (e *OSCommandExec) Run(ctx context.Context, opts CommandOpts) (*CommandResult, error) {
 	var cmd *osexec.Cmd
-
-	if len(opts.Args) == 0 && opts.Shell {
-		cmd = osexec.CommandContext(ctx, "sh", "-c", opts.Command)
-	} else if len(opts.Args) == 0 {
+	if opts.Shell && len(opts.Args) == 0 {
 		cmd = osexec.CommandContext(ctx, "sh", "-c", opts.Command)
 	} else {
 		cmd = osexec.CommandContext(ctx, opts.Command, opts.Args...)

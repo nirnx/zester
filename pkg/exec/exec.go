@@ -7,6 +7,7 @@ package exec
 
 import (
 	"context"
+	"io"
 	"io/fs"
 )
 
@@ -41,6 +42,12 @@ type PackageExec interface {
 type FileExec interface {
 	// ReadFile reads the contents of a file.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
+
+	// Open opens a file for streaming reads. It exists so a module can hash
+	// or scan a LARGE file (archive.extracted's source_hash verification)
+	// without loading it whole into memory via ReadFile, while staying on
+	// the injected provider. The caller closes the returned reader.
+	Open(ctx context.Context, path string) (io.ReadCloser, error)
 
 	// WriteFile writes data to a file with the given permissions.
 	WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error
@@ -81,14 +88,22 @@ type FileExec interface {
 
 // CommandOpts configures a command execution.
 type CommandOpts struct {
-	// Command is the command string or binary name.
+	// Command is the binary name/path to exec, or — with Shell set and no
+	// Args — the shell command line handed to `sh -c`.
 	Command string
 
-	// Args are the command arguments. When empty and Shell is true,
-	// Command is executed via "sh -c".
+	// Args are passed verbatim to the binary named by Command (no word
+	// splitting, no shell). When Args is non-empty the command is ALWAYS
+	// exec'd directly, even if Shell is true.
 	Args []string
 
-	// Shell runs the command through "sh -c" when true and Args is empty.
+	// Shell, when true and Args is empty, runs Command through `sh -c` so
+	// shell syntax (pipes, redirects, globs, $VARS) is interpreted. When
+	// false, Command is exec'd directly as a binary name or path — with no
+	// Args that is the bare binary — and is NEVER handed to a shell: a
+	// command string containing spaces or metacharacters is a lookup error,
+	// not an injection. There is no implicit shell fallback; callers that
+	// embed untrusted values use Shell:false with Args.
 	Shell bool
 
 	// Dir is the working directory.

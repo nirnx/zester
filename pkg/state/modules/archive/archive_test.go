@@ -228,6 +228,11 @@ func TestArchiveExtractedIdempotentAfterApply(t *testing.T) {
 	}
 }
 
+// TestArchiveExtractedSourceHash pins the source_hash MARKER semantics (the
+// "declared version changed" re-extraction trigger). The declarations here are
+// opaque strings, so every config sets skip_verify — the byte-verification
+// path (parseable digests checked against the archive) is covered separately
+// in archive_verify_test.go.
 func TestArchiveExtractedSourceHash(t *testing.T) {
 	ctx := context.Background()
 
@@ -236,6 +241,7 @@ func TestArchiveExtractedSourceHash(t *testing.T) {
 		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app-" + hash + ".tar.gz",
 			"source_hash": hash,
+			"skip_verify": true, // marker semantics only; byte verification is covered in archive_verify_test.go
 			"makedirs":    true,
 		})
 		if err != nil {
@@ -331,6 +337,7 @@ func TestArchiveExtractedSourceHash(t *testing.T) {
 		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=bbb222",
+			"skip_verify": true, // marker semantics only; byte verification is covered in archive_verify_test.go
 			"if_missing":  "/opt/app/bin/app",
 		})
 		if err != nil {
@@ -445,6 +452,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		prior, err := NewArchiveExtractedBuilder(testArchiveMctx(exectest.NewFakeCommandExec(), fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=aaa111",
+			"skip_verify": true, // marker semantics only; byte verification is covered in archive_verify_test.go
 			"makedirs":    true,
 		})
 		if err != nil {
@@ -458,6 +466,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=aaa111",
+			"skip_verify": true, // marker semantics only; byte verification is covered in archive_verify_test.go
 			"makedirs":    true,
 		})
 		if err != nil {
@@ -482,6 +491,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		prior, err := NewArchiveExtractedBuilder(testArchiveMctx(exectest.NewFakeCommandExec(), fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=aaa111",
+			"skip_verify": true, // marker semantics only; byte verification is covered in archive_verify_test.go
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -494,6 +504,7 @@ func TestArchiveExtractedWatchForcedApplyNoOp(t *testing.T) {
 		s, err := NewArchiveExtractedBuilder(testArchiveMctx(fakeCmd, fakeFile), modschema.DecodeOptions{})("/opt/app", map[string]any{
 			"source":      "/tmp/app.tar.gz",
 			"source_hash": "sha256=bbb222",
+			"skip_verify": true, // marker semantics only; byte verification is covered in archive_verify_test.go
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -672,9 +683,14 @@ var _ state.State = (*ArchiveExtracted)(nil)
 // approved by the legacy-vs-new equivalence comparison while the legacy
 // constructor still existed (see the migration changelog); after its deletion
 // this replay is the permanent regression guard for archive.extracted's
-// decode behavior, including the flagged BD-2/BD-6/BD-7 divergences and the
-// source_hash TrimSpace (builder-tail module logic, exercised here since it
-// runs on every decode path).
+// decode behavior, including the flagged BD-2/BD-6/BD-7 divergences (for
+// makedirs AND skip_verify), the source_hash TrimSpace, and the source_hash
+// digest parsing — the decode wrapper mirrors the builder tail's
+// resolveSourceHash (like pkgrepo's deriveHumanName) so the DERIVED
+// HashAlgo/HashHex facets and the value_invalid rejection of an unparseable
+// digest are pinned exactly as the builder computes them. The cross-field
+// insecure-transport gate (plain http/ftp without a hash) is exercised by the
+// unit tests, not this decoder contract.
 func TestArchiveExtractedContract(t *testing.T) {
 	decode := func(id string, config map[string]any) (any, error) {
 		var a ArchiveExtracted
@@ -682,6 +698,9 @@ func TestArchiveExtractedContract(t *testing.T) {
 			return nil, err
 		}
 		a.SourceHash = strings.TrimSpace(a.SourceHash)
+		if err := a.resolveSourceHash(); err != nil {
+			return nil, err
+		}
 		return &a, nil
 	}
 	schematest.RunContract(t, decode, "testdata/contract/archive.extracted.yaml")

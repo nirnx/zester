@@ -259,14 +259,18 @@ cases:
   # ============================== source_hash ==============================
   # PARITY (not a BD): source_hash is TrimSpace'd in the builder tail — a
   # decoder never trims, so this is builder-tail module logic, not schema.
+  # (The decode wrapper also mirrors resolveSourceHash, so the declared value
+  # here must be a parseable digest — see the digest-forms section below.)
   - label: source-hash-trimmed-yaml
     universe: yaml
     id: /opt/app
     input:
       source: /tmp/app.tar.gz
-      source_hash: "  sha256=abc123  "
+      source_hash: "  sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  "
     want:
-      SourceHash: "sha256=abc123"
+      SourceHash: "sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   - label: source-hash-whitespace-only-trims-to-empty-yaml
     universe: yaml
     id: /opt/app
@@ -277,7 +281,9 @@ cases:
       SourceHash: ""
   # BD-6: a numeric source_hash is coerced to its string form (then
   # TrimSpace'd, a no-op on a digit-only string) where legacy
-  # `config["source_hash"].(string)` dropped it to "".
+  # `config["source_hash"].(string)` dropped it to "". A five-digit number is
+  # not a verifiable digest, so skip_verify opts it down to an opaque marker
+  # — the pin here is the COERCION, not the digest parse.
   - label: source-hash-numeric-coerced-yaml
     universe: yaml
     id: /opt/app
@@ -285,8 +291,10 @@ cases:
     input:
       source: /tmp/app.tar.gz
       source_hash: 12345
+      skip_verify: true
     want:
       SourceHash: "12345"
+      HashAlgo: ""
   - label: source-hash-numeric-coerced-msgpack
     universe: msgpack
     id: /opt/app
@@ -294,8 +302,10 @@ cases:
     input:
       source: /tmp/app.tar.gz
       source_hash: 12345
+      skip_verify: true
     want:
       SourceHash: "12345"
+      HashAlgo: ""
   - label: source-hash-composite-rejected-yaml
     universe: yaml
     id: /opt/app
@@ -436,3 +446,303 @@ cases:
     want:
       Dir: /opt/app
       Source: /tmp/app.tar.gz
+
+  # ==================== source_hash digest forms (derived facets) ====================
+  # The decode wrapper mirrors the builder tail's resolveSourceHash, so the
+  # DERIVED HashAlgo/HashHex facets are projected: the Salt-style `algo=hex`
+  # and `algo:hex` forms plus a bare digest (algorithm inferred from its
+  # length: 32 md5, 40 sha1, 64 sha256, 128 sha512). Algorithm and hex are
+  # case-insensitive and the hex is normalized to lowercase. A declaration
+  # that is none of these is a typed value_invalid — a hash that cannot be
+  # verified must not pass as one — unless skip_verify opts it down to an
+  # opaque version marker (HashAlgo stays empty; nothing is verified).
+  - label: source-hash-sha256-equals-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    want:
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  - label: source-hash-sha256-equals-msgpack
+    universe: msgpack
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    want:
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # The CLI key=value parser splits on the FIRST '=', so the algo=hex form
+  # survives `source_hash=sha256=<hex>`.
+  - label: source-hash-sha256-equals-cli
+    universe: cli
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    want:
+      SourceHash: sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  - label: source-hash-sha256-colon-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    want:
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  - label: source-hash-sha256-colon-cli
+    universe: cli
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    want:
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  - label: source-hash-sha1-equals-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: sha1=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    want:
+      HashAlgo: sha1
+      HashHex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  - label: source-hash-sha512-equals-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: sha512=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    want:
+      HashAlgo: sha512
+      HashHex: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  - label: source-hash-md5-equals-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: md5=dddddddddddddddddddddddddddddddd
+    want:
+      HashAlgo: md5
+      HashHex: "dddddddddddddddddddddddddddddddd"
+  - label: source-hash-bare-sha256-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    want:
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  - label: source-hash-bare-sha256-msgpack
+    universe: msgpack
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    want:
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  - label: source-hash-bare-sha1-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    want:
+      HashAlgo: sha1
+      HashHex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  # Case-insensitive algorithm and hex; the hex facet is normalized lowercase
+  # while the declared string (the marker payload) is kept verbatim.
+  - label: source-hash-uppercase-normalized-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: SHA256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    want:
+      SourceHash: SHA256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      HashAlgo: sha256
+      HashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # Rejection arm: an unparseable declaration is a typed value_invalid.
+  - label: source-hash-unparseable-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: v2.0.0
+    want_error: value_invalid
+  - label: source-hash-unparseable-rejected-msgpack
+    universe: msgpack
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: v2.0.0
+    want_error: value_invalid
+  - label: source-hash-wrong-length-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    want_error: value_invalid
+  - label: source-hash-unsupported-algo-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: crc32=deadbeef
+    want_error: value_invalid
+  - label: source-hash-bare-odd-length-rejected-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: abcde
+    want_error: value_invalid
+  # skip_verify opts an unparseable declaration down to an opaque marker.
+  - label: source-hash-unparseable-skip-verify-accepted-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: v2.0.0
+      skip_verify: true
+    want:
+      SourceHash: v2.0.0
+      HashAlgo: ""
+      HashHex: ""
+  # skip_verify also suppresses the facets for a PARSEABLE digest: nothing is
+  # verified, the declaration is marker-only.
+  - label: source-hash-parseable-skip-verify-no-facets-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      source_hash: sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      skip_verify: true
+    want:
+      SourceHash: sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      HashAlgo: ""
+
+  # ============================== skip_verify (bool) ==============================
+  # Per-param BD pinning (§11): every boolean parameter gets its own
+  # int-one/int-zero/invalid-int fixtures across yaml AND msgpack (BD-7) and
+  # its own truthy/falsy-string fixtures (BD-2).
+  - label: skip-verify-true-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: true
+    want:
+      SkipVerify: true
+  - label: skip-verify-true-msgpack
+    universe: msgpack
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: true
+    want:
+      SkipVerify: true
+  - label: skip-verify-absent-defaults-false-yaml
+    universe: yaml
+    id: /opt/app
+    input:
+      source: /tmp/app.tar.gz
+    want:
+      SkipVerify: false
+  - label: skip-verify-truthy-string-cli
+    universe: cli
+    id: /opt/app
+    bd: BD-2
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: true
+    want:
+      SkipVerify: true
+  - label: skip-verify-truthy-string-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-2
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: "yes"
+    want:
+      SkipVerify: true
+  - label: skip-verify-falsy-string-cli
+    universe: cli
+    id: /opt/app
+    bd: BD-2
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: false
+    want:
+      SkipVerify: false
+  - label: skip-verify-falsy-string-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-2
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: "no"
+    want:
+      SkipVerify: false
+  - label: skip-verify-int-one-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: 1
+    want:
+      SkipVerify: true
+  - label: skip-verify-int-one-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: 1
+    want:
+      SkipVerify: true
+  - label: skip-verify-int-zero-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: 0
+    want:
+      SkipVerify: false
+  - label: skip-verify-int-zero-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: 0
+    want:
+      SkipVerify: false
+  - label: skip-verify-invalid-int-yaml
+    universe: yaml
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: 2
+    want_error: value_invalid
+  - label: skip-verify-invalid-int-msgpack
+    universe: msgpack
+    id: /opt/app
+    bd: BD-7
+    input:
+      source: /tmp/app.tar.gz
+      skip_verify: 2
+    want_error: value_invalid

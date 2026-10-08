@@ -79,6 +79,12 @@ var hostAbsentSpec = regdef.MustSpec("host.absent", modschema.KindState, HostAbs
 				"verbatim; the hostname is removed from every line it appears on and a line left with no " +
 				"remaining names is dropped. A missing hosts file is a clean no-op.",
 		},
+		{
+			Level: "info",
+			Title: "Values are validated at build time",
+			Body: "`name` must be a single token with no whitespace or control characters; the state fails " +
+				"to build otherwise.",
+		},
 	},
 	Divergences: []string{"BD-6"},
 	SeeAlso:     []string{"host.present"},
@@ -99,6 +105,12 @@ func NewHostAbsentBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOptions
 		h := &HostAbsent{}
 		if _, err := hostAbsentSpec.Decode(id, config, h, opts); err != nil {
 			return nil, fmt.Errorf("host.absent: %w", err)
+		}
+		// Builder-tail module logic (not schema): a hostname is a single
+		// whitespace-delimited token of the hosts file; a multi-token value
+		// could never match a name and only rewrites the file by accident.
+		if err := famshared.NoWhitespace("name", h.Hostname); err != nil {
+			return nil, fmt.Errorf("host.absent: %s: %w", id, err)
 		}
 		h.id = id
 		h.file = mctx.File

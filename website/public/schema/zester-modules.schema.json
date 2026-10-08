@@ -86,6 +86,25 @@
               ],
               "description": "target directory the archive is extracted into; defaults to the state ID"
             },
+            "skip_verify": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[01])\\s*$",
+                  "type": "string"
+                }
+              ],
+              "description": "skip verifying source_hash against the archive bytes and allow a plain http:// or ftp:// source without one; source_hash is then only an opaque version marker; a boolean that also accepts the integers 1 (true) and 0 (false)"
+            },
             "source": {
               "anyOf": [
                 {
@@ -98,7 +117,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "local file path, or an http/https/ftp URL to the archive; required"
+              "description": "local file path, or an http/https/ftp URL to the archive; required (a plain http:// or ftp:// source needs source_hash or skip_verify)"
             },
             "source_hash": {
               "anyOf": [
@@ -112,7 +131,7 @@
                   "type": "boolean"
                 }
               ],
-              "description": "declared hash of the source archive (e.g. sha256=<hex>); recorded after extraction and compared as an opaque string on later runs — NOT verified against the archive bytes"
+              "description": "digest of the source archive (sha256=<hex>, sha256:<hex>, sha1=, sha512=, md5=, or a bare hex digest); verified against the archive bytes before extraction and recorded as the version marker; required for a plain http:// or ftp:// source unless skip_verify is set"
             }
           },
           "type": "object"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/nirnx/zester/pkg/exec"
@@ -182,6 +183,14 @@ var pkgrepoManagedSpec = regdef.MustSpec("pkgrepo.managed", modschema.KindState,
 		},
 		{
 			Level: "info",
+			Title: "Values are validated at build time",
+			Body: "The repository `name` must consist of letters, digits, `.`, `_`, and `-` only (it becomes " +
+				"a filename under `/etc/apt/sources.list.d`, `/etc/yum.repos.d`, and `/etc/apt/keyrings`), " +
+				"and `humanname`, `baseurl`, and `key_url` must contain no control characters — a newline " +
+				"would append an extra line to the repo file, so the state fails to build instead.",
+		},
+		{
+			Level: "info",
 			Title: "Unsupported Salt parameters",
 			Body: "Salt's `disabled`, `mirrorlist`, `gpgautoimport`, `comps`, and `architectures` parameters " +
 				"are not supported. Reverting removes the whole repo file rather than restoring prior content.",
@@ -197,6 +206,13 @@ var pkgrepoManagedSpec = regdef.MustSpec("pkgrepo.managed", modschema.KindState,
 	Divergences: []string{"BD-2", "BD-6", "BD-7"},
 	SeeAlso:     []string{"pkg.installed"},
 })
+
+// repoNamePattern is the allowlist for the repository identifier. It becomes
+// a filename (`/etc/apt/sources.list.d/<name>.list`, `/etc/yum.repos.d/
+// <name>.repo`, `/etc/apt/keyrings/zester-<name>.gpg`) and the yum section
+// header, so path separators, `..` traversal, whitespace, and control
+// characters are all refused (`.`/`..` alone are rejected separately).
+var repoNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // NewPkgrepoManagedBuilder returns a state.Builder that creates PkgrepoManaged
 // states using the given ModuleContext's file and command providers. Decode
@@ -219,10 +235,27 @@ func NewPkgrepoManagedBuilder(mctx *exec.ModuleContext, opts modschema.DecodeOpt
 		if _, err := pkgrepoManagedSpec.Decode(id, config, r, opts); err != nil {
 			return nil, fmt.Errorf("pkgrepo.managed: %w", err)
 		}
+		// Builder-tail module logic (not schema): the repo name is spliced
+		// into file paths and the yum section header, and humanname /
+		// baseurl / key_url are written line-by-line into the repo file — a
+		// newline in any of them would append an extra, unmanaged repository
+		// line (or break out of the section).
+		if !repoNamePattern.MatchString(r.RepoName) || r.RepoName == "." || r.RepoName == ".." {
+			return nil, fmt.Errorf("pkgrepo.managed: %s: repository name %q is invalid (allowed: letters, digits, '.', '_', '-'; no path separators)", id, r.RepoName)
+		}
 		r.id = id
 		r.file = mctx.File
 		r.cmd = mctx.Command
 		r.deriveHumanName()
+		for _, chk := range []error{
+			famshared.NoControlChars("humanname", r.HumanName),
+			famshared.NoControlChars("baseurl", r.BaseURL),
+			famshared.NoControlChars("key_url", r.KeyURL),
+		} {
+			if chk != nil {
+				return nil, fmt.Errorf("pkgrepo.managed: %s: %w", id, chk)
+			}
+		}
 
 		providerName := ""
 		if mctx.Package != nil {
