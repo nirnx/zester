@@ -33,6 +33,16 @@ type LoaderConfig struct {
 	// the policy and warn sink here. The zero value (PolicyIgnore) disables
 	// warnings.
 	DecodeOptions modschema.DecodeOptions
+
+	// MaxExecutionSteps caps the number of Starlark execution steps (roughly
+	// interpreter instructions) any single thread may run: the top-level code
+	// of each .star file at load time (startup / compile time, where no
+	// cancellable context exists, so this is the ONLY guard against a bad
+	// module hanging peel startup) AND every Check/Apply/Revert call of the
+	// modules it registers. Exceeding the budget fails that load or call with
+	// an error naming the step limit. 0 means DefaultMaxExecutionSteps
+	// (50,000,000). There is deliberately no "unlimited" setting.
+	MaxExecutionSteps uint64
 }
 
 // Loader discovers and loads Starlark module files from _modules/ directories.
@@ -201,11 +211,15 @@ func (l *Loader) loadFile(absPath string, registry *state.Registry) (int, error)
 		l.config.ModuleContext.Facts,
 		l.config.ModuleContext.Settings)
 
-	// Set up the thread with a load function for inter-file imports.
+	// Set up the thread with a load function for inter-file imports. Top-level
+	// module code runs under the step budget: a `.star` that loops forever at
+	// load time must fail this file (skipped with a warning, other modules
+	// still load) instead of hanging peel startup.
 	thread := &starlark.Thread{
 		Name: absPath,
 		Load: l.makeLoadFunc(builtins),
 	}
+	limitThreadSteps(thread, l.config.MaxExecutionSteps)
 
 	globals, err := starlark.ExecFileOptions(
 		&syntax.FileOptions{},
@@ -256,6 +270,7 @@ func (l *Loader) loadFile(absPath string, registry *state.Registry) (int, error)
 			revertFns[name],
 			builtins,
 			l.config.ModuleContext,
+			WithMaxExecutionSteps(l.config.MaxExecutionSteps),
 		)
 
 		// Resolve the declaration dict: per-function wins over module-global.
@@ -552,10 +567,13 @@ func (l *Loader) makeLoadFunc(builtins starlark.StringDict) func(thread *starlar
 		}
 		l.mu.Unlock()
 
+		// load()ed helper files get their own thread and therefore their own
+		// step budget (same limit as the importing file).
 		loadThread := &starlark.Thread{
 			Name: absPath,
 			Load: l.makeLoadFunc(builtins),
 		}
+		limitThreadSteps(loadThread, l.config.MaxExecutionSteps)
 
 		globals, err := starlark.ExecFileOptions(
 			&syntax.FileOptions{},

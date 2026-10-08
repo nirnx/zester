@@ -96,12 +96,26 @@ type Watcher struct {
 	// having happened). Set before calling Watch.
 	UnreachableGrace time.Duration
 
+	// targets is the job's target set, built once in NewWatcher. Every
+	// ack or return — live (subject token), KV-seeded, or stream-replayed —
+	// is admitted ONLY when its peel is a target: any peel may publish on
+	// its own zester.job.<jid>.{ack,return}.<own-id> subject for ANY jid it
+	// can guess (reactor JIDs are content-addressed and derivable from a
+	// peel's own events), and an unfiltered return would count toward
+	// TargetCount and finalize the job early, losing the real targets'
+	// later returns.
+	targets map[string]struct{}
+
 	mu         sync.Mutex
 	acks       map[string]Ack
 	returns    map[string]Return
 	newReturns []string // peelIDs received since last persist
 	canceled   bool
 	detached   bool
+	// nonTargetWarned records peels whose non-target ack/return has already
+	// been Warn-logged for this job, so a chatty peel cannot flood the log
+	// (one line per offending peel per job).
+	nonTargetWarned map[string]struct{}
 
 	// persistCh carries flush signals from the return-subscription
 	// callback to the persist writer goroutine, so KV round-trips never
@@ -126,17 +140,52 @@ func NewWatcher(j *Job, nc bus.PubSub, js bus.JetStreamAPI, logger *slog.Logger)
 		logger = slog.Default()
 	}
 	normalizeDeadline(j)
-	return &Watcher{
-		job:        j,
-		nc:         nc,
-		js:         js,
-		logger:     logger,
-		acks:       make(map[string]Ack),
-		returns:    make(map[string]Return),
-		persistCh:  make(chan struct{}, persistQueueSize),
-		done:       make(chan struct{}),
-		subscribed: make(chan struct{}),
+	targets := make(map[string]struct{}, len(j.Targets))
+	for _, t := range j.Targets {
+		targets[t] = struct{}{}
 	}
+	return &Watcher{
+		job:             j,
+		nc:              nc,
+		js:              js,
+		logger:          logger,
+		targets:         targets,
+		acks:            make(map[string]Ack),
+		returns:         make(map[string]Return),
+		nonTargetWarned: make(map[string]struct{}),
+		persistCh:       make(chan struct{}, persistQueueSize),
+		done:            make(chan struct{}),
+		subscribed:      make(chan struct{}),
+	}
+}
+
+// isTarget reports whether peelID is one of the job's targets.
+func (w *Watcher) isTarget(peelID string) bool {
+	_, ok := w.targets[peelID]
+	return ok
+}
+
+// admitPeel is the single target gate for every path that records an ack
+// or return (live subscription, KV seed, stream replay seed, gap merge). It
+// reports whether peelID is a job target; a non-target is Warn-logged once
+// per peel per job (source names the path, for the operator) and must be
+// DROPPED by the caller — never recorded, persisted, or counted toward
+// completion. Caller must not hold w.mu.
+func (w *Watcher) admitPeel(source, peelID string) bool {
+	if w.isTarget(peelID) {
+		return true
+	}
+	w.mu.Lock()
+	_, warned := w.nonTargetWarned[peelID]
+	if !warned {
+		w.nonTargetWarned[peelID] = struct{}{}
+	}
+	w.mu.Unlock()
+	if !warned {
+		w.logger.Warn("dropping job message from a peel that is not a job target",
+			"jid", w.job.JID, "peel", peelID, "source", source, "targets", w.job.TargetCount())
+	}
+	return false
 }
 
 // Watch starts monitoring the job. It blocks until the job completes,
@@ -223,6 +272,11 @@ func (w *Watcher) Watch(ctx context.Context) {
 				"jid", w.job.JID, "subject_peel", peelID, "payload_peel", ack.PeelID)
 			return
 		}
+		// Only targets are "heard": a non-target ack must not pollute the
+		// ack set (redispatchSilent / markUnreachable consult it).
+		if !w.admitPeel("ack", peelID) {
+			return
+		}
 		w.mu.Lock()
 		w.acks[peelID] = ack
 		w.mu.Unlock()
@@ -256,6 +310,12 @@ func (w *Watcher) Watch(ctx context.Context) {
 		if ret.PeelID != peelID {
 			w.logger.Warn("return payload peel does not match subject token, dropping",
 				"jid", w.job.JID, "subject_peel", peelID, "payload_peel", ret.PeelID)
+			return
+		}
+		// Target gate: a return from a peel that is not a target is dropped
+		// before it can be recorded — otherwise len(w.returns) would reach
+		// TargetCount early and finalize the job without the real targets.
+		if !w.admitPeel("return", peelID) {
 			return
 		}
 		// Drop any wire message flagged Unreachable. Only THIS master's
@@ -672,11 +732,29 @@ func (w *Watcher) Acks() map[string]Ack {
 // returns are already persisted per-peel, so they are NOT queued for
 // another KV write. Call before Watch.
 func (w *Watcher) SeedReturns(returns []Return) {
+	returns = w.targetReturns("kv-seed", returns)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, r := range returns {
 		w.returns[r.PeelID] = r
 	}
+}
+
+// targetReturns applies the target gate (admitPeel) to a batch of returns
+// recovered from a durable source, dropping — with the once-per-peel Warn —
+// every return whose peel is not a job target. KV-persisted returns written
+// by a pre-fix master and stream-replayed returns are both untrusted here:
+// the job-events stream captures whatever any peel published on its own
+// return subject. Caller must not hold w.mu.
+func (w *Watcher) targetReturns(source string, returns []Return) []Return {
+	kept := returns[:0:0]
+	for _, r := range returns {
+		if r.PeelID == "" || !w.admitPeel(source, r.PeelID) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept
 }
 
 // supersedesReturn reports whether an incoming return should replace what is
@@ -699,6 +777,7 @@ func supersedesReturn(existing Return, existed bool, incoming Return) bool {
 // the ownerless failover window must not stay recorded unreachable). Call
 // before Watch.
 func (w *Watcher) SeedReturnsPersist(returns []Return) {
+	returns = w.targetReturns("stream-seed", returns)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, r := range returns {
@@ -719,12 +798,11 @@ func (w *Watcher) SeedReturnsPersist(returns []Return) {
 // for per-peel persistence and, when they complete the target set, finish the
 // watch. Safe to call concurrently with Watch.
 func (w *Watcher) MergeReturns(returns []Return) {
+	// Target gate first (drops empty peel IDs too), outside w.mu.
+	returns = w.targetReturns("stream-merge", returns)
 	w.mu.Lock()
 	added := 0
 	for _, r := range returns {
-		if r.PeelID == "" {
-			continue
-		}
 		existing, ok := w.returns[r.PeelID]
 		if !supersedesReturn(existing, ok, r) {
 			continue

@@ -238,6 +238,8 @@ result = cmd_run("nginx", args=["-s", "reload"], cwd="/etc", env={"PATH": "/usr/
 # On Go-level exec failure (e.g., binary not found): result also includes {"error": "..."}
 ```
 
+`cmd_run` never goes through a shell unless you ask for one: with `shell=False` (the default) the first argument is the binary name and `args` are passed verbatim, so `cmd_run("ls -la")` looks for a binary literally named `ls -la` and reports a lookup error in `result["error"]`. Pass `args=["-la"]`, or `shell=True` to run the string under `sh -c` — and then quote any value that did not come from your own module.
+
 `cmd_run` never raises on non-zero exit — it always returns the result dict. Check `exit_code` explicitly. If the command could not be started at the Go level (e.g., binary not found, permission denied), the result dict additionally contains an `"error"` key with the error message.
 
 ### File Operations
@@ -330,6 +332,27 @@ def configured(id, config):
 - Starlark runtime errors (KeyError, type errors, etc.) are surfaced as Go errors and the state fails
 - Bad `.star` files (syntax errors) are skipped with a warning during loading; other modules still load
 - Provider nil checks return descriptive errors (e.g., "pkg_install: package provider not available")
+
+## Cancellation and Execution Limits
+
+Starlark modules run on the peel's single serialized execution worker, so a module that never
+returns would block every other mutating job on that peel. Two guards bound every run:
+
+- **Context cancellation.** Each `apply`/`check`/`revert` call runs on a Starlark thread bound to
+  the execution's context. When the job is cancelled (`zester job cancel`) or hits its timeout, the
+  interpreter stops the module promptly — even inside a pure-Starlark loop with no builtin calls —
+  and the state fails with an error naming the cancellation. Blocking builtins (`sleep`, `http_*`,
+  `cmd_run`) honor the same context.
+- **Execution-step limit.** Every Starlark thread is capped at 50,000,000 execution steps (roughly
+  interpreter instructions; the loader's `MaxExecutionSteps` setting, `0` = this default). The cap
+  applies to each `apply`/`check`/`revert` call AND to a file's top-level code at load time — where
+  no cancellable context exists — so a `.star` that loops forever while loading is skipped with a
+  step-limit error (other modules still load) instead of hanging peel startup. Exceeding the budget
+  fails the call with an error that names the step limit.
+
+Real configuration-management work (tens of thousands of items, a few hundred operations each)
+stays far below the budget; hitting it means the module loops too long or forever. On current
+hardware the budget is exhausted in well under a second, so a runaway module fails fast.
 
 ## Example: Complete Module
 
