@@ -4,7 +4,7 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
-## [Unreleased]
+## [0.7.1] - 2026-10-07
 
 ### Fixed
 - **Self-update of a single master no longer ends in an auto-rollback.** The
