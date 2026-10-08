@@ -44,12 +44,16 @@ import (
 //     nats-server restart reverts to the preloaded list until a master
 //     re-pushes — and periodically (RevocationSyncInterval, default 5m),
 //     which also converges --direct-kv revokes and other masters' decisions.
-//   - Soft revocation is the second layer and works even where the push is
-//     unavailable (missing signing seed / sys.creds — e.g. an auth dir
-//     bootstrapped before this feature): the revoked peel's facts, secrets,
-//     heartbeat, basket and update-status keys are purged (it drops out of
-//     targeting and presence), the facts watcher refuses to re-publish its
-//     secrets, and the reactor drops its events (reason "revoked").
+//   - Soft revocation is the second layer, for the window before the push
+//     lands (sys connection down, nats-server mid-restart): the revoked
+//     peel's facts, secrets, heartbeat, basket and update-status keys are
+//     purged (it drops out of targeting and presence), the facts watcher
+//     refuses to re-publish its secrets, and the reactor drops its events
+//     (reason "revoked").
+//
+// The push material (account.jwt, operator-signing.seed, sys.creds — all
+// written by `zester nats-auth init`) is REQUIRED: a master without it
+// refuses to start rather than running with a revoke that does not revoke.
 
 const (
 	// defaultRevocationSyncInterval is the periodic full re-sync cadence
@@ -71,10 +75,6 @@ const (
 	revocationConnectDebounce = 2 * time.Second
 )
 
-// errRevocationDisabled reports that NATS-level revocation is not
-// available on this master (bootstrap material missing).
-var errRevocationDisabled = errors.New("NATS-level credential revocation unavailable")
-
 // revocationPushFn pushes a signed account JWT to the nats-server(s) and
 // returns every raw reply collected (one per server in a cluster). Injected
 // for tests.
@@ -88,15 +88,13 @@ type revocationSyncer struct {
 	js     bus.JetStreamAPI
 	now    func() time.Time
 
-	// NATS-level push material; disabledReason is non-empty when any piece
-	// is missing (soft revocation still runs).
-	accountPub     string
-	baseJWT        string
-	signing        *auth.KeyBundle
-	push           revocationPushFn
-	pushHealthy    func() bool // sys connection health; nil = assume healthy
-	disabledReason string
-	interval       time.Duration
+	// NATS-level push material (loaded from the auth dir at construction).
+	accountPub  string
+	baseJWT     string
+	signing     *auth.KeyBundle
+	push        revocationPushFn
+	pushHealthy func() bool // sys connection health; nil = assume healthy
+	interval    time.Duration
 
 	mu          sync.Mutex
 	lastPushed  map[string]int64 // user pubkey → revoked-at unix, as last accepted by the server
@@ -115,9 +113,10 @@ type revocationSyncer struct {
 	revokedPeels atomic.Pointer[map[string]struct{}]
 }
 
-// newRevocationSyncer loads the push material from authDir. Missing files
-// disable the NATS-level push (Warn) but never fail startup.
-func newRevocationSyncer(logger *slog.Logger, store *enroll.Store, js bus.JetStreamAPI, authDir string, accountPub string, interval time.Duration) *revocationSyncer {
+// newRevocationSyncer loads the push material from authDir. A missing or
+// unreadable file is an error: the caller fails master startup, pointing at
+// `zester nats-auth init`.
+func newRevocationSyncer(logger *slog.Logger, store *enroll.Store, js bus.JetStreamAPI, authDir string, accountPub string, interval time.Duration) (*revocationSyncer, error) {
 	if interval == 0 {
 		interval = defaultRevocationSyncInterval
 	}
@@ -134,25 +133,19 @@ func newRevocationSyncer(logger *slog.Logger, store *enroll.Store, js bus.JetStr
 
 	baseJWT, err := os.ReadFile(filepath.Join(authDir, auth.FileAccountJWT))
 	if err != nil {
-		s.disabledReason = fmt.Sprintf("read %s: %v", auth.FileAccountJWT, err)
-		return s
+		return nil, fmt.Errorf("credential revocation: read %s: %w (run 'zester nats-auth init')", auth.FileAccountJWT, err)
 	}
 	signing, err := auth.LoadKeyBundleFromFile(auth.RoleOperator, filepath.Join(authDir, auth.FileOperatorSigningSeed))
 	if err != nil {
-		s.disabledReason = fmt.Sprintf("load %s: %v", auth.FileOperatorSigningSeed, err)
-		return s
+		return nil, fmt.Errorf("credential revocation: load %s: %w (run 'zester nats-auth init')", auth.FileOperatorSigningSeed, err)
 	}
 	if _, err := os.Stat(filepath.Join(authDir, auth.FileSysCreds)); err != nil {
-		s.disabledReason = fmt.Sprintf("%s: %v", auth.FileSysCreds, err)
-		return s
+		return nil, fmt.Errorf("credential revocation: %s: %w (run 'zester nats-auth init')", auth.FileSysCreds, err)
 	}
 	s.baseJWT = string(baseJWT)
 	s.signing = signing
-	return s
+	return s, nil
 }
-
-// enabled reports whether the NATS-level push is configured.
-func (s *revocationSyncer) enabled() bool { return s.disabledReason == "" }
 
 // IsRevoked reports whether peelID's current enrollment is revoked (soft
 // revocation gate for the facts watcher and the reactor).
@@ -242,10 +235,6 @@ func (s *revocationSyncer) Sync(ctx context.Context, reason string, force bool) 
 		return err
 	}
 	s.revokedPeels.Store(&st.peels)
-
-	if !s.enabled() {
-		return fmt.Errorf("%w: %s", errRevocationDisabled, s.disabledReason)
-	}
 
 	want := make(map[string]int64, len(st.keys))
 	for pub, at := range st.keys {
@@ -339,7 +328,7 @@ func (s *revocationSyncer) onAccountConnect(ctx context.Context) {
 	s.mu.Lock()
 	pending := len(s.lastPushed)
 	s.mu.Unlock()
-	if pending == 0 || !s.enabled() {
+	if pending == 0 {
 		return
 	}
 	s.connectMu.Lock()
@@ -368,17 +357,10 @@ func (s *revocationSyncer) setErr(err error) {
 func (s *revocationSyncer) onRevoked(ctx context.Context, rec *enroll.Record) string {
 	s.markRevoked(rec.PeelID)
 	s.purgePeel(ctx, rec.PeelID)
-	err := s.Sync(ctx, "revoke", true)
-	switch {
-	case err == nil:
-		return ""
-	case errors.Is(err, errRevocationDisabled):
-		return fmt.Sprintf("NATS-level revocation is NOT available on this master (%s): the peel keeps its NATS access until its JWT expires; "+
-			"re-run 'zester nats-auth init' to generate %s + %s and restart the masters. Its facts/secrets were purged and its events are ignored.",
-			s.disabledReason, auth.FileOperatorSigningSeed, auth.FileSysCreds)
-	default:
+	if err := s.Sync(ctx, "revoke", true); err != nil {
 		return fmt.Sprintf("record revoked, but the NATS account revocation list was not applied yet (%v); the master retries on reconnect and every %s", err, s.interval)
 	}
+	return ""
 }
 
 // purgePeel deletes a revoked peel's KV footprint: facts (drops it from
@@ -433,14 +415,10 @@ func (s *revocationSyncer) run(ctx context.Context) {
 	}
 }
 
-// check is the `revocation` readiness entry: degraded (never down) when the
-// push is unavailable or the last push failed — the control plane works,
-// but a revoke would not cut NATS access.
+// check is the `revocation` readiness entry: degraded (never down) while the
+// system-account connection is down or the last push failed — the control
+// plane works, but a revoke would not cut NATS access until the retry lands.
 func (s *revocationSyncer) check(context.Context) health.CheckResult {
-	if !s.enabled() {
-		return health.CheckResult{Status: health.StatusDegraded,
-			Message: "NATS-level credential revocation unavailable: " + s.disabledReason}
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.lastErr != nil {
@@ -466,21 +444,16 @@ func sortedKeys(m map[string]struct{}) []string {
 }
 
 // startRevocationSync constructs the syncer, opens the system-account NATS
-// connection (when the material exists), registers the readiness check and
-// starts the periodic loop. Never fails startup.
-func (d *Daemon) startRevocationSync(ctx context.Context) {
-	s := newRevocationSyncer(d.logger, d.enrollStore, d.js, d.cfg.AuthDir, d.accountKP.PublicKey,
+// connection, registers the readiness check and starts the periodic loop.
+// Missing push material fails master startup.
+func (d *Daemon) startRevocationSync(ctx context.Context) error {
+	s, err := newRevocationSyncer(d.logger, d.enrollStore, d.js, d.cfg.AuthDir, d.accountKP.PublicKey,
 		time.Duration(d.cfg.RevocationSyncInterval))
+	if err != nil {
+		return err
+	}
 	d.revocation = s
 	d.checker.Register("revocation", s.check)
-
-	if !s.enabled() {
-		d.logger.Warn("NATS-level credential revocation DISABLED: 'zester enroll revoke' will only soft-revoke (purge facts/secrets, ignore events) — "+
-			"the peel keeps NATS access until its JWT expires. Re-run 'zester nats-auth init' to generate the operator signing key and sys.creds.",
-			"reason", s.disabledReason)
-		go s.run(ctx)
-		return
-	}
 
 	natsURLs := bus.NormalizeNATSURLs([]string{d.cfg.NatsURL})
 	natsTLS, natsCA, caOptional := bus.NATSClientTLS(natsURLs, d.cfg.NatsCA, d.cfg.AuthDir)
@@ -498,10 +471,7 @@ func (d *Daemon) startRevocationSync(ctx context.Context) {
 		OnReconnect: func() { go func() { _ = s.Sync(ctx, "reconnect", true) }() },
 	})
 	if err != nil {
-		s.disabledReason = "system-account NATS connection: " + err.Error()
-		d.logger.Warn("NATS-level credential revocation DISABLED: system-account connection failed", "error", err)
-		go s.run(ctx)
-		return
+		return fmt.Errorf("credential revocation: system-account NATS connection: %w", err)
 	}
 	s.push = func(pctx context.Context, subject string, accountJWT []byte) ([][]byte, error) {
 		return pushCollectReplies(pctx, sys.Conn(), subject, accountJWT)
@@ -524,6 +494,7 @@ func (d *Daemon) startRevocationSync(ctx context.Context) {
 	// case and seeds the soft-revoke cache either way.
 	go s.run(ctx)
 	d.logger.Info("credential revocation sync started", "interval", s.interval)
+	return nil
 }
 
 // pushCollectReplies publishes the account JWT as a request and collects

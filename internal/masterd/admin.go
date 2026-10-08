@@ -97,11 +97,12 @@ func (d *Daemon) handleAdminRequest(action string, op adminOp, after func(contex
 }
 
 // afterRevoke is the revoke post-hook: soft-revoke + purge the peel's KV
-// footprint + push the account JWT revocation list (revocation.go). Without
-// a syncer (unit tests) it reports the record-only outcome as a warning.
+// footprint + push the account JWT revocation list (revocation.go). The
+// syncer is always wired in a running master (startup fails without it);
+// nil only occurs in unit tests that exercise the admin service alone.
 func (d *Daemon) afterRevoke(ctx context.Context, rec *enroll.Record) string {
 	if d.revocation == nil {
-		return "NATS-level credential revocation is not running on this master; the record was revoked but the peel keeps NATS access until its JWT expires"
+		return "credential revocation sync is not running on this master"
 	}
 	return d.revocation.onRevoked(ctx, rec)
 }

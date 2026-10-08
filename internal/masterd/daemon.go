@@ -413,7 +413,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	// Credential revocation sync (account JWT revocation list + soft-revoke
 	// cache). Before the facts watcher and the reactor, which gate on it.
-	d.startRevocationSync(runCtx)
+	// Fatal without the nats-auth init material: a master whose revoke
+	// does not revoke must not run.
+	if err := d.startRevocationSync(runCtx); err != nil {
+		return err
+	}
 
 	// Facts→secrets single-owner lease (roadmap B6): only the holder
 	// publishes per-peel secrets from handleFactsUpdate. Started before the

@@ -3,6 +3,7 @@ package masterd
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -89,9 +90,9 @@ func newRevocationFixture(t *testing.T) (*revocationSyncer, *enroll.Store, *bust
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := newRevocationSyncer(discardLogger(), store, js, authDir, h.Account.PublicKey, 0)
-	if !s.enabled() {
-		t.Fatalf("syncer unexpectedly disabled: %s", s.disabledReason)
+	s, err := newRevocationSyncer(discardLogger(), store, js, authDir, h.Account.PublicKey, 0)
+	if err != nil {
+		t.Fatalf("newRevocationSyncer: %v", err)
 	}
 	fp := &fakePusher{}
 	s.push = fp.push
@@ -114,7 +115,7 @@ func newUserRecord(t *testing.T, store *enroll.Store, id, peelID string, state e
 	return rec
 }
 
-func TestNewRevocationSyncer_DisabledWithoutMaterial(t *testing.T) {
+func TestNewRevocationSyncer_RequiresBootstrapMaterial(t *testing.T) {
 	js := bustest.NewFakeJS()
 	ctx := context.Background()
 	if err := bus.InitializeStorage(ctx, js); err != nil {
@@ -122,34 +123,38 @@ func TestNewRevocationSyncer_DisabledWithoutMaterial(t *testing.T) {
 	}
 	store, _ := enroll.NewStore(ctx, enroll.StoreConfig{JS: js, Logger: discardLogger()})
 
-	s := newRevocationSyncer(discardLogger(), store, js, t.TempDir(), "ACCT", 0)
-	if s.enabled() {
-		t.Fatal("expected disabled syncer")
+	// Empty auth dir: no account.jwt.
+	if _, err := newRevocationSyncer(discardLogger(), store, js, t.TempDir(), "ACCT", 0); err == nil || !strings.Contains(err.Error(), auth.FileAccountJWT) || !strings.Contains(err.Error(), "nats-auth init") {
+		t.Fatalf("missing account.jwt must fail with a nats-auth init hint, got %v", err)
 	}
-	if !strings.Contains(s.disabledReason, auth.FileAccountJWT) {
-		t.Errorf("reason should name the missing file: %q", s.disabledReason)
+
+	// account.jwt present but no signing seed / sys.creds.
+	h, err := auth.GenerateHierarchy(auth.HierarchyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, auth.FileAccountJWT), []byte(h.AccountJWT), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newRevocationSyncer(discardLogger(), store, js, dir, h.Account.PublicKey, 0); err == nil || !strings.Contains(err.Error(), auth.FileOperatorSigningSeed) {
+		t.Fatalf("missing signing seed must fail, got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, auth.FileOperatorSigningSeed), h.OperatorSigning.Seed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newRevocationSyncer(discardLogger(), store, js, dir, h.Account.PublicKey, 0); err == nil || !strings.Contains(err.Error(), auth.FileSysCreds) {
+		t.Fatalf("missing sys.creds must fail, got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, auth.FileSysCreds), h.SysCreds, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := newRevocationSyncer(discardLogger(), store, js, dir, h.Account.PublicKey, 0)
+	if err != nil {
+		t.Fatalf("complete material must construct: %v", err)
 	}
 	if s.interval != defaultRevocationSyncInterval {
 		t.Errorf("interval default = %s", s.interval)
-	}
-	err := s.Sync(ctx, "test", true)
-	if !errors.Is(err, errRevocationDisabled) {
-		t.Fatalf("Sync on a disabled syncer: %v", err)
-	}
-	if res := s.check(ctx); res.Status != health.StatusDegraded {
-		t.Errorf("disabled check = %+v, want degraded", res)
-	}
-	// Soft revocation still works without the push material.
-	rec := newUserRecord(t, store, "enr-1", "web-01", enroll.StateActive, time.Now())
-	if _, err := store.Revoke(ctx, rec.ID, "op", "gone"); err != nil {
-		t.Fatal(err)
-	}
-	warn := s.onRevoked(ctx, rec)
-	if !strings.Contains(warn, "nats-auth init") {
-		t.Errorf("disabled revoke must tell the operator how to enable the push: %q", warn)
-	}
-	if !s.IsRevoked("web-01") {
-		t.Error("peel must be soft-revoked")
 	}
 }
 

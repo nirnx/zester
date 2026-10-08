@@ -153,7 +153,7 @@ Readiness checks:
 | `target-service` | The target-resolution service failed to start. Non-fatal: CLI and peel targeting fall back to facts-KV scans. | — |
 | `gitfs` (registered only when GitFS is enabled) | The GitFS syncer exited | No successful sync yet — normal on a standby master that does not hold the [publisher lease](#multi-master-coordination) — or the last fully successful sync is older than 3× the pull interval |
 | `reactor` (registered only when the reactor is enabled) | The shared durable `reactor` consumer is not running. A boot failure is retried every 60s in the background. | The last rule load failed (running on last-known-good rules), or a rule's storm circuit breaker is open (the message lists the affected rules). See [Reactor operations](/docs/operations/reactor). |
-| `revocation` | — (never down) | NATS-level credential revocation is unavailable (`operator-signing.seed` / `sys.creds` missing — re-run `zester nats-auth init`), the system-account connection is down, or the last account JWT revocation push failed. `zester enroll revoke` still soft-revokes (purges facts/secrets, ignores events) but the peel keeps NATS access until its JWT expires. |
+| `revocation` | — (never down) | The system-account connection is down or the last account JWT revocation push failed; `zester enroll revoke` still soft-revokes (purges facts/secrets, ignores events) and the push is retried. The push material (`account.jwt`, `operator-signing.seed`, `sys.creds`) is required at startup. |
 
 `/readyz` reports `503` from process start until the NATS connection is established, so it is suitable for systemd/Kubernetes readiness gating and is what the watchdog polls during the update soak phase (`--ready-url`).
 

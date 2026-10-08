@@ -57,7 +57,7 @@ The endpoint returns `503` **only** when at least one check is `down` — `degra
 | `gitfs` | Only registered when GitFS is enabled: `ok` while the last fully-successful sync is younger than 3× the GitFS interval, `degraded` before the first sync or when stale, `down` if the syncer exits |
 | `target-service` | `down` until the target-resolution service (in-memory fact index + `zester.target.resolve` responder) is running; while down, CLI/API targeting falls back to facts-KV scans — functional, just slower |
 | `reactor` | Only registered when the reactor is enabled: `down` while the shared durable `reactor` consumer is not running (a boot failure is retried every 60s), `degraded` while the engine runs on last-known-good rules after a failed rule load or while a rule's storm circuit breaker is open (the message lists the affected rules), `ok` otherwise — see [Reactor operations](/docs/operations/reactor) |
-| `revocation` | `degraded` (never `down`) when NATS-level credential revocation is unavailable on this master (`operator-signing.seed` / `sys.creds` missing from the auth dir — re-run `zester nats-auth init`), when the system-account connection is down, or when the last account JWT push failed; `ok` once the current revocation list is applied at the nats-server — see [Enrollment operations](/docs/operations/enrollment#revoke-an-enrollment) |
+| `revocation` | `degraded` (never `down`) while the master's system-account connection is down or the last account JWT revocation push failed (a revoke would not cut NATS access until the retry lands); `ok` once the current revocation list is applied at the nats-server — see [Enrollment operations](/docs/operations/enrollment#revoke-an-enrollment) |
 
 ```bash
 $ curl -s http://127.0.0.1:9090/readyz | jq .
