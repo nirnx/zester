@@ -45,6 +45,8 @@ func recordingRequestFunc() (RequestFunc, func() []string) {
 		subjects = append(subjects, subject)
 		mu.Unlock()
 		switch req.Command {
+		case CmdStatus:
+			return &UpdateResponse{Status: "ok", State: StateIdle}, nil
 		case CmdPrepare:
 			return &UpdateResponse{Status: "staged"}, nil
 		case CmdApply:

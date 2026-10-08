@@ -100,9 +100,14 @@ type RolloutAbortResponse struct {
 // NodeResult records the outcome of an update for a single node.
 type NodeResult struct {
 	ID      string    `msgpack:"id"`
-	Status  string    `msgpack:"status"` // prepared, applied, confirmed, failed, rolled_back
+	Status  string    `msgpack:"status"` // prepared, applied, confirmed, failed, rolled_back, skipped
 	Error   string    `msgpack:"error,omitempty"`
 	Updated time.Time `msgpack:"updated"`
+
+	// Note explains a non-error outcome the operator should see: why a node
+	// was skipped ("already running v0.7.0"), that it was resumed from a
+	// staged/soaking state, or that it was rolled back on abort.
+	Note string `msgpack:"note,omitempty"`
 }
 
 // RolloutState is the persisted state of an active or completed rollout.
@@ -497,6 +502,17 @@ func (r *RolloutController) AbortRollout(ctx context.Context, rolloutID string) 
 		}
 		if err := r.store.Save(ctx, persisted); err == nil {
 			r.logger.Info("rollout abort written to KV", "id", rolloutID, "locally_active", false)
+			// No driver is reverting this rollout's nodes for us (it died,
+			// or it is on another master and will also notice — a second
+			// rollback to an idle node is refused harmlessly). Reset the
+			// in-flight batch here and record the outcome best-effort.
+			if persisted.NodeResults == nil {
+				persisted.NodeResults = make(map[string]*NodeResult)
+			}
+			r.revertBatch(ctx, persisted)
+			if err := r.store.Save(ctx, persisted); err != nil {
+				r.logger.Debug("abort: node revert results not persisted", "id", rolloutID, "error", err)
+			}
 			return nil
 		}
 		// CAS conflict — re-read and retry.
@@ -513,10 +529,11 @@ func (r *RolloutController) AbortRollout(ctx context.Context, rolloutID string) 
 // rather than dead, both may briefly drive the same rollout. That is
 // tolerable by design — the watchdog handler rejects duplicate prepare/apply
 // commands, and the superseded driver detects the lost CAS on its next save
-// and stops. A resumed rollout re-issues commands to its current batch from
-// the prepare step; nodes that already progressed (staged/soaking) reject the
-// duplicate command and are recorded as failed, bounded by MaxFailed and
-// backstopped by the watchdog's confirm-deadline auto-rollback.
+// and stops. A resumed rollout RECONCILES its current batch (planBatch): nodes
+// already staged or soaking with the target version are resumed from apply or
+// confirm, nodes already running it are skipped — so a master that adopts the
+// rollout mid-soak (the single-master self-update case: the driver died with
+// the old process) confirms instead of re-preparing and aborting.
 func (r *RolloutController) ResumeOrphaned(ctx context.Context) (int, error) {
 	states, err := r.store.List(ctx)
 	if err != nil {
@@ -657,6 +674,7 @@ func (r *RolloutController) handlePersistError(ctx context.Context, state *Rollo
 	switch {
 	case errors.Is(err, errRolloutAbortedExternally):
 		r.logger.Info("rollout aborted externally", "id", state.ID, "step", step)
+		r.revertBatch(ctx, state)
 	case errors.Is(err, errRolloutSuperseded):
 		r.logger.Warn("rollout adopted by another driver, stopping local driver", "id", state.ID, "step", step)
 	case ctx.Err() != nil:
@@ -759,22 +777,17 @@ func (r *RolloutController) executeRollout(ctx context.Context, state *RolloutSt
 		// Check both in-process abort channel and KV state (external abort).
 		select {
 		case <-abort:
-			r.mu.Lock()
-			state.State = RolloutAborted
-			state.FinishedAt = time.Now()
-			err := r.saveStateLocked(ctx, state)
-			r.mu.Unlock()
-			if err != nil && !errors.Is(err, errRolloutAbortedExternally) {
-				r.logger.Error("failed to persist rollout abort", "id", state.ID, "error", err)
-			}
 			r.logger.Info("rollout aborted mid-run", "id", state.ID, "batch", batchIdx)
+			r.finishAborted(ctx, state)
 			return
 		default:
 		}
 		if r.isAbortedInKV(ctx, state.ID) {
 			// KV already holds the aborted record (written by another
-			// master's AbortRollout) — nothing to write, just stop.
+			// master's AbortRollout) — nothing to write; revert whatever this
+			// driver left in flight and stop.
 			r.logger.Info("rollout aborted externally", "id", state.ID, "batch", batchIdx)
+			r.revertBatch(ctx, state)
 			return
 		}
 
@@ -788,35 +801,62 @@ func (r *RolloutController) executeRollout(ctx context.Context, state *RolloutSt
 
 		r.logger.Info("rollout batch start", "id", state.ID, "batch", batchIdx, "nodes", len(batch))
 
-		// Prepare all nodes in batch in parallel.
-		switch r.runBatchCommand(ctx, state, batch, CmdPrepare, "prepared", abort) {
+		// Reconcile first: probe every node's watchdog state and derive what
+		// each one still needs. A node already on the target version is
+		// skipped; one left staged or soaking with the target version (an
+		// adopted rollout, a previous aborted attempt) is resumed from apply
+		// or confirm instead of being re-prepared — which the watchdog would
+		// refuse, and which used to count as a failure.
+		plan, outcome := r.planBatch(ctx, state, batch, abort)
+		switch outcome {
 		case batchAbort:
 			r.finishAborted(ctx, state)
 			return
 		case batchStop:
 			return
 		}
-
-		// Apply all nodes in batch in parallel.
-		switch r.runBatchCommand(ctx, state, batch, CmdApply, "applied", abort) {
-		case batchAbort:
-			r.finishAborted(ctx, state)
-			return
-		case batchStop:
-			return
+		if len(plan.prepare)+len(plan.apply)+len(plan.confirm) == 0 {
+			r.logger.Info("rollout batch has nothing to do (all nodes current or failed)", "id", state.ID, "batch", batchIdx)
 		}
 
-		// Wait soak time then confirm.
-		if r.waitOrAbort(ctx, state, abort, state.Config.SoakTime) {
-			return
+		if len(plan.prepare) > 0 {
+			switch r.runBatchCommand(ctx, state, plan.prepare, CmdPrepare, "prepared", abort) {
+			case batchAbort:
+				r.finishAborted(ctx, state)
+				return
+			case batchStop:
+				return
+			}
 		}
 
-		switch r.runBatchCommand(ctx, state, batch, CmdConfirm, "confirmed", abort) {
-		case batchAbort:
-			r.finishAborted(ctx, state)
-			return
-		case batchStop:
-			return
+		applyNodes := append(append([]string{}, plan.prepare...), plan.apply...)
+		if len(applyNodes) > 0 {
+			switch r.runBatchCommand(ctx, state, applyNodes, CmdApply, "applied", abort) {
+			case batchAbort:
+				r.finishAborted(ctx, state)
+				return
+			case batchStop:
+				return
+			}
+		}
+
+		// Soak, then confirm. Nodes whose watchdog already reports a passed
+		// soak (adopted mid-soak) are confirmed without waiting again.
+		if plan.needSoak {
+			if r.waitOrAbort(ctx, state, abort, state.Config.SoakTime) {
+				return
+			}
+		}
+
+		confirmNodes := append(applyNodes, plan.confirm...)
+		if len(confirmNodes) > 0 {
+			switch r.runBatchCommand(ctx, state, confirmNodes, CmdConfirm, "confirmed", abort) {
+			case batchAbort:
+				r.finishAborted(ctx, state)
+				return
+			case batchStop:
+				return
+			}
 		}
 
 		// Pause between batches (skip after last batch).
@@ -977,8 +1017,10 @@ func (r *RolloutController) waitOrAbort(ctx context.Context, state *RolloutState
 			return false
 		case <-poll.C:
 			if r.isAbortedInKV(ctx, state.ID) {
-				// KV already holds the aborted record — nothing to write.
+				// KV already holds the aborted record — nothing to write;
+				// revert the in-flight batch (the nodes are mid-soak).
 				r.logger.Info("rollout aborted externally during wait", "id", state.ID)
+				r.revertBatch(ctx, state)
 				return true
 			}
 		}
@@ -998,6 +1040,12 @@ func (r *RolloutController) isAbortedInKV(ctx context.Context, rolloutID string)
 }
 
 func (r *RolloutController) finishAborted(ctx context.Context, state *RolloutState) {
+	// Reset the in-flight batch BEFORE the record goes terminal: nodes left
+	// staged keep a binary in their staging slot (and refuse the next
+	// prepare), nodes left soaking run an unconfirmed binary until their
+	// confirm-deadline rolls them back on its own schedule.
+	r.revertBatch(ctx, state)
+
 	r.mu.Lock()
 	state.State = RolloutAborting
 	if err := r.saveStateLocked(ctx, state); err != nil &&
@@ -1049,4 +1097,325 @@ func computeBatches(nodeIDs []string, batchSize int, batchPercent int) [][]strin
 // touch it again). Dry-run records are also effectively terminal.
 func RolloutTerminal(state string) bool {
 	return state == RolloutCompleted || state == RolloutAborted
+}
+
+// Reconciliation ----------------------------------------------------------
+//
+// The controller used to assume every node of a batch sits in idle and drove
+// prepare → apply → soak → confirm blindly; any state refusal from the
+// watchdog ("cannot prepare in state soaking") counted as a failure. That
+// made a single-master self-update deterministic: the driver died with the
+// old master process, the new one adopted the rollout, re-sent prepare to
+// its own soaking watchdog, hit MaxFailed and aborted — nobody confirmed,
+// and the watchdog's confirm-deadline rolled the master back. planBatch
+// replaces the assumption with a status probe per node.
+
+const (
+	// probeTimeout bounds one status probe (and one abort-time rollback).
+	probeTimeout = 15 * time.Second
+	// probeBusyRetries × probeBusyWait is how long a node may sit in a
+	// transient state (preparing/applying/rolling_back) before the batch
+	// gives up on it.
+	probeBusyRetries = 12
+	probeBusyWait    = 5 * time.Second
+)
+
+// nodeAction is what the controller still has to do for one node.
+type nodeAction int
+
+const (
+	actionSkip    nodeAction = iota // already running the target version
+	actionPrepare                   // prepare → apply → soak → confirm
+	actionApply                     // staged with the target: apply → soak → confirm
+	actionConfirm                   // soaking with the target: (soak) → confirm
+)
+
+// batchPlan partitions a batch by the action each node still needs.
+type batchPlan struct {
+	prepare  []string
+	apply    []string
+	confirm  []string
+	needSoak bool // some node still owes a soak window
+}
+
+// probeResult is one node's reconciliation outcome.
+type probeResult struct {
+	nodeID   string
+	action   nodeAction
+	note     string
+	soakDone bool // actionConfirm only: watchdog reports the soak passed
+	err      error
+}
+
+// sameVersion compares version labels leniently ("v0.7.0" == "0.7.0").
+func sameVersion(a, b string) bool {
+	na := strings.TrimPrefix(strings.TrimSpace(a), "v")
+	nb := strings.TrimPrefix(strings.TrimSpace(b), "v")
+	return na != "" && na == nb
+}
+
+// planBatch probes every node of the batch in parallel and records skipped
+// and unreachable nodes in the rollout state. Unreachable or stuck nodes
+// count toward MaxFailed exactly like a failed command used to.
+func (r *RolloutController) planBatch(ctx context.Context, state *RolloutState, batch []string, abort <-chan struct{}) (batchPlan, batchOutcome) {
+	results := make(chan probeResult, len(batch))
+	for _, nodeID := range batch {
+		nodeID := nodeID
+		go func() { results <- r.probeNode(ctx, state, nodeID, abort) }()
+	}
+
+	var plan batchPlan
+	collected := make([]probeResult, 0, len(batch))
+	for range batch {
+		collected = append(collected, <-results)
+	}
+	sort.Slice(collected, func(i, j int) bool { return collected[i].nodeID < collected[j].nodeID })
+
+	for _, res := range collected {
+		now := time.Now()
+		r.mu.Lock()
+		nr, exists := state.NodeResults[res.nodeID]
+		if !exists {
+			nr = &NodeResult{ID: res.nodeID}
+			state.NodeResults[res.nodeID] = nr
+		}
+		switch {
+		case res.err != nil:
+			nr.Status = "failed"
+			nr.Error = res.err.Error()
+			nr.Note = ""
+			nr.Updated = now
+			state.FailedCount++
+			r.logger.Error("node reconciliation failed", "id", state.ID, "node", res.nodeID, "error", res.err)
+		case res.action == actionSkip:
+			nr.Status = "skipped"
+			nr.Error = ""
+			nr.Note = res.note
+			nr.Updated = now
+			r.logger.Info("node already on target version, skipping", "id", state.ID, "node", res.nodeID, "note", res.note)
+		default:
+			nr.Note = res.note
+			nr.Error = ""
+			nr.Updated = now
+		}
+		failed := state.FailedCount
+		err := r.saveStateLocked(ctx, state)
+		r.mu.Unlock()
+		if err != nil {
+			r.handlePersistError(ctx, state, "reconcile", err)
+			return plan, batchStop
+		}
+		if res.err == nil {
+			switch res.action {
+			case actionPrepare:
+				plan.prepare = append(plan.prepare, res.nodeID)
+				plan.needSoak = true
+			case actionApply:
+				plan.apply = append(plan.apply, res.nodeID)
+				plan.needSoak = true
+			case actionConfirm:
+				plan.confirm = append(plan.confirm, res.nodeID)
+				if !res.soakDone {
+					plan.needSoak = true
+				}
+			}
+			if res.note != "" && res.action != actionSkip {
+				r.logger.Info("node resumed mid-update", "id", state.ID, "node", res.nodeID, "note", res.note)
+			}
+		}
+		if failed >= state.Config.MaxFailed {
+			r.logger.Error("max failures exceeded, aborting rollout", "id", state.ID, "failed", failed)
+			return plan, batchAbort
+		}
+	}
+	return plan, batchOK
+}
+
+// probeNode asks the node's watchdog for its state and decides the action.
+// Transient states are re-probed for a bounded time; a pending version that
+// is not the rollout target (a leftover from another attempt) is rolled back
+// first so the node starts clean.
+func (r *RolloutController) probeNode(ctx context.Context, state *RolloutState, nodeID string, abort <-chan struct{}) probeResult {
+	target := state.Config.Version
+	subject := bus.UpdateCmdSubject(nodeID)
+	for attempt := 0; attempt < probeBusyRetries; attempt++ {
+		select {
+		case <-abort:
+			return probeResult{nodeID: nodeID, err: fmt.Errorf("aborted")}
+		default:
+		}
+		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+		resp, err := r.request(pctx, subject, &UpdateCommand{Command: CmdStatus, Component: state.Config.Component})
+		cancel()
+		if err != nil {
+			return probeResult{nodeID: nodeID, err: fmt.Errorf("status probe: %w", err)}
+		}
+		if resp.Status == "error" {
+			return probeResult{nodeID: nodeID, err: fmt.Errorf("status probe: node error: %s", resp.Error)}
+		}
+
+		switch resp.State {
+		case StateIdle, StateConfirmed:
+			if sameVersion(resp.RunningVersion, target) {
+				return probeResult{nodeID: nodeID, action: actionSkip, note: "already running " + resp.RunningVersion}
+			}
+			return probeResult{nodeID: nodeID, action: actionPrepare}
+
+		case StateStaged:
+			if sameVersion(resp.Version, target) {
+				return probeResult{nodeID: nodeID, action: actionApply, note: "resumed from staged"}
+			}
+			if err := r.resetNode(ctx, state, nodeID, resp); err != nil {
+				return probeResult{nodeID: nodeID, err: err}
+			}
+			return probeResult{nodeID: nodeID, action: actionPrepare, note: fmt.Sprintf("discarded staged %s", labelOr(resp.Version, "binary"))}
+
+		case StateSoaking:
+			if sameVersion(resp.Version, target) {
+				note := "resumed from soaking"
+				if resp.SoakPassed {
+					note = "resumed from soaking (soak already passed)"
+				}
+				return probeResult{nodeID: nodeID, action: actionConfirm, note: note, soakDone: resp.SoakPassed}
+			}
+			if err := r.resetNode(ctx, state, nodeID, resp); err != nil {
+				return probeResult{nodeID: nodeID, err: err}
+			}
+			return probeResult{nodeID: nodeID, action: actionPrepare, note: fmt.Sprintf("rolled back soaking %s", labelOr(resp.Version, "binary"))}
+
+		case StatePreparing, StateApplying, StateRollingBack:
+			// Transient: another driver or the node itself is mid-step.
+			select {
+			case <-abort:
+				return probeResult{nodeID: nodeID, err: fmt.Errorf("aborted")}
+			case <-ctx.Done():
+				return probeResult{nodeID: nodeID, err: ctx.Err()}
+			case <-time.After(probeBusyWait):
+			}
+			continue
+
+		default:
+			return probeResult{nodeID: nodeID, err: fmt.Errorf("status probe: unknown node state %q", resp.State)}
+		}
+	}
+	return probeResult{nodeID: nodeID, err: fmt.Errorf("node still busy after %s", time.Duration(probeBusyRetries)*probeBusyWait)}
+}
+
+// resetNode rolls back a node that holds a pending version other than the
+// rollout target (leftover of another attempt), so it can be prepared fresh.
+func (r *RolloutController) resetNode(ctx context.Context, state *RolloutState, nodeID string, probe *UpdateResponse) error {
+	r.logger.Warn("node holds a different pending version; rolling it back before prepare",
+		"id", state.ID, "node", nodeID, "state", probe.State, "pending", probe.Version, "target", state.Config.Version)
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	resp, err := r.request(pctx, bus.UpdateCmdSubject(nodeID), &UpdateCommand{Command: CmdRollback, Component: state.Config.Component})
+	if err != nil {
+		return fmt.Errorf("reset %s %s: %w", probe.State, labelOr(probe.Version, "binary"), err)
+	}
+	if resp.Status == "error" {
+		return fmt.Errorf("reset %s %s: node error: %s", probe.State, labelOr(probe.Version, "binary"), resp.Error)
+	}
+	return nil
+}
+
+// revertBatch resets the current batch's in-flight nodes after an abort:
+// every node still preparing/staged/applying/soaking THIS rollout's version
+// gets a rollback, so no node is left with a stale staging slot (refusing the
+// next prepare) or an unconfirmed binary waiting for its confirm-deadline.
+// Outcomes are recorded per node ("rolled_back", or a Note on failure) but
+// never count toward MaxFailed. Best-effort and bounded by probeTimeout per
+// request; callers must NOT hold r.mu.
+func (r *RolloutController) revertBatch(ctx context.Context, state *RolloutState) {
+	r.mu.Lock()
+	idx := state.CurrentBatch
+	var batch []string
+	if idx >= 0 && idx < len(state.Batches) {
+		batch = append(batch, state.Batches[idx]...)
+	}
+	target := state.Config.Version
+	component := state.Config.Component
+	r.mu.Unlock()
+	if len(batch) == 0 {
+		return
+	}
+
+	type outcome struct {
+		nodeID string
+		status string // "" = untouched
+		note   string
+	}
+	results := make(chan outcome, len(batch))
+	for _, nodeID := range batch {
+		nodeID := nodeID
+		go func() {
+			rctx, cancel := context.WithTimeout(ctx, probeTimeout)
+			defer cancel()
+			subject := bus.UpdateCmdSubject(nodeID)
+			probe, err := r.request(rctx, subject, &UpdateCommand{Command: CmdStatus, Component: component})
+			if err != nil || probe.Status == "error" {
+				results <- outcome{nodeID: nodeID, note: fmt.Sprintf("abort: status probe failed: %v", firstErr(err, probe))}
+				return
+			}
+			switch probe.State {
+			case StatePreparing, StateStaged, StateApplying, StateSoaking:
+			default:
+				results <- outcome{nodeID: nodeID} // idle/confirmed/rolling back: nothing to revert
+				return
+			}
+			if probe.Version != "" && !sameVersion(probe.Version, target) {
+				results <- outcome{nodeID: nodeID, note: fmt.Sprintf("abort: left %s %s alone (not this rollout's version)", probe.State, probe.Version)}
+				return
+			}
+			resp, err := r.request(rctx, subject, &UpdateCommand{Command: CmdRollback, Component: component})
+			if err != nil || resp.Status == "error" {
+				results <- outcome{nodeID: nodeID, note: fmt.Sprintf("abort: rollback from %s failed: %v", probe.State, firstErr(err, resp))}
+				return
+			}
+			results <- outcome{nodeID: nodeID, status: "rolled_back", note: "rolled back on abort from " + probe.State}
+		}()
+	}
+
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if state.NodeResults == nil {
+		state.NodeResults = make(map[string]*NodeResult)
+	}
+	for range batch {
+		o := <-results
+		if o.status == "" && o.note == "" {
+			continue
+		}
+		nr, exists := state.NodeResults[o.nodeID]
+		if !exists {
+			nr = &NodeResult{ID: o.nodeID}
+			state.NodeResults[o.nodeID] = nr
+		}
+		if o.status != "" {
+			nr.Status = o.status
+			nr.Error = ""
+			r.logger.Info("node rolled back on abort", "id", state.ID, "node", o.nodeID, "note", o.note)
+		} else {
+			r.logger.Warn("node not reverted on abort", "id", state.ID, "node", o.nodeID, "note", o.note)
+		}
+		nr.Note = o.note
+		nr.Updated = now
+	}
+}
+
+func labelOr(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+func firstErr(err error, resp *UpdateResponse) string {
+	if err != nil {
+		return err.Error()
+	}
+	if resp != nil {
+		return resp.Error
+	}
+	return "unknown error"
 }

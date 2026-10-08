@@ -31,6 +31,11 @@ func mockRequestFunc(responses map[string]UpdateResponse) RequestFunc {
 	return func(ctx context.Context, subject string, req *UpdateCommand) (*UpdateResponse, error) {
 		resp, ok := responses[req.Command]
 		if !ok {
+			// The reconciliation probe: an idle node with no pending version
+			// unless the test scripts otherwise.
+			if req.Command == CmdStatus {
+				return &UpdateResponse{Status: "ok", State: StateIdle}, nil
+			}
 			return &UpdateResponse{Status: "error", Error: "unexpected command"}, nil
 		}
 		return &resp, nil

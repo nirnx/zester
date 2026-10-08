@@ -4,6 +4,52 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Fixed
+- **Self-update of a single master no longer ends in an auto-rollback.** The
+  rollout controller lived in the old master process and died with it at the
+  binary swap; the new process adopted the orphaned rollout, re-sent `prepare`
+  to its own soaking watchdog, which refused (`cannot prepare in state
+  soaking`), the refusal counted as a failure, `max_failed` aborted the
+  rollout, nobody sent `confirm`, and the watchdog's confirm-deadline rolled
+  the master back. Every batch is now **reconciled** before any command: the
+  controller probes each node's watchdog (`status`) and resumes from where
+  the node is — `staged` → `apply`, `soaking` → `confirm` (at once when the
+  watchdog reports `soak_passed`, else after one soak window), a pending
+  version that is not the target → `rollback` first — so an adopted rollout
+  confirms instead of re-preparing (`pkg/update/rollout.go` `planBatch`).
+- **`zester update abort` resets the in-flight nodes.** Abort used to flip
+  the record only, leaving nodes `staged` (refusing the next `prepare`) or
+  `soaking` (running an unconfirmed binary until their deadline rolled them
+  back). Every abort path — the driving master, an abort landing on another
+  master, `max_failed` — now sends `rollback` to the current batch's nodes
+  that are staged/applying/soaking this rollout's version and records them
+  as `rolled_back`; nodes staged for a different version are left alone with
+  a note. A new rollout to the same nodes starts clean.
+- Rollouts no longer re-apply a version to nodes already running it: such
+  nodes are recorded `skipped` ("already running v…") without a restart; the
+  watchdog `status` reply gained additive `running_version` and
+  `soak_passed`, and state refusals carry `state`.
+- Only unreachable or stuck nodes count toward `max_failed` now; a state
+  mismatch is reconciled, not counted — a small `--max-failed` no longer
+  aborts a rollout on the first node that was mid-update.
+
+### Changed
+- The master now REQUIRES the credential-revocation material written by
+  `zester nats-auth init` (`account.jwt`, `operator-signing.seed`,
+  `sys.creds`) and fails startup without it. The 0.7.0 "degraded" fallback
+  (soft revocation only, warning in `enroll revoke`) is gone — Zester has no
+  deployments to stay compatible with, and a master whose revoke does not
+  revoke must not run.
+
+### Added
+- `zester update rollout --target` accepts a bare comma-separated node list
+  (`pmm,web-01`) in addition to globs and `L@`/`E@`/compound expressions.
+- `NodeResult.note` (additive) explains non-error outcomes (skipped, resumed
+  from staged/soaking, rolled back on abort); `zester update status --rollout`
+  shows it in the ERROR/NOTE column.
+
 ## [0.7.0] - 2026-10-07
 
 ### Security

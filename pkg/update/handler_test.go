@@ -598,3 +598,58 @@ func TestHandler_ConfirmDeadline_ConfirmCancels(t *testing.T) {
 		t.Errorf("current binary after confirm: got %q, want %q", current, "new-binary-v2")
 	}
 }
+
+// TestHandler_Status_ReconciliationFields pins the fields the rollout
+// controller's reconciliation relies on: a status probe reports soak_passed
+// once the soak window elapsed in StateSoaking, and every state refusal
+// carries the handler state (so a controller can tell "cannot prepare in
+// state soaking" apart from a real failure without parsing the message).
+func TestHandler_Status_ReconciliationFields(t *testing.T) {
+	healthy := statusServer(t, http.StatusOK, "ok")
+	h, store := setupHandlerTestURLs(t, healthy.URL, healthy.URL)
+	t.Cleanup(func() { _ = h.config.Supervisor.Stop() })
+
+	// Refusals carry the state.
+	if resp := h.handleApply(UpdateCommand{}); resp.Status != "error" || resp.State != StateIdle {
+		t.Fatalf("apply refusal = %+v, want error with state idle", resp)
+	}
+	if resp := h.handleConfirm(); resp.State != StateIdle {
+		t.Fatalf("confirm refusal state = %q", resp.State)
+	}
+
+	data := []byte("#!/bin/sh\nexec sleep 3600\n")
+	hash := uploadBinary(t, store, "peel/linux/amd64/v2.0.0", data)
+	if resp := h.handlePrepare(UpdateCommand{Command: CmdPrepare, Version: "v2.0.0", ObjectKey: "peel/linux/amd64/v2.0.0", SHA256: hash}); resp.Status != "staged" {
+		t.Fatalf("prepare: %+v", resp)
+	}
+	if st := h.handleStatus(); st.SoakPassed || st.Version != "v2.0.0" || st.State != StateStaged {
+		t.Fatalf("staged status = %+v", st)
+	}
+	if resp := h.handlePrepare(UpdateCommand{}); resp.State != StateStaged {
+		t.Fatalf("prepare refusal state = %q", resp.State)
+	}
+	if resp := h.handleApply(UpdateCommand{}); resp.Status != "applying" {
+		t.Fatalf("apply: %+v", resp)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		st := h.handleStatus()
+		if st.State == StateSoaking && st.SoakPassed {
+			break
+		}
+		if st.State != StateSoaking && st.State != StateApplying {
+			t.Fatalf("unexpected state during soak: %+v", st)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	st := h.handleStatus()
+	if st.State != StateSoaking || !st.SoakPassed {
+		t.Fatalf("status after soak = %+v, want soaking with soak_passed", st)
+	}
+	if resp := h.handleConfirm(); resp.Status != "confirmed" {
+		t.Fatalf("confirm: %+v", resp)
+	}
+	if st := h.handleStatus(); st.SoakPassed || st.State != StateConfirmed {
+		t.Fatalf("status after confirm = %+v", st)
+	}
+}

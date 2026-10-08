@@ -39,7 +39,9 @@ type UpdateCommand struct {
 	ObjectKey string `msgpack:"object_key"`
 }
 
-// UpdateResponse is sent back to the rollout controller.
+// UpdateResponse is sent back to the rollout controller. State is set on
+// status replies AND on state-refusal errors ("cannot prepare in state
+// soaking"), so the controller can reconcile instead of counting a failure.
 type UpdateResponse struct {
 	Status  string `msgpack:"status"`
 	Version string `msgpack:"version,omitempty"`
@@ -47,6 +49,16 @@ type UpdateResponse struct {
 	Error   string `msgpack:"error,omitempty"`
 	State   string `msgpack:"state,omitempty"`
 	Uptime  string `msgpack:"uptime,omitempty"`
+
+	// SoakPassed (status replies) reports that the soak window has elapsed
+	// with readiness green and the node is only waiting for the controller's
+	// confirm — a controller that adopts the rollout can confirm at once.
+	SoakPassed bool `msgpack:"soak_passed,omitempty"`
+
+	// RunningVersion (status replies) is the version the supervised child
+	// reports on /healthz — what the controller compares against the rollout
+	// target to skip nodes that are already current.
+	RunningVersion string `msgpack:"running_version,omitempty"`
 }
 
 // MinConfirmDeadline is the floor for the soak confirm-deadline: the handler
@@ -85,6 +97,9 @@ type Handler struct {
 	// Tracked during update lifecycle
 	pendingVersion string
 	pendingHash    string
+	// soakPassed flips true when the soak window elapsed with readiness
+	// green (StateSoaking, awaiting confirm); reported on status replies.
+	soakPassed bool
 
 	// soakCancel stops the background soakPeriod goroutine when confirm
 	// or rollback arrives from the controller.
@@ -185,7 +200,7 @@ func (h *Handler) handlePrepare(cmd UpdateCommand) UpdateResponse {
 	if h.state != StateIdle && h.state != StateConfirmed {
 		state := h.state
 		h.mu.Unlock()
-		return UpdateResponse{Status: "error", Error: fmt.Sprintf("cannot prepare in state %s", state)}
+		return UpdateResponse{Status: "error", State: state, Error: fmt.Sprintf("cannot prepare in state %s", state)}
 	}
 	h.state = StatePreparing
 	h.mu.Unlock()
@@ -212,6 +227,7 @@ func (h *Handler) handlePrepare(cmd UpdateCommand) UpdateResponse {
 	h.state = StateStaged
 	h.pendingVersion = cmd.Version
 	h.pendingHash = cmd.SHA256
+	h.soakPassed = false
 	h.mu.Unlock()
 
 	h.logger.Info("binary staged", "version", cmd.Version, "hash", cmd.SHA256)
@@ -223,7 +239,7 @@ func (h *Handler) handleApply(cmd UpdateCommand) UpdateResponse {
 	if h.state != StateStaged {
 		state := h.state
 		h.mu.Unlock()
-		return UpdateResponse{Status: "error", Error: fmt.Sprintf("cannot apply in state %s", state)}
+		return UpdateResponse{Status: "error", State: state, Error: fmt.Sprintf("cannot apply in state %s", state)}
 	}
 	h.state = StateApplying
 	h.mu.Unlock()
@@ -262,6 +278,7 @@ func (h *Handler) handleApply(cmd UpdateCommand) UpdateResponse {
 	h.mu.Lock()
 	h.state = StateSoaking
 	h.soakCancel = soakCancel
+	h.soakPassed = false
 	version := h.pendingVersion
 	h.mu.Unlock()
 
@@ -332,6 +349,11 @@ func (h *Handler) soakPeriod(ctx context.Context) {
 		case <-timer.C:
 			h.logger.Info("soak period passed, awaiting controller confirm", "version", version)
 			soakPassed = true
+			h.mu.Lock()
+			if h.state == StateSoaking {
+				h.soakPassed = true
+			}
+			h.mu.Unlock()
 		case <-ticker.C:
 			if soakPassed {
 				continue // readiness gates only the soak window itself
@@ -359,9 +381,10 @@ func (h *Handler) handleConfirm() UpdateResponse {
 	if h.state != StateSoaking {
 		state := h.state
 		h.mu.Unlock()
-		return UpdateResponse{Status: "error", Error: fmt.Sprintf("cannot confirm in state %s", state)}
+		return UpdateResponse{Status: "error", State: state, Error: fmt.Sprintf("cannot confirm in state %s", state)}
 	}
 	h.state = StateConfirmed
+	h.soakPassed = false
 	if h.soakCancel != nil {
 		h.soakCancel()
 		h.soakCancel = nil
@@ -380,7 +403,7 @@ func (h *Handler) handleRollback() UpdateResponse {
 	oldState := h.state
 	if oldState != StateSoaking && oldState != StateStaged && oldState != StateApplying {
 		h.mu.Unlock()
-		return UpdateResponse{Status: "error", Error: fmt.Sprintf("cannot rollback in state %s", oldState)}
+		return UpdateResponse{Status: "error", State: oldState, Error: fmt.Sprintf("cannot rollback in state %s", oldState)}
 	}
 	h.state = StateRollingBack
 	if h.soakCancel != nil {
@@ -426,23 +449,35 @@ func (h *Handler) rollback() {
 	h.state = StateIdle
 	h.pendingVersion = ""
 	h.pendingHash = ""
+	h.soakPassed = false
 	h.mu.Unlock()
 
 	h.logger.Info("rollback completed")
 }
 
+// handleStatus answers the controller's reconciliation probe: the handler
+// state, the pending version (staged/soaking), whether the soak window has
+// already passed, and the version the running child reports.
 func (h *Handler) handleStatus() UpdateResponse {
 	h.mu.Lock()
 	state := h.state
 	version := h.pendingVersion
+	soakPassed := h.soakPassed
 	h.mu.Unlock()
 
-	return UpdateResponse{
-		Status:  "ok",
-		State:   state,
-		Version: version,
-		Uptime:  h.config.Supervisor.Uptime().Round(time.Second).String(),
+	resp := UpdateResponse{
+		Status:     "ok",
+		State:      state,
+		Version:    version,
+		SoakPassed: soakPassed,
 	}
+	if h.config.Supervisor != nil {
+		resp.Uptime = h.config.Supervisor.Uptime().Round(time.Second).String()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		resp.RunningVersion = h.config.Supervisor.HealthVersion(ctx)
+		cancel()
+	}
+	return resp
 }
 
 func (h *Handler) respond(msg *bus.Msg, resp UpdateResponse) {

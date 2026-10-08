@@ -156,9 +156,15 @@ func resolveRolloutTargets(ctx context.Context, js bus.JetStreamAPI, statusKV bu
 		return nil, "", fmt.Errorf("list nodes: %w", err)
 	}
 
-	targetExpr := expr
-	if strings.TrimSpace(targetExpr) == "" {
+	targetExpr := strings.TrimSpace(expr)
+	if targetExpr == "" {
 		targetExpr = "*"
+	}
+	// A bare comma-separated id list ("pmm,web-01") is the natural way to
+	// name a few nodes; pkg/target needs the L@ prefix for that, so add it
+	// when the expression has no typed prefix and is not a compound.
+	if strings.Contains(targetExpr, ",") && !strings.Contains(targetExpr, "@") && !strings.ContainsAny(targetExpr, " \t") {
+		targetExpr = "L@" + targetExpr
 	}
 
 	targetType := target.DetectType(targetExpr)

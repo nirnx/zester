@@ -69,7 +69,7 @@ zester update rollout --component <peel|master> --version <version> [--target <e
 |---|---|---|---|
 | `--component` | `""` | yes | Component type (`peel` or `master`) |
 | `--version` | `""` | yes | Target version |
-| `--target` | `*` | no | Target expression |
+| `--target` | `*` | no | Target nodes: glob, comma-separated ids (`pmm,web-01`), or a target expression (`L@a,b`, `E@regex`, compound) |
 | `--batch-size` | `1` | no | Nodes per batch |
 | `--soak-time` | `60s` | no | Per-node soak period |
 | `--batch-pause` | `30s` | no | Pause between batches |
@@ -78,7 +78,9 @@ zester update rollout --component <peel|master> --version <version> [--target <e
 
 Current behavior notes:
 
-- Rollout target expressions are resolved by the standard targeting engine (`glob`, `E@` PCRE, `L@` list, `G@` fact, and `compound`).
+- Rollout target expressions are resolved by the standard targeting engine (`glob`, `E@` PCRE, `L@` list, `G@` fact, and `compound`); a bare comma-separated list (`pmm,web-01`) is treated as an `L@` list.
+- Each batch is reconciled before any command is sent: nodes already running the target version are `skipped`, nodes left `staged`/`soaking` with the target version (an adopted or previously aborted rollout) resume at `apply`/`confirm`, and a leftover pending version is rolled back first. `zester update status --rollout <id>` shows the reason in the ERROR/NOTE column.
+- `update abort` resets the in-flight batch: staged nodes discard the staging slot, soaking nodes roll back to the previous binary (`rolled_back`); a new rollout to the same nodes starts clean.
 - Resolution scope is nodes currently reporting in `update-status` for the selected component.
 
 ## update status

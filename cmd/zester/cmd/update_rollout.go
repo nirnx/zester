@@ -20,7 +20,7 @@ var updateRolloutCmd = &cobra.Command{
 func init() {
 	updateRolloutCmd.Flags().String("component", "", "Component type: peel or master (required)")
 	updateRolloutCmd.Flags().String("version", "", "Target version (required)")
-	updateRolloutCmd.Flags().String("target", "*", "Target expression")
+	updateRolloutCmd.Flags().String("target", "*", "Target nodes: glob (default *), comma-separated ids (pmm,web-01), or a target expression (L@a,b, E@regex, compound)")
 	updateRolloutCmd.Flags().Int("batch-size", 1, "Nodes per batch")
 	updateRolloutCmd.Flags().Duration("soak-time", 60*time.Second, "Per-node soak period")
 	updateRolloutCmd.Flags().Duration("batch-pause", 30*time.Second, "Pause between batches")

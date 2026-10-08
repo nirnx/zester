@@ -89,10 +89,15 @@ func runUpdateStatus(cmd *cobra.Command, args []string) error {
 
 			fmt.Println("\nNode Results:")
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "BATCH\tNODE\tSTATUS\tERROR\tUPDATED")
+			fmt.Fprintln(w, "BATCH\tNODE\tSTATUS\tERROR/NOTE\tUPDATED")
 			for _, id := range ids {
 				nr := state.NodeResults[id]
+				// ERROR column doubles as the note column for non-error
+				// outcomes (skipped / resumed / rolled back on abort).
 				errMsg := nr.Error
+				if errMsg == "" {
+					errMsg = nr.Note
+				}
 				if errMsg == "" {
 					errMsg = "-"
 				}
