@@ -250,12 +250,12 @@ zester enroll list --state active
 ```
 
 ```
-ID                              PEEL ID   HOSTNAME               STATE     CREATED
-enr-2JFK0003ABCD1234567890      web-03    web-03.prod.internal   pending   2026-02-10 15:00:12
-enr-2JFK0006EFGH9876543210      app-01    app-01.prod.internal   pending   2026-02-10 15:02:33
+ID                              PEEL ID   HOSTNAME               SOURCE        STATE     TRUST   CREATED
+enr-2JFK0003ABCD1234567890      web-03    web-03.prod.internal   10.0.12.33    pending   ok      2026-02-10 15:00:12
+enr-2JFK0006EFGH9876543210      app-01    app-01.prod.internal   203.0.113.9   pending   -       2026-02-10 15:02:33
 ```
 
-The list reads enrollment records directly from the `enrollments` KV bucket via `Store.List()` and displays `EnrollmentSummary` records (defined in `pkg/enroll/enrollment.go`) with ID, peel ID, hostname, state, and creation time. See `cmd/zester/cmd/enroll_list.go`.
+The list reads enrollment records directly from the `enrollments` KV bucket via `Store.List()` and shows ID, peel ID, hostname, the request's source IP (`SOURCE` — an unexpected network here is the tell-tale of a peel-ID squat; `-` when unknown), state, the CA trust check (`ok` / `unverified` / `MISMATCH!` / `-`), and creation time. Requester-supplied text (hostname, metadata) is sanitized before printing: control and non-printable characters render as `?`, so a crafted hostname cannot inject terminal escapes. See `cmd/zester/cmd/enroll_list.go`.
 
 ### Show Enrollment Details (CLI)
 
@@ -307,7 +307,7 @@ The peel will receive a `rejected` state when it next polls. No credentials are 
 
 ### Revoke an Enrollment
 
-Revoking an enrollment invalidates a peel's NATS credentials, effectively removing it from the fleet. Only enrollments in `approved`, `issued`, or `active` state can be revoked.
+Revoking an enrollment invalidates a peel's NATS credentials and removes it from the fleet. Only enrollments in `approved`, `issued`, or `active` state can be revoked.
 
 ```bash
 zester enroll revoke enr-2JFK0001ABCD --reason "Instance decommissioned"
@@ -315,16 +315,25 @@ zester enroll revoke enr-2JFK0001ABCD --reason "Instance decommissioned"
 
 ```
 Enrollment enr-2JFK0001ABCD revoked (peel: web-01)
+NATS credentials revoked: the peel's connection is closed and its JWT is refused on reconnect.
 ```
 
 The `--reason` flag is optional but recommended; it is recorded on the enrollment record. Like approve and reject, the transition is applied by a running master via request/reply, with the current OS username recorded as the decider. See `cmd/zester/cmd/enroll_revoke.go`.
 
 #### What Happens on Revocation
 
-1. The enrollment record state transitions to `revoked` via CAS update (`Store.Revoke()` in `pkg/enroll/store.go`), applied by the master answering the admin request.
-2. The peel's user JWT is added to the NATS account revocation list.
-3. The peel's existing NATS connection will be closed when NATS detects the revoked JWT.
-4. The peel cannot reconnect with the old credentials.
+NATS has exactly one server-side way to invalidate an issued user JWT before it expires: the **account JWT's revocation list**. The master owns that list (`internal/masterd/revocation.go`):
+
+1. The enrollment record transitions to `revoked` via CAS update (`Store.Revoke()` in `pkg/enroll/store.go`), applied by the master answering the admin request.
+2. The master **purges the peel's KV footprint** — its facts (so it drops out of targeting and the facts index), per-peel secrets, heartbeat (presence), basket data and update-status — and marks it soft-revoked: the facts watcher refuses to re-publish secrets to it and the reactor drops its events (`zester_reactor_events_dropped_total{reason="revoked"}`).
+3. The master rebuilds the revocation list from every revoked record in the `enrollments` bucket (user public key → decision time), **re-signs the bootstrap account JWT with the operator signing key** (`<auth_dir>/operator-signing.seed`) and pushes it to the running nats-server over the system account (`<auth_dir>/sys.creds`) on `$SYS.REQ.ACCOUNT.<account>.CLAIMS.UPDATE`.
+4. The nats-server applies the new account JWT: the peel's live connection is closed with `User Authentication Revoked` and any reconnect with the old JWT is refused. A re-enrolled peel is unaffected — the entry is timestamped, and a JWT issued after the revocation stays valid.
+
+The push is idempotent and repeated: immediately on `enroll revoke`; on every (re)connect of the master's system-account connection; on every **client connect event** of the zester account (`$SYS.ACCOUNT.<account>.CONNECT`, debounced 2s) while anything is revoked — a revoked peel trying to reconnect to a server that still holds the pre-revocation account JWT triggers the very push that cuts it off; and periodically (`revocation_sync_interval`, default 5m), which also converges `--direct-kv` revokes and other masters' decisions. The repeats matter because the generated `nats-server.conf` uses the `MEMORY` resolver, which does not persist pushed updates: a restarted nats-server comes back with the preloaded (revocation-free) account JWT until a master re-pushes. In a NATS cluster every server answers the push — servers that have the account loaded report `jwt updated`, servers with no client of the account connected since they started report `jwt update skipped` (nothing to revoke there yet; the connect-event re-push covers them) — and the master logs both lists (`applied_on` / `skipped_on`). The `revocation` entry of `GET /readyz` reports `degraded` while the push material is missing or the last push failed.
+
+<Callout type="warn" title="If the CLI prints a WARNING">
+`zester enroll revoke` prints `WARNING: …` when the record was revoked but the NATS-level cut-off did **not** happen: either the master's auth dir lacks `operator-signing.seed` / `sys.creds` (an auth dir bootstrapped before this feature — re-run `zester nats-auth init` and restart the masters; until then the peel keeps NATS access until its JWT expires, 180 days by default, with only the soft revocation above in effect), or the push failed and the master retries on reconnect and every sync interval. `--direct-kv` revokes write the record only; a running master pushes the list on its next periodic sync.
+</Callout>
 
 #### Re-Enrolling After Revocation
 

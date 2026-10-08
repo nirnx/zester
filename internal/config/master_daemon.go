@@ -43,6 +43,14 @@ type MasterDaemonConfig struct {
 	// which is why the interval backstop stays on.
 	FilesWatch bool `yaml:"files_watch" flag:"files-watch" usage:"Watch settings/state/reactor dirs and publish on change (lease holder only)"`
 
+	// RevocationSyncInterval is the periodic full re-sync of the NATS account
+	// JWT revocation list from the enrollments bucket (internal/masterd
+	// revocation.go): converges `--direct-kv` revokes and other masters'
+	// decisions, and re-pushes after a nats-server restart. 0 = default 5m;
+	// negative disables the periodic pass (revoke-time and reconnect pushes
+	// still happen).
+	RevocationSyncInterval Duration `yaml:"revocation_sync_interval" flag:"revocation-sync-interval" usage:"Periodic re-sync of the NATS credential revocation list from the enrollments bucket (0 = 5m, negative disables)"`
+
 	// FilesMirror makes STANDBY masters mirror the published file sets from
 	// KV into their local source dirs, so every master's dirs track fleet
 	// truth and a failover never republishes a stale tree. Disable when

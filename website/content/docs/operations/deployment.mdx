@@ -174,10 +174,11 @@ The master loads credentials from `<auth-dir>/master.creds`, the account seed fr
 
 The account seed (`account.seed`) is the root key for settings encryption. It is created once during cluster bootstrap using your NATS key-management workflow (for example `nsc`) and then distributed securely to all master nodes.
 
-The master binary loads two files from the auth directory at startup:
+The master loads these files from the auth directory at startup (all written by `zester nats-auth init`):
 
 - `master.creds` — NATS authentication (each master can have its own unique creds)
-- `account.seed` — encryption key derivation (**must be identical on all masters**)
+- `account.seed` — encryption key derivation and peel JWT signing (**must be identical on all masters**)
+- `account.jwt`, `operator-signing.seed`, `sys.creds` — credential revocation: the master re-signs the account JWT with the operator signing key and pushes it over the system account when a peel is revoked (see [Revoke an Enrollment](/docs/operations/enrollment#revoke-an-enrollment)). Missing files only disable the NATS-level cut-off (`/readyz` check `revocation` reports `degraded`).
 
 <Callout type="warn" title="Multi-master requirement">
 In multi-master deployments, every instance **must** use the same `account.seed` file. Mismatched seeds cause settings decryption failure, orphan job re-encryption failure, and JWT signature mismatch. Use `--auth-dir` or `auth_dir` in the YAML config to point all masters at a shared location containing the same seed, or distribute the seed via a shared secret store (Vault, Kubernetes Secret).

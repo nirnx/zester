@@ -45,6 +45,11 @@ type AdminResponse struct {
 
 	// Err is a non-empty error message when the operation failed.
 	Err string `msgpack:"err,omitempty"`
+
+	// Warning is a non-empty operator-facing caveat on an otherwise
+	// successful operation — e.g. a revoke whose NATS account revocation
+	// push did not land yet. Additive; pre-feature clients ignore it.
+	Warning string `msgpack:"warning,omitempty"`
 }
 
 // AsError converts a failed response into an error; nil on success.

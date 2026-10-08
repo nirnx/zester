@@ -38,12 +38,15 @@ const (
 
 // Event drop reason labels (zester_reactor_events_dropped_total{reason}).
 const (
-	DropMalformed    = "malformed"
-	DropDecode       = "decode"
-	DropSpoof        = "spoof"
-	DropDepth        = "depth"
-	DropRatelimit    = "ratelimit"
-	DropStale        = "stale"
+	DropMalformed = "malformed"
+	DropDecode    = "decode"
+	DropSpoof     = "spoof"
+	DropDepth     = "depth"
+	DropRatelimit = "ratelimit"
+	DropStale     = "stale"
+	// DropRevoked: the event's peel origin has revoked credentials (its JWT
+	// may still be live until the NATS-level revocation lands).
+	DropRevoked      = "revoked"
 	DropBackpressure = "backpressure"
 )
 
@@ -97,6 +100,11 @@ type Config struct {
 	// FactsFn serves origin_facts for reaction rendering; nil renders an
 	// empty map.
 	FactsFn FactsFn
+
+	// RevokedFn reports whether a peel origin's enrollment is revoked; such
+	// events are dropped at consume (reason "revoked") so a revoked peel whose
+	// JWT is still live cannot drive reactions. nil = no gate.
+	RevokedFn func(peelID string) bool
 
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
@@ -163,9 +171,10 @@ type Engine struct {
 	maxEventAge   time.Duration // 0 = disabled
 	chaining      bool
 
-	limiter  *SourceLimiter // nil = disabled
-	throttle *Throttle
-	breaker  *Breaker // nil = disabled
+	limiter   *SourceLimiter    // nil = disabled
+	revokedFn func(string) bool // nil = no revoked-origin gate
+	throttle  *Throttle
+	breaker   *Breaker // nil = disabled
 
 	queue chan work
 	quit  chan struct{}
@@ -251,6 +260,7 @@ func NewEngine(cfg Config) (*Engine, error) {
 		maxEventAge:   maxAge,
 		chaining:      !cfg.DisableChaining,
 		limiter:       limiter,
+		revokedFn:     cfg.RevokedFn,
 		throttle:      NewThrottle(DefaultMaxThrottleEntries, now),
 		breaker:       breaker,
 		queue:         make(chan work, 2*workers),
@@ -399,6 +409,12 @@ func (e *Engine) handleMsg(msg reactorMsg) {
 		return
 	}
 	ev.Tag = slashTag
+
+	if e.revokedFn != nil && origin != bus.OriginMaster && origin != bus.OriginAdmin && e.revokedFn(origin) {
+		e.drop(msg, DropRevoked)
+		e.logger.Warn("reactor: dropping event from a peel with revoked credentials", "origin", origin, "tag", slashTag)
+		return
+	}
 
 	if ev.Depth >= e.maxChainDepth {
 		e.drop(msg, DropDepth)

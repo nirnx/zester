@@ -70,13 +70,33 @@ func enrollStore(ctx context.Context) (*enroll.Store, *bus.Client, error) {
 // to writing the enrollment KV bucket directly (break-glass for when no
 // master is running).
 func runEnrollAdmin(cmd *cobra.Command, subject, action, enrollmentID, reason string) (*enroll.Record, error) {
+	resp, err := runEnrollAdminResp(cmd, subject, action, enrollmentID, reason)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Record, nil
+}
+
+// runEnrollAdminResp is runEnrollAdmin returning the whole AdminResponse, so
+// callers can surface the master's Warning (e.g. a revoke whose NATS-level
+// revocation push did not land). The --direct-kv path synthesizes the
+// response locally.
+func runEnrollAdminResp(cmd *cobra.Command, subject, action, enrollmentID, reason string) (*enroll.AdminResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), enrollAdminTimeout)
 	defer cancel()
 
 	force, _ := cmd.Flags().GetBool("force")
 
 	if directKV, _ := cmd.Flags().GetBool("direct-kv"); directKV {
-		return runEnrollAdminKV(ctx, action, enrollmentID, reason, force)
+		rec, err := runEnrollAdminKV(ctx, action, enrollmentID, reason, force)
+		if err != nil {
+			return nil, err
+		}
+		resp := &enroll.AdminResponse{Record: rec}
+		if action == "revoke" {
+			resp.Warning = "--direct-kv revoke writes the record only: the NATS credential revocation is pushed by a running master on its next periodic sync (default every 5m) or reconnect; use the request/reply path for an immediate cut-off"
+		}
+		return resp, nil
 	}
 
 	client, err := connectClient()
@@ -104,7 +124,7 @@ func runEnrollAdmin(cmd *cobra.Command, subject, action, enrollmentID, reason st
 	if resp.Record == nil {
 		return nil, fmt.Errorf("%s enrollment %s: master returned an empty record", action, enrollmentID)
 	}
-	return resp.Record, nil
+	return &resp, nil
 }
 
 // runEnrollAdminKV is the --direct-kv path: the state transition is applied

@@ -35,8 +35,17 @@ func (d *Daemon) handleFactsUpdate(peelID string, f facts.Facts) {
 	d.logger.Info("peel facts received", "peel", peelID)
 
 	// Transition enrollment from issued → active on first fact publish.
+	// A REVOKED peel that still holds a valid JWT (the NATS-level revocation
+	// push may be unavailable or not applied yet) must not re-establish
+	// presence or receive secrets: purge its keys again and stop here.
 	if rec, err := d.enrollStore.FindByPeelID(ctx, peelID); err != nil {
 		d.logger.Warn("enrollment lookup failed", "peel", peelID, "error", err)
+	} else if rec != nil && rec.State == enroll.StateRevoked {
+		d.logger.Warn("facts from a REVOKED peel ignored; purging its keys", "peel", peelID, "enrollment_id", rec.ID)
+		if d.revocation != nil {
+			d.revocation.purgePeel(ctx, peelID)
+		}
+		return
 	} else if rec != nil && rec.State == enroll.StateIssued {
 		if _, err := d.enrollStore.MarkActive(ctx, rec.ID); err != nil {
 			d.logger.Warn("failed to mark enrollment active", "peel", peelID, "error", err)

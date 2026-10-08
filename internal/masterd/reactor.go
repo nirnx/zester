@@ -329,6 +329,7 @@ func (d *Daemon) buildReactorEngine(loader *reactor.Loader) (*reactor.Engine, er
 		EnrollFn:   d.reactorEnroll,
 		EmitFn:     d.reactorEmit,
 		FactsFn:    d.reactorFacts,
+		RevokedFn:  func(peelID string) bool { return d.revocation.IsRevoked(peelID) },
 		Logger:     d.logger,
 
 		Workers:         rc.Workers,

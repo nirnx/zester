@@ -26,16 +26,19 @@ func (d *Daemon) startAdminService(ps bus.RequestPubSub) (func(), error) {
 		subject string
 		action  string
 		op      adminOp
+		// after runs once the transition is persisted and returns an
+		// operator-facing warning ("" = none) relayed in the response.
+		after func(ctx context.Context, rec *enroll.Record) string
 	}{
 		{bus.SubjectAdminEnrollApprove, "approve", func(ctx context.Context, req enroll.AdminRequest) (*enroll.Record, error) {
 			return d.enrollStore.ApproveForce(ctx, req.ID, req.Operator, req.Force)
-		}},
+		}, nil},
 		{bus.SubjectAdminEnrollReject, "reject", func(ctx context.Context, req enroll.AdminRequest) (*enroll.Record, error) {
 			return d.enrollStore.Reject(ctx, req.ID, req.Operator, req.Reason)
-		}},
+		}, nil},
 		{bus.SubjectAdminEnrollRevoke, "revoke", func(ctx context.Context, req enroll.AdminRequest) (*enroll.Record, error) {
 			return d.enrollStore.Revoke(ctx, req.ID, req.Operator, req.Reason)
-		}},
+		}, d.afterRevoke},
 	}
 
 	subs := make([]bus.Subscription, 0, len(routes))
@@ -45,9 +48,9 @@ func (d *Daemon) startAdminService(ps bus.RequestPubSub) (func(), error) {
 		}
 	}
 	for _, r := range routes {
-		action, op := r.action, r.op
+		action, op, after := r.action, r.op, r.after
 		sub, err := ps.QueueSubscribe(r.subject, adminQueueGroup, func(msg *bus.Msg) {
-			d.handleAdminRequest(action, op, msg)
+			d.handleAdminRequest(action, op, after, msg)
 		})
 		if err != nil {
 			cleanup()
@@ -63,7 +66,7 @@ func (d *Daemon) startAdminService(ps bus.RequestPubSub) (func(), error) {
 // with the request's operator/reason, and replies with an
 // enroll.AdminResponse (error string on failure). Every admin action is
 // Info-logged with id + operator + action for the audit trail.
-func (d *Daemon) handleAdminRequest(action string, op adminOp, msg *bus.Msg) {
+func (d *Daemon) handleAdminRequest(action string, op adminOp, after func(context.Context, *enroll.Record) string, msg *bus.Msg) {
 	var req enroll.AdminRequest
 	if err := bus.Decode(msg.Data, &req); err != nil {
 		d.logger.Warn("enrollment admin request decode failed", "action", action, "error", err)
@@ -86,7 +89,21 @@ func (d *Daemon) handleAdminRequest(action string, op adminOp, msg *bus.Msg) {
 
 	d.logger.Info("enrollment admin operation",
 		"action", action, "id", req.ID, "operator", req.Operator, "peel_id", rec.PeelID)
-	d.respondAdmin(msg, enroll.AdminResponse{Record: rec})
+	resp := enroll.AdminResponse{Record: rec}
+	if after != nil {
+		resp.Warning = after(d.runCtx, rec)
+	}
+	d.respondAdmin(msg, resp)
+}
+
+// afterRevoke is the revoke post-hook: soft-revoke + purge the peel's KV
+// footprint + push the account JWT revocation list (revocation.go). Without
+// a syncer (unit tests) it reports the record-only outcome as a warning.
+func (d *Daemon) afterRevoke(ctx context.Context, rec *enroll.Record) string {
+	if d.revocation == nil {
+		return "NATS-level credential revocation is not running on this master; the record was revoked but the peel keeps NATS access until its JWT expires"
+	}
+	return d.revocation.onRevoked(ctx, rec)
 }
 
 func (d *Daemon) respondAdmin(msg *bus.Msg, resp enroll.AdminResponse) {

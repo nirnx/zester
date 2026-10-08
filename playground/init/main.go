@@ -44,101 +44,23 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("create nats dir: %w", err)
 	}
 
-	// Generate key bundles.
+	// Generate the complete trust hierarchy (operator identity + signing key,
+	// zester account, system account, master/admin/sys creds) exactly as
+	// `zester nats-auth init` does, so the playground exercises the production
+	// bootstrap — including the operator signing key and sys.creds the master
+	// needs to push peel credential revocations to the nats-server.
 	logger.Info("generating auth hierarchy")
-	operatorKP, err := auth.GenerateKeyBundle(auth.RoleOperator)
+	h, err := auth.GenerateHierarchy(auth.HierarchyOptions{})
 	if err != nil {
-		return fmt.Errorf("generate operator: %w", err)
+		return err
 	}
-
-	accountKP, err := auth.GenerateKeyBundle(auth.RoleAccount)
-	if err != nil {
-		return fmt.Errorf("generate account: %w", err)
+	if err := h.WriteFiles(authDir); err != nil {
+		return err
 	}
-
-	sysAccountKP, err := auth.GenerateKeyBundle(auth.RoleAccount)
-	if err != nil {
-		return fmt.Errorf("generate system account: %w", err)
-	}
-
-	// Create operator JWT with system account reference.
-	operatorJWT, err := auth.CreateOperatorJWT(operatorKP, auth.OperatorJWTOptions{
-		Name:          "zester-op",
-		SystemAccount: sysAccountKP.PublicKey,
+	logger.Info("wrote auth hierarchy", "dir", authDir, "files", []string{
+		auth.FileOperatorJWT, auth.FileAccountJWT, auth.FileAccountSeed, auth.FileOperatorSigningSeed,
+		auth.FileMasterCreds, auth.FileAdminCreds, auth.FileSysCreds,
 	})
-	if err != nil {
-		return fmt.Errorf("create operator JWT: %w", err)
-	}
-
-	// Create the zester account JWT with JetStream enabled.
-	accountJWT, err := auth.CreateAccountJWT(accountKP, operatorKP, auth.AccountJWTOptions{
-		Name:      "zester-acct",
-		JetStream: true,
-	})
-	if err != nil {
-		return fmt.Errorf("create account JWT: %w", err)
-	}
-
-	// Create the system account JWT (required by NATS for JetStream in operator mode).
-	sysAccountJWT, err := auth.CreateAccountJWT(sysAccountKP, operatorKP, auth.AccountJWTOptions{
-		Name: "SYS",
-	})
-	if err != nil {
-		return fmt.Errorf("create system account JWT: %w", err)
-	}
-
-	// Write operator JWT.
-	opJWTPath := filepath.Join(authDir, "operator.jwt")
-	if err := os.WriteFile(opJWTPath, []byte(operatorJWT), 0644); err != nil {
-		return fmt.Errorf("write operator JWT: %w", err)
-	}
-	logger.Info("wrote operator JWT", "path", opJWTPath)
-
-	// Write account JWT.
-	accJWTPath := filepath.Join(authDir, "account.jwt")
-	if err := os.WriteFile(accJWTPath, []byte(accountJWT), 0644); err != nil {
-		return fmt.Errorf("write account JWT: %w", err)
-	}
-	logger.Info("wrote account JWT", "path", accJWTPath)
-
-	// Save account seed so master can reload it.
-	accountSeedPath := filepath.Join(authDir, "account.seed")
-	if err := accountKP.SaveSeedToFile(accountSeedPath); err != nil {
-		return fmt.Errorf("save account seed: %w", err)
-	}
-	logger.Info("saved account seed", "path", accountSeedPath)
-
-	// Generate master.creds for the master service.
-	masterUserKP, err := auth.GenerateKeyBundle(auth.RoleUser)
-	if err != nil {
-		return fmt.Errorf("generate master user key: %w", err)
-	}
-	masterOpts := auth.MasterUserJWTOptions(accountKP.PublicKey)
-	masterJWT, err := auth.CreateUserJWT(masterUserKP, accountKP, masterOpts)
-	if err != nil {
-		return fmt.Errorf("create master user JWT: %w", err)
-	}
-	masterCredsPath := filepath.Join(authDir, "master.creds")
-	if err := auth.WriteCredsFile(masterCredsPath, masterJWT, masterUserKP.Seed); err != nil {
-		return fmt.Errorf("write master creds: %w", err)
-	}
-	logger.Info("generated master credentials", "path", masterCredsPath)
-
-	// Generate admin.creds for the CLI tool.
-	adminUserKP, err := auth.GenerateKeyBundle(auth.RoleUser)
-	if err != nil {
-		return fmt.Errorf("generate admin user key: %w", err)
-	}
-	adminOpts := auth.AdminUserJWTOptions(accountKP.PublicKey)
-	adminJWT, err := auth.CreateUserJWT(adminUserKP, accountKP, adminOpts)
-	if err != nil {
-		return fmt.Errorf("create admin user JWT: %w", err)
-	}
-	adminCredsPath := filepath.Join(authDir, "admin.creds")
-	if err := auth.WriteCredsFile(adminCredsPath, adminJWT, adminUserKP.Seed); err != nil {
-		return fmt.Errorf("write admin creds: %w", err)
-	}
-	logger.Info("generated admin credentials", "path", adminCredsPath)
 
 	// Generate ONE embedded CA (pkg/ca) and issue both the enrollment and
 	// NATS server certs from it — exercising the production bootstrap and
@@ -148,22 +70,12 @@ func run(logger *slog.Logger) error {
 	}
 
 	// Write nats-server.conf for the external NATS server.
-	natsConf := fmt.Sprintf(`port: 4222
-tls {
-  cert_file: /data/auth/nats-server.crt
-  key_file: /data/auth/nats-server.key
-}
-jetstream {
-  store_dir: /data/jetstream
-}
-operator: /data/auth/operator.jwt
-system_account: %s
-resolver: MEMORY
-resolver_preload: {
-  %s: %s
-  %s: %s
-}
-`, sysAccountKP.PublicKey, accountKP.PublicKey, accountJWT, sysAccountKP.PublicKey, sysAccountJWT)
+	natsConf := h.NATSServerConf(auth.NATSServerConfOptions{
+		CertFile:        "/data/auth/nats-server.crt",
+		KeyFile:         "/data/auth/nats-server.key",
+		StoreDir:        "/data/jetstream",
+		OperatorJWTPath: "/data/auth/operator.jwt",
+	})
 	natsConfPath := filepath.Join(natsDir, "nats-server.conf")
 	if err := os.WriteFile(natsConfPath, []byte(natsConf), 0644); err != nil {
 		return fmt.Errorf("write nats-server.conf: %w", err)

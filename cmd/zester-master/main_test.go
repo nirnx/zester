@@ -65,6 +65,9 @@ func TestMasterFlagParity(t *testing.T) {
 		"files-watch":              "true",
 		"files-mirror":             "true",
 		"publisher-status-file":    "/run/zester/publisher-status",
+
+		// Credential revocation list re-sync (0 = default 5m in masterd).
+		"revocation-sync-interval": "0s",
 		// Promoted-version auto-rollout (0.5.0):
 		"update-auto-rollout":    "true",
 		"update-auto-components": "peel",

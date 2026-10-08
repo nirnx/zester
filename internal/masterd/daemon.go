@@ -137,6 +137,11 @@ type Daemon struct {
 	// publishes. nil (unit tests) means always publish.
 	secretsLease *bus.LeaderLease
 
+	// revocation owns the NATS account JWT revocation list and the
+	// soft-revoke cache (revocation.go). nil in unit tests that do not start
+	// it; every consumer goes through nil-safe methods.
+	revocation *revocationSyncer
+
 	// publisherLease is the "publisher" lease candidate; publisherLeader()
 	// queries it so the fileserver-update service answers only from the
 	// holder. nil until startPublisherLease runs.
@@ -405,6 +410,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create enrollment store: %w", err)
 	}
+
+	// Credential revocation sync (account JWT revocation list + soft-revoke
+	// cache). Before the facts watcher and the reactor, which gate on it.
+	d.startRevocationSync(runCtx)
 
 	// Facts→secrets single-owner lease (roadmap B6): only the holder
 	// publishes per-peel secrets from handleFactsUpdate. Started before the
