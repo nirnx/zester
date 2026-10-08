@@ -4,6 +4,151 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [0.7.0] - 2026-10-07
+
+### Security
+- **`zester enroll revoke` now actually revokes the peel's NATS credentials**
+  (security review 2026-10, HIGH-1). Previously the command only flipped the
+  enrollment record: the peel's user JWT (valid 180 days) kept
+  authenticating, the master kept re-encrypting secrets for it and honoring
+  its events and job returns — while the documentation claimed otherwise. The
+  master now owns the NATS account JWT revocation list
+  (`internal/masterd/revocation.go`): on revoke it purges the peel's facts,
+  secrets, heartbeat, basket and update-status keys, marks it soft-revoked
+  (the facts watcher refuses to re-publish its secrets, the reactor drops its
+  events with `reason="revoked"`), rebuilds the revocation list from every
+  revoked enrollment, re-signs the bootstrap account JWT with the operator
+  signing key and pushes it to the nats-server over the system account
+  (`$SYS.REQ.ACCOUNT.<acct>.CLAIMS.UPDATE`) — the server closes the peel's
+  connection (`User Authentication Revoked`) and refuses its reconnects.
+  Entries are timestamped, so a re-enrolled identity's later JWT stays valid.
+  The push is repeated on every system-account (re)connect (the `MEMORY`
+  resolver forgets pushed updates on a nats-server restart), on every
+  zester-account client connect event while anything is revoked (a revoked
+  peel reconnecting to a server that still holds the stale account JWT
+  triggers its own cut-off) and every `revocation_sync_interval` (new master
+  knob, default 5m; converges `--direct-kv` revokes and other masters'
+  decisions). In a NATS cluster every server answers the push; the master
+  logs which servers applied it and which skipped it (no client of the
+  account connected there yet). The CLI prints
+  `WARNING: …` when the record was revoked but the NATS-level cut-off did not
+  land (new additive `AdminResponse.warning` field); `--direct-kv` revokes
+  warn that a running master pushes the list on its next sync. New `/readyz`
+  check `revocation` (degraded-only). Pinned end-to-end by
+  `integration/zz_revoke_test.go`.
+- `zester nats-auth init` (and the playground bootstrap, now sharing one
+  generator: `auth.GenerateHierarchy`) generates an operator **signing key**
+  and signs both account JWTs with it; the operator identity key signs the
+  operator JWT once and is never written to disk. New auth-dir files:
+  `operator-signing.seed` (0600) and `sys.creds` (system-account user scoped
+  to account-claims updates, 0600); `account.jwt` is still written and is the
+  base the master re-signs. **Auth dirs bootstrapped before this release lack
+  the two new files**: the master logs a loud warning at startup, `/readyz`
+  `revocation` reports `degraded`, and `enroll revoke` warns that the peel
+  keeps NATS access until its JWT expires (soft revocation still applies) —
+  re-run `zester nats-auth init` (regenerates every credential) to enable the
+  NATS-level cut-off.
+
+### Added
+- `archive.extracted`: new `skip_verify` parameter (Salt name) disabling
+  `source_hash` byte verification and permitting a plain `http://`/`ftp://`
+  source without a hash; accepts integers 1/0 and truthy/falsy strings
+  (BD-2/BD-7, fixtures pinned across yaml and msgpack).
+- `exec.FileExec.Open(ctx, path)` streaming reader (implemented by
+  `OSFileExec` and `exectest.FakeFileExec`) so modules can hash large files
+  through the injected provider.
+- `famshared.NoControlChars`/`NoWhitespace` builder-tail validators shared by
+  the line-oriented state modules.
+- `starmod.LoaderConfig.MaxExecutionSteps` configures the per-thread Starlark
+  step budget (`0` = default 50,000,000); `starmod.NewStarlarkBuilder` accepts
+  variadic `StateOption`s (`WithMaxExecutionSteps`).
+- `zester enroll list` gains a `SOURCE` column (the enrollment request's peer
+  IP, `-` when unknown) between `HOSTNAME` and `STATE`, making a squat attempt
+  from an unexpected network visible at a glance; `zester enroll show` now
+  prints peel-supplied `Metadata` (sorted keys).
+- Master knob `revocation_sync_interval` (`--revocation-sync-interval`,
+  default 5m) and `/readyz` check `revocation` (see Security above).
+
+### Changed
+- `exec.OSCommandExec` no longer falls back to `sh -c` for a `Shell:false`
+  command with no `Args`; the command string is exec'd directly as a binary
+  name. Starlark `cmd_run("ls -la")` must now pass `shell=True` or
+  `args=[...]`.
+- `archive.extracted`: `source_hash` is VERIFIED against the archive bytes
+  (local file or downloaded temp file) before extraction — forms
+  `sha256=<hex>`, `sha256:<hex>`, `sha1=`, `sha512=`, `md5=`, or a bare hex
+  digest; a mismatch fails Apply with nothing extracted and no marker written.
+  A `source_hash` that is not a recognizable digest now fails the build unless
+  `skip_verify: true` (the previous opaque-marker behavior).
+- `ssh_auth.present`, `host.present`, `host.absent`, `cron.present`,
+  `sysctl.present`, `mount.mounted`, `pkgrepo.managed` reject parameter values
+  containing control characters (and whitespace in single-column fields such
+  as hosts names, fstab columns, cron schedule fields, `enc`) at build time;
+  `host.present` requires `ip` to parse as an IP address; `sysctl.present`
+  keys must match `[A-Za-z0-9._/-]+`; `pkgrepo.managed` names must match
+  `[A-Za-z0-9._-]+` (not `.`/`..`).
+- Enrollment client errors unwrap the API's `{"error": ...}` envelope, so peel
+  logs show the operator-facing message (e.g. the 409 explanation) instead of
+  raw JSON.
+- Docs: the settings Top File and Encryption guides and the Security
+  architecture page now warn that facts are peel-reported and trusted as-is —
+  a compromised peel can match any fact-based pattern — so files containing
+  `!encrypted` values must be targeted by peel ID (exact or glob), never by
+  `key:value` fact patterns (Salt grains/pillar parity); examples moved
+  `databases.credentials` under a `db-*` peel-ID pattern.
+
+### Fixed
+- **Job watcher only accepts acks and returns from the job's targets.**
+  Acks/returns whose subject peel is not a target are dropped (Warn-logged
+  once per peel per job) on every path: the live subscriptions, KV-seeded
+  returns on reclaim, the job-events stream replay seed, and the
+  post-subscribe gap merge. Previously any peel that could derive a JID
+  (reactor JIDs are content-addressed from a peel's own events) could publish
+  a return on its own `zester.job.<jid>.return.<id>` subject, count toward
+  the target total, finalize the job early, and lose the real targets' later
+  returns.
+- **Starlark modules are cancellable and step-bounded.** `Check`/`Apply`/
+  `Revert` threads fail promptly with a cancellation error when the execution
+  context is cancelled (`zester job cancel`, job timeout), so a pure-Starlark
+  infinite loop can no longer wedge the peel's serialized exec worker. Every
+  Starlark thread — a `.star` file's top-level code at load time and each
+  state call — is capped at `starmod.DefaultMaxExecutionSteps` (50,000,000)
+  execution steps; exceeding it fails the load or call with an error naming
+  the step limit instead of hanging peel startup or the job.
+- **Enrollment peel-ID squat**: `POST /api/v1/enroll` no longer returns an
+  existing *pending* record to a submitter whose challenge-proven key differs
+  from the record's key. It now replies `409 Conflict` ("a pending enrollment
+  for this peel id already exists under a different key (<id>); an operator
+  must reject it (`zester enroll reject <id>`) before this host can enroll")
+  and Warn-logs `peel_id`, `source_ip` and `existing_enrollment_id`.
+  Previously whoever submitted first owned the pending record, so an attacker
+  could pre-register a peel ID with plausible hostname/metadata and receive
+  that peel's credentials when an operator approved it. Same-key resubmits
+  stay idempotent (200). The peel enrollment client treats the 409 as a
+  definitive 4xx (no master-URL rotation) and keeps retrying with backoff
+  until the squat record is rejected.
+- **Terminal-escape injection via enrollment records**: `zester enroll list`
+  / `enroll show` now render requester-supplied free text (hostname, metadata
+  keys and values, reported CA pin) and operator free text (reject reason,
+  decided-by) through a sanitizer that replaces every control / non-printable
+  rune and invalid UTF-8 byte with `?`, so a crafted hostname can no longer
+  inject ANSI sequences or spoof table rows on the operator's terminal.
+- Shell injection via the crontab user: `exec.CrontabProvider` interpolated
+  `-u <user>` unquoted into a `sh -c` pipeline; the user is now allowlisted
+  (`^[A-Za-z0-9_][A-Za-z0-9_.@-]*\$?$`) and every shell word is
+  single-quoted.
+- Line injection into crontabs: `exec.CronEntry.Validate` (called by
+  `CrontabProvider.Set`) rejects whitespace inside schedule fields and
+  control characters in command/comment/user.
+- Line/field injection into `authorized_keys`, `/etc/hosts`, the sysctl
+  drop-in, `fstab`, and apt/yum repo files from state parameters (e.g. values
+  sourced from another peel's facts via `basket()`) is now rejected in the
+  module builder tail.
+- `archive.extracted` could not notice that a plain `http://`/`ftp://`
+  download was tampered with: such a source without a verifiable
+  `source_hash` is now rejected at build time unless `skip_verify: true`;
+  `https://` without a hash stays allowed.
+
 ## [0.6.13] - 2026-10-07
 
 ### Security
