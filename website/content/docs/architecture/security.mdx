@@ -228,7 +228,7 @@ The account seed is the root of the encryption trust chain. The master derives i
 
 ### Per-Peel Encryption
 
-Each peel has a unique X25519 key pair derived from its unique nkey seed. The master encrypts settings individually for each target peel. Even if the NATS KV store is compromised, encrypted values are unreadable without the specific peel's private key. A compromised peel can only decrypt its own settings -- not those of any other peel.
+Each peel has a unique X25519 key pair derived from its unique nkey seed. The master encrypts settings individually for each target peel. Even if the NATS KV store is compromised, encrypted values are unreadable without the specific peel's private key. A compromised peel can only decrypt its own settings -- not those of any other peel. Facts, however, are self-reported by the peel and trusted as-is, so a compromised peel can forge any fact: settings files containing `!encrypted` values must be targeted in `top.zy` by peel ID (exact or glob), never by a fact-based `key:value` pattern, exactly as Salt requires sensitive pillar to be targeted by minion ID (see [Encryption](/docs/guides/settings/encryption)).
 
 <Callout type="info" title="Encryption algorithm">
 NaCl box uses X25519 for key exchange, XSalsa20 for symmetric encryption, and Poly1305 for authentication. A fresh 24-byte nonce is generated for every seal operation.

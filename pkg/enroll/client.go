@@ -173,11 +173,20 @@ func (e *apiError) Error() string {
 }
 
 // newAPIError builds an apiError from a non-2xx response, reading a
-// bounded amount of the body.
+// bounded amount of the body. The handler's `{"error":"<message>"}` envelope
+// is unwrapped so the peel's retry log carries the operator-facing message
+// (e.g. the 409 peel-ID-squat explanation) rather than raw JSON; any other
+// body is kept verbatim.
 func newAPIError(resp *http.Response) *apiError {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if err != nil {
 		return &apiError{status: resp.StatusCode}
+	}
+	var envelope struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && envelope.Error != "" {
+		return &apiError{status: resp.StatusCode, body: envelope.Error}
 	}
 	return &apiError{status: resp.StatusCode, body: string(body)}
 }

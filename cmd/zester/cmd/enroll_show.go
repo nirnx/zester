@@ -3,9 +3,15 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"maps"
+	"os"
+	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/nirnx/zester/pkg/enroll"
 )
 
 var enrollShowCmd = &cobra.Command{
@@ -32,39 +38,54 @@ func runEnrollShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("get enrollment %s: %w", enrollmentID, err)
 	}
 
-	fmt.Printf("Enrollment ID:  %s\n", rec.ID)
-	fmt.Printf("Peel ID:        %s\n", displayPeel(rec.PeelID))
-	fmt.Printf("State:          %s\n", rec.State)
-	fmt.Printf("Public Key:     %s\n", rec.PublicKey)
-	fmt.Printf("Hostname:       %s\n", rec.Hostname)
-	if rec.TrustMismatch {
-		fmt.Printf("Trust:          MISMATCH! peel reported CA %s (not this master's root)\n", rec.TrustedCASPKI)
-		fmt.Printf("                → possible first-contact MITM; verify the node out of band before 'enroll approve --force'\n")
-	} else if rec.TrustChecked {
-		fmt.Printf("Trust:          ok (peel-reported CA matches master root: %s)\n", rec.TrustedCASPKI)
-	} else if rec.TrustedCASPKI != "" {
-		fmt.Printf("Trust:          present (unverified — external-CA master has no root to compare): %s\n", rec.TrustedCASPKI)
+	printEnrollRecord(os.Stdout, rec)
+	return nil
+}
+
+// printEnrollRecord renders one enrollment record. Every free-text field that
+// originates outside the CLI — the requester-supplied hostname, metadata and
+// trusted-CA pin, the operator-typed reason/identity, and the peer address —
+// goes through displayString so nothing in the record can inject terminal
+// escapes or fake additional lines.
+func printEnrollRecord(out io.Writer, rec *enroll.Record) {
+	fmt.Fprintf(out, "Enrollment ID:  %s\n", rec.ID)
+	fmt.Fprintf(out, "Peel ID:        %s\n", displayPeel(rec.PeelID))
+	fmt.Fprintf(out, "State:          %s\n", rec.State)
+	fmt.Fprintf(out, "Public Key:     %s\n", rec.PublicKey)
+	fmt.Fprintf(out, "Hostname:       %s\n", displayString(rec.Hostname))
+	if len(rec.Metadata) > 0 {
+		fmt.Fprintln(out, "Metadata:")
+		for _, k := range slices.Sorted(maps.Keys(rec.Metadata)) {
+			fmt.Fprintf(out, "    %s: %s\n", displayString(k), displayString(rec.Metadata[k]))
+		}
 	}
-	fmt.Printf("Created At:     %s\n", rec.CreatedAt.Local().Format(time.RFC3339))
-	fmt.Printf("Updated At:     %s\n", rec.UpdatedAt.Local().Format(time.RFC3339))
+	reportedCA := displayString(rec.TrustedCASPKI)
+	if rec.TrustMismatch {
+		fmt.Fprintf(out, "Trust:          MISMATCH! peel reported CA %s (not this master's root)\n", reportedCA)
+		fmt.Fprintf(out, "                → possible first-contact MITM; verify the node out of band before 'enroll approve --force'\n")
+	} else if rec.TrustChecked {
+		fmt.Fprintf(out, "Trust:          ok (peel-reported CA matches master root: %s)\n", reportedCA)
+	} else if rec.TrustedCASPKI != "" {
+		fmt.Fprintf(out, "Trust:          present (unverified — external-CA master has no root to compare): %s\n", reportedCA)
+	}
+	fmt.Fprintf(out, "Created At:     %s\n", rec.CreatedAt.Local().Format(time.RFC3339))
+	fmt.Fprintf(out, "Updated At:     %s\n", rec.UpdatedAt.Local().Format(time.RFC3339))
 	if rec.DecidedBy != "" {
-		fmt.Printf("Decided By:     %s\n", rec.DecidedBy)
+		fmt.Fprintf(out, "Decided By:     %s\n", displayString(rec.DecidedBy))
 	}
 	if rec.DecidedAt != nil {
-		fmt.Printf("Decided At:     %s\n", rec.DecidedAt.Local().Format(time.RFC3339))
+		fmt.Fprintf(out, "Decided At:     %s\n", rec.DecidedAt.Local().Format(time.RFC3339))
 	}
 	if rec.RejectReason != "" {
-		fmt.Printf("Reject Reason:  %s\n", rec.RejectReason)
+		fmt.Fprintf(out, "Reject Reason:  %s\n", displayString(rec.RejectReason))
 	}
 	if rec.IssuedAt != nil {
-		fmt.Printf("Issued At:      %s\n", rec.IssuedAt.Local().Format(time.RFC3339))
+		fmt.Fprintf(out, "Issued At:      %s\n", rec.IssuedAt.Local().Format(time.RFC3339))
 	}
 	if rec.ExpiresAt != nil {
-		fmt.Printf("Expires At:     %s\n", rec.ExpiresAt.Local().Format(time.RFC3339))
+		fmt.Fprintf(out, "Expires At:     %s\n", rec.ExpiresAt.Local().Format(time.RFC3339))
 	}
 	if rec.RemoteAddr != "" {
-		fmt.Printf("Remote Addr:    %s\n", rec.RemoteAddr)
+		fmt.Fprintf(out, "Remote Addr:    %s\n", displayString(rec.RemoteAddr))
 	}
-
-	return nil
 }

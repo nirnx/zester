@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -39,6 +41,43 @@ func displayPeels(ids []string) []string {
 		out[i] = enroll.DisplayPeelID(id)
 	}
 	return out
+}
+
+// displayString makes untrusted free text safe to print on an operator's
+// terminal. Enrollment records carry strings supplied by the UNAUTHENTICATED
+// enrollment request (hostname, metadata) and operator free text (reasons):
+// printed verbatim, an embedded ESC sequence could recolor or rewrite the
+// screen, and a CR/LF/TAB could spoof a table row or shift columns. Every
+// non-printable rune — controls (incl. ESC, CR, LF, TAB, BEL), format
+// characters such as bidi overrides and zero-width joiners, non-ASCII spaces —
+// and every invalid UTF-8 byte becomes '?'. Plain ASCII space and all printable
+// Unicode (letters, digits, punctuation, symbols) pass through unchanged; the
+// string is never truncated.
+func displayString(s string) string {
+	clean := true
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if (r == utf8.RuneError && size == 1) || !unicode.IsPrint(r) {
+			clean = false
+			break
+		}
+		i += size
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if (r == utf8.RuneError && size == 1) || !unicode.IsPrint(r) {
+			b.WriteByte('?')
+		} else {
+			b.WriteRune(r)
+		}
+		i += size
+	}
+	return b.String()
 }
 
 // outputRecord is the structured representation of a single peel's result.

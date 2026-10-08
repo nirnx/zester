@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -343,5 +345,96 @@ func TestStreamUntilApproved_ContextCanceled(t *testing.T) {
 	err := c.streamUntilApproved(ctx, "enr-1")
 	if err == nil {
 		t.Fatal("expected error for canceled context, got nil")
+	}
+}
+
+// TestNewAPIError_UnwrapsErrorEnvelope: the handler's {"error":"..."} body is
+// unwrapped so the peel's retry log shows the operator-facing message; any
+// other body stays verbatim and an empty body yields just the status.
+func TestNewAPIError_UnwrapsErrorEnvelope(t *testing.T) {
+	mk := func(code int, body string) *http.Response {
+		return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body))}
+	}
+	if got := newAPIError(mk(409, `{"error":"a pending enrollment for this peel id already exists under a different key (enr-x)"}`)).Error(); got != "HTTP 409: a pending enrollment for this peel id already exists under a different key (enr-x)" {
+		t.Errorf("envelope: got %q", got)
+	}
+	if got := newAPIError(mk(502, "<html>bad gateway</html>")).Error(); got != "HTTP 502: <html>bad gateway</html>" {
+		t.Errorf("verbatim: got %q", got)
+	}
+	if got := newAPIError(mk(500, "")).Error(); got != "HTTP 500" {
+		t.Errorf("empty: got %q", got)
+	}
+	// The unknown-challenge detection keys on the unwrapped message.
+	err := newAPIError(mk(http.StatusUnauthorized, `{"error":"`+unknownChallengeMessage+`"}`))
+	if !isUnknownChallenge(err) {
+		t.Errorf("isUnknownChallenge should still match the unwrapped envelope: %v", err)
+	}
+}
+
+// TestSubmitEnrollment_ConflictDoesNotRotate: a 409 (peel-ID squat / active
+// identity under another key) is a definitive 4xx answer from a healthy
+// master — the multi-URL client must surface it clearly and stay pinned to
+// the same master (only connection-level failures and 5xx rotate).
+func TestSubmitEnrollment_ConflictDoesNotRotate(t *testing.T) {
+	const msg = "a pending enrollment for this peel id already exists under a different key (enr-squat); an operator must reject it"
+	var primaryHits, secondaryHits int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryHits++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprintf(w, `{"error":%q}`, msg)
+	}))
+	defer primary.Close()
+	secondary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondaryHits++
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"id":"enr-other","peel_id":"web-01","state":"pending"}`)
+	}))
+	defer secondary.Close()
+
+	c, err := NewClient(ClientConfig{
+		MasterURLs: []string{primary.URL, secondary.URL},
+		PeelID:     "web-01",
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = c.submitEnrollment(context.Background(), EnrollRequest{PeelID: "web-01"})
+	if err == nil {
+		t.Fatal("expected an error for 409")
+	}
+	if isConnError(err) {
+		t.Errorf("409 must not be classified as a connection error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 409") || !strings.Contains(err.Error(), "different key") {
+		t.Errorf("error should carry the status and the operator-facing message; got %v", err)
+	}
+	if c.currentURL() != primary.URL {
+		t.Errorf("client rotated on 409: current %q, want %q", c.currentURL(), primary.URL)
+	}
+	if primaryHits != 1 || secondaryHits != 0 {
+		t.Errorf("hits primary=%d secondary=%d, want 1/0", primaryHits, secondaryHits)
+	}
+
+	// Contrast: a 5xx from the same master DOES rotate.
+	primary5xx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer primary5xx.Close()
+	c2, err := NewClient(ClientConfig{
+		MasterURLs: []string{primary5xx.URL, secondary.URL},
+		PeelID:     "web-01",
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := c2.submitEnrollment(context.Background(), EnrollRequest{PeelID: "web-01"}); err == nil || !isConnError(err) {
+		t.Errorf("5xx should be a connection-class error, got %v", err)
+	}
+	if c2.currentURL() != secondary.URL {
+		t.Errorf("client did not rotate on 5xx: current %q, want %q", c2.currentURL(), secondary.URL)
 	}
 }

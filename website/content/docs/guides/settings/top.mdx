@@ -91,6 +91,10 @@ The matcher checks `facts[key]` (a top-level map lookup) and compares its string
 The `SimpleTargetMatcher` performs a top-level map lookup on the key portion. For example, `role:webserver` matches if `facts["role"] == "webserver"`. Nested keys like `os.family` would look up `facts["os.family"]`, which does not exist since the actual value is at `facts["os"]["family"]`. To target on nested values, inject them as top-level facts via `Manager.SetFact()` or use top-level custom fact keys.
 </Callout>
 
+<Callout type="warn" title="Facts are peel-reported: never target secrets by fact">
+Facts are collected and published by the peel itself, and the master trusts them as-is when it evaluates `top.zy`. A compromised (or merely misconfigured) peel can therefore make itself match **any** fact-based pattern -- dropping `role: database` into `/etc/zester/facts` is enough to match `role:database` and be handed every value in that file, including `!encrypted` secrets encrypted for its key. Fact-based `key:value` patterns are fine for non-secret settings. A settings file that contains `!encrypted` values must be targeted **only by peel ID** -- an exact ID or a peel-ID glob such as `db-*` -- because the peel ID is bound to the enrolled nkey and cannot be forged. This is exactly Salt's rule for sensitive pillar data: target by minion ID, never by grains. See [Encryption](/docs/guides/settings/encryption).
+</Callout>
+
 ## Multi-Environment Example
 
 Environments are a way to organize targeting rules. All environments are evaluated -- the labels are for human readability:
@@ -110,10 +114,14 @@ roles:
   'role:database':
     - databases.postgres
     - databases.backup
-    - databases.credentials
   'role:worker':
     - workers.celery
     - workers.queues
+
+# Files with !encrypted values: target by peel ID only (see warning above)
+secrets:
+  'db-*':
+    - databases.credentials
 
 environments:
   'environment:production':
@@ -168,7 +176,6 @@ roles:
   'role:database':
     - databases.postgres
     - databases.pgbouncer
-    - databases.credentials
     - databases.backup
   'role:loadbalancer':
     - loadbalancers.haproxy
@@ -176,6 +183,12 @@ roles:
   'role:worker':
     - workers.celery
     - workers.redis
+
+# Secrets (!encrypted values) -- target by peel ID ONLY, never by fact.
+# Facts are peel-reported: a compromised peel can claim role:database.
+secrets:
+  'db-*':
+    - databases.credentials
 
 # OS-specific settings (requires os_family as a top-level fact)
 os:

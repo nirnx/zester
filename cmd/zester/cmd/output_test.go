@@ -549,3 +549,59 @@ func TestColorEnabled(t *testing.T) {
 		t.Error("colorEnabled without flags must follow shouldColor")
 	}
 }
+
+// TestDisplayString pins the terminal-safety contract for untrusted record
+// text: every control / non-printable rune and every invalid UTF-8 byte
+// becomes '?', plain space and printable Unicode are preserved verbatim, and
+// nothing is truncated. Exotic code points are spelled with rune constructors
+// so the source stays ASCII-only.
+func TestDisplayString(t *testing.T) {
+	rs := func(codepoints ...rune) string { return string(codepoints) }
+	const (
+		esc      = "\x1b"
+		polish   = "za"   // + z-acute etc. built below
+		rtlOvr   = 0x202E // RIGHT-TO-LEFT OVERRIDE (Cf)
+		zwj      = 0x200D // ZERO WIDTH JOINER (Cf)
+		bom      = 0xFEFF // ZERO WIDTH NO-BREAK SPACE / BOM (Cf)
+		nbsp     = 0x00A0 // NO-BREAK SPACE (Zs, not printable per unicode.IsPrint)
+		lineSep  = 0x2028 // LINE SEPARATOR (Zl)
+		ideoSp   = 0x3000 // IDEOGRAPHIC SPACE (Zs)
+		nel      = 0x0085 // C1 NEXT LINE
+		csi      = 0x009B // C1 CONTROL SEQUENCE INTRODUCER
+		replChar = 0xFFFD // REPLACEMENT CHARACTER (So, printable)
+		zAcute   = 0x017A
+		euro     = 0x20AC
+		cjk      = 0x6771 // 東
+	)
+	letters := "za" + rs(zAcute) + "lc " + rs(0x00DC) + "n" + rs(0x00EF) + "c" + rs(0x00F6) + "d" + rs(0x00E9) + " " + rs(cjk)
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", ""},
+		{"plain ascii untouched", "web-01.example.com", "web-01.example.com"},
+		{"space preserved", "two words", "two words"},
+		{"unicode letters preserved", letters, letters},
+		{"punctuation and symbols preserved", "a/b_c-d:e@f (g) [h] " + rs(euro), "a/b_c-d:e@f (g) [h] " + rs(euro)},
+		{"ANSI escape", "ok" + esc + "[31mRED" + esc + "[0m", "ok?[31mRED?[0m"},
+		{"CSI clear-line + CR", "x" + esc + "[2K\ry", "x?[2K?y"},
+		{"tab newline cr", "a\tb\nc\rd", "a?b?c?d"},
+		{"bell backspace del", "a\x07b\x08c\x7f", "a?b?c?"},
+		{"NUL", "a\x00b", "a?b"},
+		{"C1 controls", "a" + rs(nel) + "b" + rs(csi) + "c", "a?b?c"},
+		{"bidi override, zero-width joiner, BOM", "ab" + rs(rtlOvr) + "cd" + rs(zwj) + "EF" + rs(bom), "ab?cd?EF?"},
+		{"non-ascii spaces", "a" + rs(nbsp) + "b" + rs(lineSep) + "c" + rs(ideoSp) + "d", "a?b?c?d"},
+		{"invalid utf-8 bytes", "a\xffb\xc3", "a?b?"},
+		{"replacement char itself stays", "a" + rs(replChar) + "b", "a" + rs(replChar) + "b"},
+		{"long string not truncated", strings.Repeat("x", 500) + esc + strings.Repeat("y", 500), strings.Repeat("x", 500) + "?" + strings.Repeat("y", 500)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := displayString(tt.in); got != tt.want {
+				t.Errorf("displayString(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

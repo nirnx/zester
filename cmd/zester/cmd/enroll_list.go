@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -54,25 +55,52 @@ func runEnrollList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tPEEL ID\tHOSTNAME\tSTATE\tTRUST\tCREATED")
+	printEnrollList(os.Stdout, records)
+	return nil
+}
+
+// enrollTrustLabel is the TRUST column value for an enrollment record.
+func enrollTrustLabel(rec *enroll.Record) string {
+	switch {
+	case rec.TrustMismatch:
+		return "MISMATCH!"
+	case rec.TrustChecked:
+		return "ok"
+	case rec.TrustedCASPKI != "":
+		return "unverified"
+	default:
+		return "-"
+	}
+}
+
+// dash renders an empty table cell as "-".
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// printEnrollList renders the enrollment table. HOSTNAME is supplied by the
+// unauthenticated enrollment request, so it (like every free-text cell) goes
+// through displayString — a crafted hostname cannot inject terminal escapes
+// or spoof a table row. SOURCE is the TCP peer address the request came from,
+// so a squat attempt from an unexpected network is visible at a glance next
+// to the hostname it claims.
+func printEnrollList(out io.Writer, records []*enroll.Record) {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tPEEL ID\tHOSTNAME\tSOURCE\tSTATE\tTRUST\tCREATED")
 	for _, rec := range records {
 		created := rec.CreatedAt.Local().Format("2006-01-02 15:04:05")
-		hostname := rec.Hostname
-		if hostname == "" {
-			hostname = "-"
-		}
-		trust := "-"
-		if rec.TrustMismatch {
-			trust = "MISMATCH!"
-		} else if rec.TrustChecked {
-			trust = "ok"
-		} else if rec.TrustedCASPKI != "" {
-			trust = "unverified"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", rec.ID, displayPeel(rec.PeelID), hostname, rec.State, trust, created)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			rec.ID,
+			displayPeel(rec.PeelID),
+			dash(displayString(rec.Hostname)),
+			dash(displayString(rec.RemoteAddr)),
+			rec.State,
+			enrollTrustLabel(rec),
+			created,
+		)
 	}
 	w.Flush()
-
-	return nil
 }

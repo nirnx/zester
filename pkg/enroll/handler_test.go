@@ -1308,3 +1308,130 @@ func TestHandleEnroll_TrustBinding(t *testing.T) {
 		t.Errorf("mismatch record not flagged: %+v", r)
 	}
 }
+
+// TestHandleEnroll_PendingDifferentKey_Conflict pins the peel-ID squat guard:
+// a pending record is idempotently returned ONLY to the key that created it.
+// A second submitter under the same peel id with a different (challenge-proven)
+// key must get 409, the existing record must be left untouched, and the
+// response must name the existing enrollment id (so the operator knows what to
+// reject) without leaking the existing submitter's address.
+func TestHandleEnroll_PendingDifferentKey_Conflict(t *testing.T) {
+	handler, store, challenges, ctx := testHandlerSetup(t)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	// The legitimate host enrolled first and is pending.
+	legitKB, err := auth.GenerateKeyBundle(auth.RoleUser)
+	if err != nil {
+		t.Fatalf("GenerateKeyBundle legit: %v", err)
+	}
+	legitCurve, _ := auth.CurvePublicKeyFromSeed(legitKB.Seed)
+	now := time.Now().UTC()
+	existing := &enroll.Record{
+		ID:             "enr-legit",
+		PeelID:         "web-01",
+		PublicKey:      legitKB.PublicKey,
+		CurvePublicKey: legitCurve,
+		State:          enroll.StatePending,
+		Hostname:       "web-01.example.com",
+		RemoteAddr:     "10.9.8.7",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := store.Create(ctx, existing); err != nil {
+		t.Fatalf("Create existing: %v", err)
+	}
+
+	// A squatter with its OWN key (it can pass the challenge for that key)
+	// submits under the same peel id with plausible-looking metadata.
+	squatKB, err := auth.GenerateKeyBundle(auth.RoleUser)
+	if err != nil {
+		t.Fatalf("GenerateKeyBundle squatter: %v", err)
+	}
+	squatCurve, _ := auth.CurvePublicKeyFromSeed(squatKB.Seed)
+	challenge, err := challenges.Issue(ctx, "web-01", squatKB.PublicKey)
+	if err != nil {
+		t.Fatalf("Issue challenge: %v", err)
+	}
+	sig, err := enroll.SignChallenge(squatKB.Seed, challenge.Challenge, squatCurve)
+	if err != nil {
+		t.Fatalf("SignChallenge: %v", err)
+	}
+	body, _ := json.Marshal(enroll.EnrollRequest{
+		PeelID:         "web-01",
+		PublicKey:      squatKB.PublicKey,
+		CurvePublicKey: squatCurve,
+		Hostname:       "web-01.example.com",
+		ChallengeID:    challenge.ChallengeID,
+		Signature:      sig,
+	})
+	req := httptest.NewRequest("POST", "/api/v1/enroll", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.5:40000"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var errResp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	msg := errResp["error"]
+	if !strings.Contains(msg, "different key") || !strings.Contains(msg, existing.ID) {
+		t.Errorf("409 message should explain the key mismatch and name the existing enrollment; got %q", msg)
+	}
+	if !strings.Contains(msg, "reject") {
+		t.Errorf("409 message should tell the operator to reject the existing record; got %q", msg)
+	}
+	if strings.Contains(msg, existing.RemoteAddr) {
+		t.Errorf("409 message leaks the existing submitter's address: %q", msg)
+	}
+
+	// The existing record is untouched and still the ONLY record for the id.
+	got, err := store.FindByPeelID(ctx, "web-01")
+	if err != nil {
+		t.Fatalf("FindByPeelID: %v", err)
+	}
+	if got == nil || got.ID != existing.ID || got.PublicKey != legitKB.PublicKey || got.State != enroll.StatePending {
+		t.Fatalf("existing record changed: %+v", got)
+	}
+	pending := enroll.StatePending
+	all, err := store.List(ctx, &pending)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("pending records = %d, want 1 (squat must not create a record)", len(all))
+	}
+
+	// The legitimate key resubmitting stays idempotent (200 + existing id).
+	ch2, err := challenges.Issue(ctx, "web-01", legitKB.PublicKey)
+	if err != nil {
+		t.Fatalf("Issue challenge (legit): %v", err)
+	}
+	sig2, _ := enroll.SignChallenge(legitKB.Seed, ch2.Challenge, legitCurve)
+	body2, _ := json.Marshal(enroll.EnrollRequest{
+		PeelID:         "web-01",
+		PublicKey:      legitKB.PublicKey,
+		CurvePublicKey: legitCurve,
+		ChallengeID:    ch2.ChallengeID,
+		Signature:      sig2,
+	})
+	req2 := httptest.NewRequest("POST", "/api/v1/enroll", bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("same-key resubmit status = %d, want 200 (body %s)", rec2.Code, rec2.Body.String())
+	}
+	var resp enroll.EnrollResponse
+	if err := json.NewDecoder(rec2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ID != existing.ID {
+		t.Errorf("same-key resubmit returned %q, want existing %q", resp.ID, existing.ID)
+	}
+}

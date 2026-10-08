@@ -203,13 +203,28 @@ Each peel has a **unique** X25519 key pair derived from its unique nkey seed. Th
 - Even if the NATS KV store is compromised (e.g., by accessing the JetStream data directory on disk), encrypted values are unreadable without the target peel's private key.
 - The master encrypts per-peel, so there is no shared encryption key across peels.
 
+### Target Secret Files by Peel ID, Never by Fact
+
+<Callout type="warn" title="Facts are peel-reported and trusted as-is">
+The master decides which peel receives which `!encrypted` values by evaluating the `top.zy` patterns against the peel's **own published facts**. Facts are collected and reported by the peel itself, so a compromised peel can make itself match **any** fact-based pattern: writing `role: database` into `/etc/zester/facts` is enough to match `role:database` and be handed the database credentials, sealed for its key. Fact-based `key:value` patterns are fine for non-secret settings. A settings file that contains `!encrypted` values must be targeted **only by peel ID** -- an exact ID or a peel-ID glob such as `db-*` -- because the peel ID is bound to the enrolled nkey and cannot be forged. This is exactly Salt's rule for sensitive pillar data: target by minion ID, never by grains.
+</Callout>
+
+```yaml title="/srv/zester/settings/top.zy"
+roles:
+  'role:database':        # fact-based: fine for non-secret settings
+    - databases.postgres
+secrets:
+  'db-*':                 # peel-ID glob: the only safe way to target !encrypted files
+    - databases.credentials
+```
+
 ### Threat Mitigation
 
 | Threat | Protection |
 |--------|-----------|
 | NATS KV store accessed directly | Values are NaCl box encrypted; unreadable without peel's private key |
 | Network eavesdropping | TLS 1.3 encrypts all traffic; NaCl box provides an additional layer |
-| Compromised peel | Only that peel's settings are exposed; other peels are unaffected |
+| Compromised peel | Only that peel's settings are exposed; other peels are unaffected -- provided secret files are targeted by peel ID (a compromised peel can forge facts and would match any fact-based pattern) |
 | Master compromise | Attacker gains access to all peel curve public keys but still needs individual peel seeds to decrypt |
 
 <Callout type="warn" title="Protect nkey seeds">
@@ -228,13 +243,13 @@ The peel's nkey seed is the root of its encryption identity. If an attacker obta
 
 2. **Keep encrypted files focused** -- Put encrypted values in dedicated files (e.g., `credentials.zy`) rather than mixing them with non-sensitive configuration. This makes auditing easier.
 
-3. **Use environment-specific files** -- Production and staging secrets should live in separate files, targeted via `top.zy`:
+3. **Use environment-specific files, targeted by peel ID** -- Production and staging secrets should live in separate files. Target them in `top.zy` by peel ID (exact or glob), never by an `environment:production` fact that a compromised peel could forge:
 
     ```yaml
-    environments:
-      'environment:production':
+    secrets:
+      'prod-*':
         - environments.production_secrets
-      'environment:staging':
+      'stg-*':
         - environments.staging_secrets
     ```
 

@@ -288,7 +288,29 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if existing != nil {
 		switch existing.State {
 		case StatePending:
-			// Already pending -- return existing record (idempotent).
+			// Peel-ID squat guard. The pending record is only idempotently
+			// returned to the SAME key that created it (the challenge above
+			// proved the submitter owns req.PublicKey). A different key gets
+			// 409: otherwise whoever submits first owns the pending record —
+			// the legitimate host would be handed the squatter's enrollment
+			// ID, poll it, and an operator approving the plausible-looking
+			// record (hostname/metadata are requester-supplied) would issue
+			// that peel's credentials to the squatter's key. The existing
+			// record is left untouched; an operator must reject it. The
+			// requester learns the enrollment ID (needed to tell the operator
+			// which record to reject) but never the existing submitter's IP.
+			if existing.PublicKey != req.PublicKey {
+				h.logger.Warn("enroll: pending enrollment for this peel id exists under a DIFFERENT key (possible peel-ID squat)",
+					"peel_id", req.PeelID,
+					"source_ip", remoteIP(r),
+					"existing_enrollment_id", existing.ID,
+				)
+				h.writeError(w, http.StatusConflict, fmt.Sprintf(
+					"a pending enrollment for this peel id already exists under a different key (%s); an operator must reject it (zester enroll reject %s) before this host can enroll",
+					existing.ID, existing.ID))
+				return
+			}
+			// Same key already pending -- return existing record (idempotent).
 			h.writeJSON(w, http.StatusOK, EnrollResponse{
 				ID:      existing.ID,
 				PeelID:  existing.PeelID,

@@ -51,16 +51,24 @@ func pendingHookSetup(t *testing.T) (*enroll.Handler, *enroll.ChallengeStore, co
 	return handler, challenges, ctx, &pending
 }
 
-// submitEnrollment runs one challenge + signed submit round trip for peelID.
+// submitEnrollment runs one challenge + signed submit round trip for peelID
+// under a freshly generated key (a brand-new host).
 func submitEnrollment(t *testing.T, handler *enroll.Handler, challenges *enroll.ChallengeStore, ctx context.Context, peelID string) *httptest.ResponseRecorder {
 	t.Helper()
-	mux := http.NewServeMux()
-	handler.RegisterRoutes(mux)
-
 	userKB, err := auth.GenerateKeyBundle(auth.RoleUser)
 	if err != nil {
 		t.Fatalf("GenerateKeyBundle: %v", err)
 	}
+	return submitEnrollmentWithKey(t, handler, challenges, ctx, peelID, userKB)
+}
+
+// submitEnrollmentWithKey runs one challenge + signed submit round trip for
+// peelID under the given identity key (the same host submitting again).
+func submitEnrollmentWithKey(t *testing.T, handler *enroll.Handler, challenges *enroll.ChallengeStore, ctx context.Context, peelID string, userKB *auth.KeyBundle) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
 	curveKey, err := auth.CurvePublicKeyFromSeed(userKB.Seed)
 	if err != nil {
 		t.Fatalf("CurvePublicKeyFromSeed: %v", err)
@@ -90,11 +98,16 @@ func submitEnrollment(t *testing.T, handler *enroll.Handler, challenges *enroll.
 
 // TestHandleEnroll_OnPendingHook verifies that the OnPending hook fires
 // exactly once per NEWLY created enrollment record — and not for the
-// idempotent resubmit of an already-pending enrollment.
+// idempotent same-key resubmit of an already-pending enrollment, nor for a
+// refused different-key resubmit (peel-ID squat → 409).
 func TestHandleEnroll_OnPendingHook(t *testing.T) {
 	handler, challenges, ctx, pending := pendingHookSetup(t)
 
-	if rec := submitEnrollment(t, handler, challenges, ctx, "hook-peel"); rec.Code != http.StatusCreated {
+	hostKB, err := auth.GenerateKeyBundle(auth.RoleUser)
+	if err != nil {
+		t.Fatalf("GenerateKeyBundle: %v", err)
+	}
+	if rec := submitEnrollmentWithKey(t, handler, challenges, ctx, "hook-peel", hostKB); rec.Code != http.StatusCreated {
 		t.Fatalf("submit status = %d, want %d (body: %s)", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
@@ -109,12 +122,21 @@ func TestHandleEnroll_OnPendingHook(t *testing.T) {
 		t.Errorf("OnPending record = %+v, want a pending record with an ID", got)
 	}
 
-	// Resubmitting while pending is idempotent (200, existing record) and
-	// must NOT re-fire the hook.
-	if rec := submitEnrollment(t, handler, challenges, ctx, "hook-peel"); rec.Code != http.StatusOK {
+	// The SAME host resubmitting while pending is idempotent (200, existing
+	// record) and must NOT re-fire the hook.
+	if rec := submitEnrollmentWithKey(t, handler, challenges, ctx, "hook-peel", hostKB); rec.Code != http.StatusOK {
 		t.Fatalf("resubmit status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	if len(*pending) != 1 {
 		t.Fatalf("OnPending calls after idempotent resubmit = %d, want 1", len(*pending))
+	}
+
+	// A DIFFERENT key under the same pending peel id is a squat attempt:
+	// refused with 409, no record created, hook not fired.
+	if rec := submitEnrollment(t, handler, challenges, ctx, "hook-peel"); rec.Code != http.StatusConflict {
+		t.Fatalf("different-key resubmit status = %d, want %d (body: %s)", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if len(*pending) != 1 {
+		t.Fatalf("OnPending calls after refused squat = %d, want 1", len(*pending))
 	}
 }
