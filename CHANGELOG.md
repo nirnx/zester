@@ -4,7 +4,7 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
-## [Unreleased]
+## [0.7.2] - 2026-10-07
 
 ### Changed
 - **Master startup on a fresh JetStream cluster takes seconds, not minutes.**
