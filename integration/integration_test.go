@@ -340,7 +340,11 @@ func waitForPeels(ctx context.Context, timeout time.Duration) error {
 			}
 		}
 
-		cmd := []string{"zester", "--format", "json", "--no-color", "--direct", "*", "test.ping"}
+		// --timeout bounds the whole direct run INCLUDING the facts-bucket
+		// target resolution: right after a NATS node restart a JetStream
+		// request can be dropped during leader election, and the default
+		// 60s timeout turned one such probe into a minute-long stall.
+		cmd := []string{"zester", "--format", "json", "--no-color", "--direct", "--timeout", "10s", "*", "test.ping"}
 		_, reader, err := container.Exec(ctx, cmd, tcexec.Multiplexed())
 		if err != nil {
 			time.Sleep(3 * time.Second)
@@ -474,7 +478,7 @@ func approveEnrollments(ctx context.Context) error {
 		attempt++
 		container, err := stack.ServiceContainer(ctx, "admin")
 		if err != nil {
-			time.Sleep(10 * time.Second)
+			time.Sleep(3 * time.Second)
 			continue
 		}
 
@@ -484,7 +488,7 @@ func approveEnrollments(ctx context.Context) error {
 			tcexec.Multiplexed(),
 		)
 		if err != nil {
-			time.Sleep(10 * time.Second)
+			time.Sleep(3 * time.Second)
 			continue
 		}
 
@@ -495,7 +499,7 @@ func approveEnrollments(ctx context.Context) error {
 			return nil
 		}
 
-		time.Sleep(10 * time.Second)
+		time.Sleep(3 * time.Second)
 	}
 	return fmt.Errorf("failed to approve enrollments after %d attempts (5m timeout)", attempt)
 }

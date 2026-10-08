@@ -51,6 +51,19 @@ type MasterDaemonConfig struct {
 	// still happen).
 	RevocationSyncInterval Duration `yaml:"revocation_sync_interval" flag:"revocation-sync-interval" usage:"Periodic re-sync of the NATS credential revocation list from the enrollments bucket (0 = 5m, negative disables)"`
 
+	// RolloutStaleAfter is how old a self-update rollout's driver heartbeat
+	// must be before another master adopts the rollout as orphaned
+	// (pkg/update RolloutController.StaleAfter). 0 = default 60s. The
+	// controller floors it at twice its 10s driver heartbeat so a live
+	// driver that missed one tick is never adopted out from under itself.
+	// Test stacks lower it to make driver-death failover fast.
+	RolloutStaleAfter Duration `yaml:"rollout_stale_after" flag:"rollout-stale-after" usage:"Driver-heartbeat age after which an orphaned self-update rollout is adopted by another master (0 = 60s; floor 20s)"`
+
+	// RolloutResumeInterval is how often every master scans update-rollouts
+	// for orphaned rollouts to adopt (RolloutController.RunResumeLoop).
+	// 0 = default 60s.
+	RolloutResumeInterval Duration `yaml:"rollout_resume_interval" flag:"rollout-resume-interval" usage:"Scan period for orphaned self-update rollouts to adopt (0 = 60s)"`
+
 	// FilesMirror makes STANDBY masters mirror the published file sets from
 	// KV into their local source dirs, so every master's dirs track fleet
 	// truth and a failover never republishes a stale tree. Disable when

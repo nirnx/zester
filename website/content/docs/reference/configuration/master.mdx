@@ -59,6 +59,8 @@ The packaged config installed by the `.deb`/`.rpm` (`packaging/config/master.yam
 | `states_dir` | string | `/data/states` | Root directory for state files |
 | `settings_dir` | string | `/data/settings` | Root directory for settings files |
 | `jetstream_replicas` | int | `0` | JetStream replication factor applied to all buckets, streams, and object stores (`0` = auto: `min(3, detected cluster size)` — see [Replication](#replication)) |
+| `rollout_stale_after` | duration | `0` (= 60s) | Age of a self-update rollout's driver heartbeat after which another master adopts it as orphaned (see [Rollout Resume](/docs/operations/update/architecture#rollout-resume-driver-failover)). Floored at twice the 10s driver heartbeat. |
+| `rollout_resume_interval` | duration | `0` (= 60s) | How often each master scans `update-rollouts` for orphaned rollouts to adopt |
 | `health_addr` | string | `127.0.0.1:9091` | Listen address for the local observability endpoints — `/healthz`, `/readyz`, `/metrics` (polled by zester-watchdog `--health-url` / `--ready-url`) |
 | `log_level` | string | `info` | Log level: `debug`, `info`, `warn`, or `error`. Invalid values abort startup. |
 | `log_format` | string | `json` | Log format: `json` or `text`. See [Logging](#logging). |

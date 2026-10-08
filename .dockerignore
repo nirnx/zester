@@ -1,0 +1,26 @@
+# Keep the Docker build context to what the Go build and the playground
+# fixtures need. Without this file every image build (7 per compose stack)
+# uploads the whole checkout — ~1.9 GB with the docs site's node_modules and
+# the git history — instead of ~20 MB of sources.
+.git
+.github
+.claude
+.serena
+website
+docs
+site
+mkdocs.yml
+users-formula
+packaging
+integration
+*.md
+# Local build outputs and test binaries.
+bin
+dist
+*.test
+/zester
+/zester-master
+/zester-peel
+/zester-watchdog
+/zester-migrate
+/zester-docgen

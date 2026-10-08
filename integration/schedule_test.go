@@ -62,8 +62,11 @@ func TestSchedule_ReturnJob(t *testing.T) {
 			"if [ -f /etc/zester/peel.yaml.orig ]; then mv -f /etc/zester/peel.yaml.orig /etc/zester/peel.yaml; else rm -f /etc/zester/peel.yaml; fi"})
 		//nolint:errcheck
 		containerExecRaw(cctx, c, []string{"systemctl", "restart", "zester-peel"})
-		// Give peel time to reconnect to NATS.
-		time.Sleep(15 * time.Second)
+		// Wait until the restarted peel answers again instead of sleeping a
+		// fixed 15s: it reconnects and resubscribes within a few seconds.
+		waitForCondition(t, 60*time.Second, 2*time.Second, peel+" answering after restart", func() bool {
+			return pingResponsive(t, peel, []string{peel})
+		})
 	})
 
 	// Restart zester-peel so it picks up the new config.

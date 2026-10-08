@@ -48,8 +48,7 @@ func TestNATSCluster(t *testing.T) {
 		restoreService(t, "nats-2")
 
 		stopService(t, "nats-2")
-		t.Log("nats-2 stopped, waiting 10s for JetStream leader re-election...")
-		time.Sleep(10 * time.Second)
+		waitFleetResponsive(t, 90*time.Second)
 
 		// All peels should still respond — 2/3 NATS quorum is intact.
 		results := execCLI(t, "*", "test.ping")
@@ -72,8 +71,7 @@ func TestNATSCluster(t *testing.T) {
 		restoreService(t, "nats-3")
 
 		stopService(t, "nats-3")
-		t.Log("nats-3 stopped, waiting 10s for re-election...")
-		time.Sleep(10 * time.Second)
+		waitFleetResponsive(t, 90*time.Second)
 
 		// facts.get should work — KV with Replicas:3 maintains quorum at 2/3.
 		factsResults := execCLI(t, "web-01", "facts.get", "os.family")
@@ -94,8 +92,7 @@ func TestNATSCluster(t *testing.T) {
 		restoreService(t, "nats")
 
 		stopService(t, "nats")
-		t.Log("nats (node 1) stopped, waiting 10s for re-election...")
-		time.Sleep(10 * time.Second)
+		waitFleetResponsive(t, 90*time.Second)
 
 		// file.managed on web-03 should work — tests master reconnection
 		// to surviving cluster nodes.
@@ -120,11 +117,9 @@ func TestNATSCluster(t *testing.T) {
 
 		stopService(t, "nats-2")
 		t.Log("nats-2 stopped, restarting...")
-		startService(t, "nats-2")
-
-		// Wait for node to rejoin cluster and catch up on RAFT replication.
-		t.Log("waiting 15s for nats-2 to rejoin cluster...")
-		time.Sleep(15 * time.Second)
+		// Wait for the node to log ready again (rejoin + RAFT catch-up) and
+		// for the whole fleet to answer through the healed cluster.
+		startServiceAndWait(t, "nats-2", 90*time.Second)
 
 		if !isServiceRunning(t, "nats-2") {
 			t.Fatal("nats-2 did not come back up")
@@ -147,8 +142,8 @@ func TestNATSCluster(t *testing.T) {
 		// Stop both nats-3 and master simultaneously.
 		stopService(t, "nats-3")
 		stopService(t, "master")
-		t.Log("nats-3 + master stopped, waiting 15s for re-election + master-2 takeover...")
-		time.Sleep(15 * time.Second)
+		// Re-election + master-2 takeover: poll until the fleet answers.
+		waitFleetResponsive(t, 90*time.Second)
 
 		// 2/3 NATS quorum intact + master-2 alive → system should survive.
 		if !isServiceRunning(t, "master-2") {

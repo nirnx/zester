@@ -4,16 +4,20 @@ RUN apk add --no-cache git
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+# BuildKit cache mounts: the module cache and the Go build cache persist on
+# the builder across image builds, so a source change recompiles only the
+# changed packages instead of the whole tree per image (the compose stack
+# builds this file 4× and Dockerfile.peel 5×). Both mounts default to
+# shared mode, which Go's caches are safe under.
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-master ./cmd/zester-master
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-peel ./cmd/zester-peel
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/playground-init ./playground/init
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-cli ./playground/zester-cli
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester ./cmd/zester
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-watchdog ./cmd/zester-watchdog
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o /bin/ ./cmd/zester-master ./cmd/zester-peel ./cmd/zester ./cmd/zester-watchdog \
+    && CGO_ENABLED=0 GOOS=linux go build -o /bin/playground-init ./playground/init \
+    && CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-cli ./playground/zester-cli
 
 FROM alpine:3.24
 

@@ -4,6 +4,37 @@ All notable changes to Zester are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x — APIs may still change between minors).
 
+## [Unreleased]
+
+### Changed
+- **Master startup on a fresh JetStream cluster takes seconds, not minutes.**
+  Every new replicated stream waits for its own RAFT leader election (~4-9s);
+  `bus.InitializeStorageOpts` created the ~20 KV buckets and streams one
+  after another inside a 5s attempt budget, so each attempt created exactly
+  one asset and timed out — a 3-node cluster needed ~3 minutes (11+ retries)
+  before `zester-master ready`. All assets are now created concurrently (the
+  elections overlap into one window), the KV/stream family and the object
+  store initialize in parallel, and one attempt gets a 15s budget. The
+  joined error names every asset that failed.
+- **Integration suite runs much faster.** A `.dockerignore` keeps the Docker
+  build context to the sources (~1.9 GB → ~20 MB — the docs site's
+  `node_modules`, git history and local binaries were uploaded on every one
+  of the 7 image builds); both Dockerfiles use BuildKit cache mounts for the
+  Go module and build caches (a source change recompiles only what changed);
+  the NATS-cluster and multi-master tests poll for the fleet to answer
+  instead of sleeping fixed 5-15s per step (`waitFleetResponsive`,
+  `startServiceAndWait` wait for a NEW ready log line + fleet ping); the
+  compose masters run test-speed timers (`--rollout-stale-after 20s`,
+  `--rollout-resume-interval 5s`, `--files-republish-interval 10s`), so the
+  driver-death rollout test adopts in ~25s instead of ~2 minutes.
+
+### Added
+- Master knobs `rollout_stale_after` / `--rollout-stale-after` (driver
+  heartbeat age before another master adopts an orphaned self-update
+  rollout; 0 = 60s, floored at twice the 10s driver heartbeat) and
+  `rollout_resume_interval` / `--rollout-resume-interval` (orphan scan
+  period; 0 = 60s).
+
 ## [0.7.1] - 2026-10-07
 
 ### Fixed

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
@@ -40,6 +41,11 @@ func (d *Daemon) startRolloutController(ctx context.Context) (func(), error) {
 		statusKV,
 		d.logger,
 	)
+	// Orphan-adoption timers (rollout_stale_after / rollout_resume_interval):
+	// zero keeps the pkg/update defaults (60s/60s); the controller floors the
+	// staleness window at two driver heartbeats.
+	d.rolloutCtrl.StaleAfter = time.Duration(d.cfg.RolloutStaleAfter)
+	d.rolloutCtrl.ResumeInterval = time.Duration(d.cfg.RolloutResumeInterval)
 
 	// Subscribe to rollout start requests from CLI.
 	rolloutStartSub, err := d.nc.QueueSubscribe(bus.SubjectUpdateRolloutStart, masterQueueGroup, d.handleRolloutStart)

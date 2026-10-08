@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -648,42 +649,74 @@ func InitializeStorage(ctx context.Context, js JetStreamAPI, replicas ...int) er
 // cluster resources). Such failures never abort startup: the asset is
 // re-created with its previous default of 1 replica and a warning explains
 // how to migrate manually.
+//
+// All assets are created CONCURRENTLY. On a freshly formed JetStream cluster
+// every new replicated stream waits for its own RAFT leader election (several
+// seconds each); creating ~20 assets one after another turns that into
+// minutes of master startup, while in parallel the elections overlap and the
+// whole set lands within one election window. Assets are independent (the
+// meta layer serializes the proposals), so the per-asset replica fallback is
+// unchanged; the returned error joins every asset that failed.
 func InitializeStorageOpts(ctx context.Context, js JetStreamAPI, opts StorageOptions) error {
 	logger := opts.logger()
 	effective := EffectiveReplicas(opts.Replicas, opts.ClusterSize)
 	recommended := min(3, max(1, opts.ClusterSize))
 
+	var (
+		wg    sync.WaitGroup
+		errMu sync.Mutex
+		errs  []error
+	)
+	fail := func(err error) {
+		errMu.Lock()
+		errs = append(errs, err)
+		errMu.Unlock()
+	}
+
 	for _, cfg := range DefaultBuckets() {
 		warnIfUnderReplicated(logger, "bucket", cfg.Bucket, cfg.Tier, effective, recommended)
 		cfg.Replicas = effective
-		if _, err := CreateBucket(ctx, js, cfg); err != nil {
-			if effective <= 1 {
-				return fmt.Errorf("bus: initialize buckets: %w", err)
+		wg.Add(1)
+		go func(cfg BucketConfig) {
+			defer wg.Done()
+			if _, err := CreateBucket(ctx, js, cfg); err != nil {
+				if effective <= 1 {
+					fail(fmt.Errorf("bus: initialize buckets: %w", err))
+					return
+				}
+				cfg.Replicas = 1
+				if _, retryErr := CreateBucket(ctx, js, cfg); retryErr != nil {
+					fail(fmt.Errorf("bus: initialize buckets: replicas=%d failed (%v); replicas=1 failed: %w", effective, err, retryErr))
+					return
+				}
+				warnReplicaFallback(logger, "bucket", cfg.Bucket, "KV_"+cfg.Bucket, effective, err)
 			}
-			cfg.Replicas = 1
-			if _, retryErr := CreateBucket(ctx, js, cfg); retryErr != nil {
-				return fmt.Errorf("bus: initialize buckets: replicas=%d failed (%v); replicas=1 failed: %w", effective, err, retryErr)
-			}
-			warnReplicaFallback(logger, "bucket", cfg.Bucket, "KV_"+cfg.Bucket, effective, err)
-		}
+		}(cfg)
 	}
 
 	for _, streamCfg := range DefaultStreams() {
 		warnIfUnderReplicated(logger, "stream", streamCfg.Name, streamCfg.Tier, effective, recommended)
 		streamCfg.Replicas = effective
-		if _, err := CreateStream(ctx, js, streamCfg); err != nil {
-			if effective <= 1 {
-				return fmt.Errorf("bus: initialize streams: %w", err)
+		wg.Add(1)
+		go func(streamCfg StreamConfig) {
+			defer wg.Done()
+			if _, err := CreateStream(ctx, js, streamCfg); err != nil {
+				if effective <= 1 {
+					fail(fmt.Errorf("bus: initialize streams: %w", err))
+					return
+				}
+				streamCfg.Replicas = 1
+				if _, retryErr := CreateStream(ctx, js, streamCfg); retryErr != nil {
+					fail(fmt.Errorf("bus: initialize streams: replicas=%d failed (%v); replicas=1 failed: %w", effective, err, retryErr))
+					return
+				}
+				warnReplicaFallback(logger, "stream", streamCfg.Name, streamCfg.Name, effective, err)
 			}
-			streamCfg.Replicas = 1
-			if _, retryErr := CreateStream(ctx, js, streamCfg); retryErr != nil {
-				return fmt.Errorf("bus: initialize streams: replicas=%d failed (%v); replicas=1 failed: %w", effective, err, retryErr)
-			}
-			warnReplicaFallback(logger, "stream", streamCfg.Name, streamCfg.Name, effective, err)
-		}
+		}(streamCfg)
 	}
 
-	return nil
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 // warnIfUnderReplicated logs a loud warning when a critical asset ends up

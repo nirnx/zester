@@ -182,11 +182,12 @@ func TestUpdateRollout_DriverDeathMidSoakIsAdoptedAndConfirmed(t *testing.T) {
 	// Soak long enough to kill the driver mid-soak, short enough that the
 	// adopter's confirm (after its own soak window if the node has not
 	// reported soak_passed yet) lands well inside the watchdog's 5m
-	// confirm-deadline: adoption ≤ ~130s after the driver dies (60s stale +
-	// 60s scan interval), plus at most one 90s soak.
+	// confirm-deadline. The compose masters run the test-speed timers
+	// (--rollout-stale-after 20s, --rollout-resume-interval 5s), so adoption
+	// follows the driver's death within ~25s, plus at most one 45s soak.
 	out := execInContainer(t, "admin", []string{
 		"zester", "--no-color", "update", "rollout", "--component", "peel", "--version", ver,
-		"--target", "wd-01", "--soak-time", "90s", "--max-failed", "1",
+		"--target", "wd-01", "--soak-time", "45s", "--max-failed", "1",
 	})
 	rolloutID := rolloutIDFrom(out)
 	if rolloutID == "" {
@@ -213,8 +214,9 @@ func TestUpdateRollout_DriverDeathMidSoakIsAdoptedAndConfirmed(t *testing.T) {
 	stopService(t, driver)
 	t.Cleanup(func() { restoreService(t, driver) })
 
-	// Adoption: stale heartbeat (60s) + resume scan (≤60s).
-	waitForCondition(t, 4*time.Minute, 5*time.Second, survivor+" adopts the orphaned rollout", func() bool {
+	// Adoption: stale heartbeat (20s) + resume scan (≤5s) on the compose
+	// masters' test-speed timers.
+	waitForCondition(t, 2*time.Minute, 5*time.Second, survivor+" adopts the orphaned rollout", func() bool {
 		return strings.Contains(serviceLogs(t, survivor), "adopting orphaned rollout") &&
 			strings.Contains(serviceLogs(t, survivor), `"id":"`+rolloutID+`"`)
 	})

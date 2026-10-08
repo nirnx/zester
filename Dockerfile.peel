@@ -4,11 +4,15 @@ RUN apk add --no-cache git
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+# BuildKit cache mounts shared with Dockerfile (see the note there): the
+# five peel images recompile only what changed.
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-peel ./cmd/zester-peel
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o /bin/zester-peel ./cmd/zester-peel
 
 # ---------------------------------------------------------------------------
 # Runtime: Ubuntu 26.04 with systemd as PID 1

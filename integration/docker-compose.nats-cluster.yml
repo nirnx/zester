@@ -51,6 +51,15 @@ services:
       - "tls://nats:4222,tls://nats-2:4222,tls://nats-3:4222"
       - --jetstream-replicas
       - "3"
+      # Test-speed timers (production defaults: 60s/60s/30s). A driver master
+      # killed mid-rollout is adopted within ~25s instead of ~2m, and a
+      # tampered KV file set is healed by the republish backstop in 10s.
+      - --rollout-stale-after
+      - "20s"
+      - --rollout-resume-interval
+      - "5s"
+      - --files-republish-interval
+      - "10s"
     environment:
       SSL_CERT_FILE: /data/auth/nats-ca.crt
     depends_on:
@@ -70,6 +79,15 @@ services:
       - "tls://nats:4222,tls://nats-2:4222,tls://nats-3:4222"
       - --jetstream-replicas
       - "3"
+      # Test-speed timers (production defaults: 60s/60s/30s). A driver master
+      # killed mid-rollout is adopted within ~25s instead of ~2m, and a
+      # tampered KV file set is healed by the republish backstop in 10s.
+      - --rollout-stale-after
+      - "20s"
+      - --rollout-resume-interval
+      - "5s"
+      - --files-republish-interval
+      - "10s"
     environment:
       SSL_CERT_FILE: /data/auth/nats-ca.crt
     depends_on:

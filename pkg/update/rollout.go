@@ -284,7 +284,9 @@ func (r *RolloutController) driverID() string {
 
 func (r *RolloutController) staleAfter() time.Duration {
 	if r.StaleAfter > 0 {
-		return r.StaleAfter
+		// Never below two heartbeat periods: a live driver that missed a
+		// single heartbeat tick must not be adopted out from under itself.
+		return max(r.StaleAfter, 2*rolloutHeartbeatInterval)
 	}
 	return DefaultRolloutStaleAfter
 }

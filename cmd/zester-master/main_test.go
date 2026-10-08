@@ -68,6 +68,9 @@ func TestMasterFlagParity(t *testing.T) {
 
 		// Credential revocation list re-sync (0 = default 5m in masterd).
 		"revocation-sync-interval": "0s",
+		// Self-update rollout orphan-adoption timers (0 = pkg/update defaults).
+		"rollout-stale-after":     "0s",
+		"rollout-resume-interval": "0s",
 		// Promoted-version auto-rollout (0.5.0):
 		"update-auto-rollout":    "true",
 		"update-auto-components": "peel",

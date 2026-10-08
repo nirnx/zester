@@ -128,9 +128,7 @@ func restoreService(t *testing.T, service string) {
 	t.Helper()
 	t.Cleanup(func() {
 		if !isServiceRunning(t, service) {
-			startService(t, service)
-			// Give it a moment to reconnect to NATS and re-init.
-			time.Sleep(15 * time.Second)
+			startServiceAndWait(t, service, 90*time.Second)
 		}
 	})
 }
@@ -187,8 +185,7 @@ func TestMultiMaster(t *testing.T) {
 		restoreService(t, "master")
 
 		stopService(t, "master")
-		t.Logf("master stopped, waiting 5s for settle...")
-		time.Sleep(5 * time.Second)
+		waitFleetResponsive(t, 60*time.Second)
 
 		// master-2 should still be running.
 		if !isServiceRunning(t, "master-2") {
@@ -217,8 +214,7 @@ func TestMultiMaster(t *testing.T) {
 		restoreService(t, "master-2")
 
 		stopService(t, "master-2")
-		t.Logf("master-2 stopped, waiting 5s for settle...")
-		time.Sleep(5 * time.Second)
+		waitFleetResponsive(t, 60*time.Second)
 
 		// Primary master should still be running.
 		if !isServiceRunning(t, "master") {
@@ -249,12 +245,9 @@ func TestMultiMaster(t *testing.T) {
 
 		stopService(t, "master")
 		t.Logf("master stopped, restarting...")
-		startService(t, "master")
-
-		// Wait for the restarted master to fully initialize:
-		// NATS reconnect + KV bucket init + settings/state republish + heartbeat.
-		t.Logf("waiting 15s for master re-init...")
-		time.Sleep(15 * time.Second)
+		// Wait for the restarted master to log ready again (NATS reconnect +
+		// KV init + republish + heartbeat) and for the fleet to answer.
+		startServiceAndWait(t, "master", 90*time.Second)
 
 		if !isServiceRunning(t, "master") {
 			t.Fatal("master did not come back up")
@@ -296,8 +289,7 @@ func TestMultiMaster(t *testing.T) {
 		restoreService(t, "master-2")
 
 		stopService(t, "master-2")
-		t.Logf("master-2 stopped, running state operations...")
-		time.Sleep(5 * time.Second)
+		waitFleetResponsive(t, 60*time.Second)
 
 		// file.managed should work — peels handle execution locally.
 		cleanupFile(t, "web-02", "/tmp/multi-master-test.txt")
